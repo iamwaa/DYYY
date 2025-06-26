@@ -61,6 +61,8 @@
               @"DYYYEnableNotificationTransparency" : @[ @"DYYYNotificationCornerRadius" ],
               @"DYYYEnableFloatSpeedButton" : @[ @"DYYYAutoRestoreSpeed", @"DYYYSpeedButtonShowX", @"DYYYSpeedButtonSize", @"DYYYSpeedSettings" ],
               @"DYYYEnableFloatClearButton" : @[ @"DYYYClearButtonIcon", @"DYYYEnableFloatClearButtonSize", @"DYYYEnabshijianjindu", @"DYYYHideTimeProgress", @"DYYYHideDanmaku", @"DYYYHideSlider", @"DYYYHideTabBar", @"DYYYHideSpeed", @"DYYYHideChapter" ],
+              @"WaaEnableCommentColor" : @[ @"WaaCommentColor" ],
+			  @"DYYYisEnableFullScreen" : @[ @"WaaHidePurityRrogress" ]
           },
 
           // ===== 条件依赖配置 =====
@@ -94,7 +96,8 @@
               @"DYYYHideLOTAnimationView" : @[ @"DYYYHideFollowPromptView" ],
               @"DYYYHideFollowPromptView" : @[ @"DYYYHideLOTAnimationView" ],
               @"DYYYLabelColor" : @[ @"DYYYEnabsuijiyanse" ],
-              @"DYYYEnabsuijiyanse" : @[ @"DYYYLabelColor" ]
+              @"DYYYEnabsuijiyanse" : @[ @"DYYYLabelColor" ],
+              @"DYYYisEnableCommentBlur" : @[ @"WaaCommentTransparency", @"WaaInputBoxTransparency" ]
           },
 
           // ===== 值依赖配置 =====

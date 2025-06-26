@@ -2650,6 +2650,98 @@ extern "C"
 	};
 	[mainItems addObject:floatButtonSettingItem];
 
+// 创建WaaHook分类项
+	AWESettingItemModel *WaaHookItem = [[%c(AWESettingItemModel) alloc] init];
+	WaaHookItem.identifier = @"WaaHookSettings";
+	WaaHookItem.title = @"WaaHook";
+	WaaHookItem.type = 0;
+	WaaHookItem.svgIconImageName = @"ic_star_outlined_20";
+	WaaHookItem.cellType = 26;
+	WaaHookItem.colorStyle = 0;
+	WaaHookItem.isEnable = YES;
+	WaaHookItem.cellTappedBlock = ^{
+	  // 创建基本设置二级界面的设置项
+	  NSMutableDictionary *cellTapHandlers = [NSMutableDictionary dictionary];
+
+	  // 【外观设置】分类
+	  NSMutableArray<AWESettingItemModel *> *UIItems = [NSMutableArray array];
+	  NSArray *UISettings = @[
+		  @{@"identifier" : @"WaaEnableCommentColor",
+			@"title" : @"启用评论文字改色",
+			@"detail" : @"",
+			@"cellType" : @6,
+			@"imageName" : @"ic_textbubble_outlined_20"},
+		  @{@"identifier" : @"WaaCommentColor",
+			@"title" : @"自定评论文字颜色",
+			@"detail" : @"十六进制",
+			@"cellType" : @26,
+			@"imageName" : @"ic_textbubble_outlined_20"},
+		  @{@"identifier" : @"WaaCommentTransparency",
+			@"title" : @"调整评论区透明度",
+			@"subTitle" : @"调整评论区透明度与评论区毛玻璃功能不可同时生效",
+			@"detail" : @"0-1小数",
+			@"cellType" : @20,
+			@"imageName" : @"ic_comment_outlined_20"},
+		  @{@"identifier" : @"WaaInputBoxTransparency",
+			@"title" : @"调整输入框透明度",
+			@"detail" : @"0-1小数",
+			@"cellType" : @26,
+			@"imageName" : @"ic_msg_outlined_20"}
+	  ];
+
+	  for (NSDictionary *dict in UISettings) {
+		  AWESettingItemModel *item = [DYYYSettingsHelper createSettingItem:dict cellTapHandlers:cellTapHandlers];
+		  [UIItems addObject:item];
+	  }
+
+	  // 【隐藏设置】分类
+	  NSMutableArray<AWESettingItemModel *> *HideItems = [NSMutableArray array];
+	  NSArray *HideSettings = @[
+		  @{@"identifier" : @"WaaHideChatCommentBg",
+			@"title" : @"隐藏视频评论背景",
+			@"detail" : @"",
+			@"cellType" : @6,
+			@"imageName" : @"ic_eyeslash_outlined_16"},
+		  @{@"identifier" : @"WaaHidePurityRrogress",
+			@"title" : @"隐藏双指清屏进度",
+			@"subTitle" : @"需开启视频全屏模式",			
+			@"detail" : @"",
+			@"cellType" : @37,
+			@"imageName" : @"ic_eyeslash_outlined_16"}
+	  ];
+
+	  for (NSDictionary *dict in HideSettings) {
+		  AWESettingItemModel *item = [DYYYSettingsHelper createSettingItem:dict cellTapHandlers:cellTapHandlers];
+		  [HideItems addObject:item];
+	  }	  
+
+	  // 【增强设置】分类
+	  NSMutableArray<AWESettingItemModel *> *EnhancedItems = [NSMutableArray array];
+	  NSArray *EnhancedSettings = @[
+		  @{@"identifier" : @"WaaFollowfix",
+			@"title" : @"修复关注二次确认",
+			@"detail" : @"",
+			@"cellType" : @6,
+			@"imageName" : @"ic_userplus_outlined_20"}
+	  ];
+
+	  for (NSDictionary *dict in EnhancedSettings) {
+		  AWESettingItemModel *item = [DYYYSettingsHelper createSettingItem:dict cellTapHandlers:cellTapHandlers];
+		  [EnhancedItems addObject:item];
+	  }
+
+	// 创建并组织所有section
+	  NSMutableArray *sections = [NSMutableArray array];
+	  [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"外观设置" items:UIItems]];
+	  [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"隐藏设置" items:HideItems]];
+	  [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"增强设置" items:EnhancedItems]];	  
+
+	  // 创建并推入二级设置页面
+	  AWESettingBaseViewController *subVC = [DYYYSettingsHelper createSubSettingsViewController:@"WaaHook" sections:sections];
+	  [rootVC.navigationController pushViewController:(UIViewController *)subVC animated:YES];
+	};
+	[mainItems addObject:WaaHookItem];
+
 	// 创建备份设置分类
 	AWESettingSectionModel *backupSection = [[%c(AWESettingSectionModel) alloc] init];
 	backupSection.sectionHeaderTitle = @"备份";

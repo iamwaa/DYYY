@@ -2479,15 +2479,30 @@ static AWEIMReusableCommonCell *currentCell;
 // 隐藏右下音乐和取消静音按钮
 %hook AFDCancelMuteAwemeView
 - (void)layoutSubviews {
-	%orig;
+    %orig;
 
-	UIView *superview = self.superview;
+    UIView *superview = self.superview;
+    if ([superview isKindOfClass:NSClassFromString(@"AWEBaseElementView")]) {
+        BOOL hideCancelMute = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideCancelMute"];
+        BOOL hideMusicButton = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideMusicButton"];
 
-	if ([superview isKindOfClass:NSClassFromString(@"AWEBaseElementView")]) {
-		if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideCancelMute"]) {
-			self.hidden = YES;
-		}
-	}
+        if (hideCancelMute && hideMusicButton) {
+            [superview removeFromSuperview];
+        } else if (hideCancelMute) {
+            self.hidden = YES;
+        }
+    }
+}
+
+- (void)willMoveToSuperview:(UIView *)newSuperview {
+    %orig;
+
+    if (newSuperview == nil && [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideMusicButton"]) {
+        UIView *superview = self.superview;
+        if ([superview isKindOfClass:NSClassFromString(@"AWEBaseElementView")]) {
+            [superview removeFromSuperview];
+        }
+    }
 }
 %end
 
@@ -3070,6 +3085,7 @@ static AWEIMReusableCommonCell *currentCell;
 }
 %end
 
+// 右下音乐按钮
 %hook AWEMusicCoverButton
 
 - (void)layoutSubviews {
@@ -3079,7 +3095,7 @@ static AWEIMReusableCommonCell *currentCell;
 
 	if ([accessibilityLabel isEqualToString:@"音乐详情"]) {
 		if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideMusicButton"]) {
-			[self removeFromSuperview];
+			self.alpha = 0;
 			return;
 		}
 	}
@@ -3087,12 +3103,13 @@ static AWEIMReusableCommonCell *currentCell;
 
 %end
 
+// 右下听抖音按钮
 %hook AWEPlayInteractionListenFeedView
 - (void)layoutSubviews {
 	%orig;
 
 	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideMusicButton"]) {
-		[self removeFromSuperview];
+		self.alpha = 0;
 		return;
 	}
 }
@@ -5091,6 +5108,11 @@ static void DYYYAddCustomViewToParent(UIView *parentView, float transparency) {
 		if (frame.origin.x != 0) {
 			return;
 		}
+	}
+	
+	// 增加调整评论区透明度后的兼容
+	if (isPlayVC && [[[NSUserDefaults standardUserDefaults] objectForKey:@"WaaCommentTransparency"] length] > 0 && [[[NSUserDefaults standardUserDefaults] objectForKey:@"WaaCommentTransparency"] doubleValue] < 1.0 && frame.origin.x != 0) {
+		return;	
 	}
 
 	if (isPlayVC && enableFS) {
