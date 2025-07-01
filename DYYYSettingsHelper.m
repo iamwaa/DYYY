@@ -82,7 +82,7 @@
               @"DYYYHideFollowPromptView" : @[ @"DYYYHideLOTAnimationView" ],
               @"DYYYisEnableModern" : @[ @"DYYYisEnableModernLight" ],
               @"DYYYisEnableModernLight" : @[ @"DYYYisEnableModern" ],
-              @"DYYYLabelColor" : @[ @"DYYYEnabsuijiyanse" ],
+              @"DYYYDanmuRainbowRotating" : @[ @"DYYYdanmuColor" ],
               @"DYYYEnabsuijiyanse" : @[ @"DYYYLabelColor" ]
           },
 
@@ -95,7 +95,7 @@
               @"DYYYHideTimeProgress" : @[ @"DYYYEnabshijianjindu" ],
               @"DYYYHideLOTAnimationView" : @[ @"DYYYHideFollowPromptView" ],
               @"DYYYHideFollowPromptView" : @[ @"DYYYHideLOTAnimationView" ],
-              @"DYYYLabelColor" : @[ @"DYYYEnabsuijiyanse" ],
+              @"DYYYDanmuRainbowRotating" : @[ @"DYYYdanmuColor" ],
               @"DYYYEnabsuijiyanse" : @[ @"DYYYLabelColor" ],
               @"DYYYisEnableCommentBlur" : @[ @"WaaCommentTransparency", @"WaaInputBoxTransparency" ]
           },
@@ -253,10 +253,6 @@ static NSArray *allSettingsViewControllers(void) {
                     if (item.cellType == 6 || item.cellType == 37) {
                         item.isSwitchOn = value;
                         [self setUserDefaults:@(value) forKey:identifier];
-                    } else if (item.cellType == 20 || item.cellType == 26) {
-                        if (!value) {
-                            [self setUserDefaults:@"" forKey:identifier];
-                        }
                     }
                     item.isEnable = value;
                     [item refreshCell];

@@ -527,7 +527,6 @@
 		attempts = 0;
 		pureModeSet = NO;
 	}
-	// 原来的透明度设置逻辑，保持不变
 	NSString *transparentValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYtopbartransparent"];
 	if (transparentValue && transparentValue.length > 0) {
 		CGFloat alphaValue = [transparentValue floatValue];
@@ -543,15 +542,20 @@
 }
 %end
 
-// 添加新的 hook 来处理顶栏透明度
 %hook AWEFeedTopBarContainer
-- (void)layoutSubviews {
-	%orig;
-	applyTopBarTransparency(self);
-}
-- (void)didMoveToSuperview {
-	%orig;
-	applyTopBarTransparency(self);
+- (void)setAlpha:(CGFloat)alpha {
+	NSString *transparentValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYtopbartransparent"];
+	if (transparentValue && transparentValue.length > 0) {
+		CGFloat alphaValue = [transparentValue floatValue];
+		if (alphaValue >= 0.0 && alphaValue <= 1.0) {
+			CGFloat finalAlpha = (alphaValue < 0.011) ? 0.011 : alphaValue;
+			%orig(finalAlpha);
+		} else {
+			%orig(1.0);
+		}
+	} else {
+		%orig(1.0);
+	}
 }
 %end
 
@@ -597,16 +601,43 @@
 
 %hook AWEDanmakuContentLabel
 - (void)setTextColor:(UIColor *)textColor {
-	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableDanmuColor"]) {
-		NSString *danmuColor = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYdanmuColor"];
-
-		self.layer.shadowOffset = CGSizeZero;
-		self.layer.shadowOpacity = 0.0;
-		[DYYYUtils applyColorSettingsToLabel:self colorHexString:danmuColor];
-        return;
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableDanmuColor"]) {
+        NSString *danmuColor = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYdanmuColor"];
+        if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYDanmuRainbowRotating"]) {
+            danmuColor = @"rainbow_rotating";
+        }
+        [DYYYUtils applyColorSettingsToLabel:self colorHexString:danmuColor];
+    } else {
+        %orig(textColor);
     }
+}
 
-	%orig(textColor);
+- (void)setStrokeWidth:(double)strokeWidth {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableDanmuColor"]) {
+        %orig(FLT_MIN);
+    } else {
+        %orig(strokeWidth);
+    }
+}
+
+- (void)setStrokeColor:(UIColor *)strokeColor {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableDanmuColor"]) {
+        %orig(nil);
+    } else {
+        %orig(strokeColor);
+    }
+}
+
+%end
+
+%hook XIGDanmakuPlayerView
+
+- (id)initWithFrame:(CGRect)frame {
+    id orig = %orig;
+
+    ((UIView *)orig).tag = DYYY_IGNORE_GLOBAL_ALPHA_TAG;
+
+    return orig;
 }
 
 %end
@@ -787,7 +818,7 @@
 %end
 
 %hook UIView
-// 关键方法,误删！
+// 关键方法,勿删！
 %new
 - (UIViewController *)firstAvailableUIViewController {
 	UIResponder *responder = [self nextResponder];
@@ -833,16 +864,14 @@
 	%orig;
 
 	NSString *transparentValue = [[NSUserDefaults standardUserDefaults] stringForKey:@"DYYYGlobalTransparency"];
-	if (transparentValue.length > 0) {
-		CGFloat alphaValue = transparentValue.floatValue;
-		if (alphaValue >= 0.0 && alphaValue <= 1.0) {
-			for (UIView *subview in self.subviews) {
-				if (subview.tag != DYYY_IGNORE_GLOBAL_ALPHA_TAG && ![NSStringFromClass([subview class]) isEqualToString:NSStringFromClass([self class])]) {
-					if (subview.alpha > 0) {
-						subview.alpha = alphaValue;
-					}
-				}
-			}
+	if (!transparentValue.length) return;
+	CGFloat alphaValue = transparentValue.floatValue;
+	if (alphaValue < 0.0 || alphaValue > 1.0) return;
+	if ([NSStringFromClass([self.superview class]) isEqualToString:NSStringFromClass([self class])]) return;
+	for (UIView *subview in self.subviews) {
+		if (subview.tag == DYYY_IGNORE_GLOBAL_ALPHA_TAG) continue;
+		if (subview.superview == self && subview.alpha > 0) {
+				subview.alpha = alphaValue;
 		}
 	}
 }
@@ -896,7 +925,7 @@
 
 // layoutSubviews 保持不变
 - (void)layoutSubviews {
-        %orig;
+	%orig;
 }
 
 - (void)setAlpha:(CGFloat)alpha {
@@ -1153,7 +1182,7 @@ static CGFloat rightLabelRightMargin = -1;
 	UILabel *label = %orig;
 	NSString *labelColorHex = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYLabelColor"];
 	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnabsuijiyanse"]) {
-		labelColorHex = @"random_rainbow";
+		labelColorHex = @"random_gradient";
 	}
 	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYisEnableArea"]) {
 		NSString *originalText = label.text ?: @"";
@@ -3391,7 +3420,7 @@ static AWEIMReusableCommonCell *currentCell;
 }
 %end
 
-// 隐藏视频上方搜索长框、隐藏搜索指示条、应用全局透明
+// 隐藏视频顶部搜索框、隐藏搜索框背景、应用全局透明
 %hook AWESearchEntranceView
 
 - (void)layoutSubviews {
@@ -3402,9 +3431,10 @@ static AWEIMReusableCommonCell *currentCell;
 	}
 
 	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideSearchEntranceIndicator"]) {
-		for (UIView *subview in self.subviews) {
-			if ([subview isKindOfClass:[UIImageView class]] && [NSStringFromClass([((UIImageView *)subview).image class]) isEqualToString:@"_UIResizableImage"]) {
-				((UIImageView *)subview).hidden = YES;
+		for (UIView *subviews in self.subviews) {
+			if ([subviews isKindOfClass:%c(UIImageView)] && 
+				[NSStringFromClass([((UIImageView *)subviews).image class]) isEqualToString:@"_UIResizableImage"]) {
+				((UIImageView *)subviews).hidden = YES;
 			}
 		}
 	}
@@ -3516,6 +3546,60 @@ static AWEIMReusableCommonCell *currentCell;
 		}
 		self.hidden = YES;
 		return;
+	}
+}
+%end
+
+%hook IESLiveDynamicRankListEntranceView
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideLiveDetail"]) {
+		[self removeFromSuperview];
+	}
+}
+%end
+
+%hook IESLiveMatrixEntranceView
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideLiveDetail"]) {
+		[self removeFromSuperview];
+	}
+}
+%end
+
+%hook IESLiveShortTouchActionView
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideTouchView"]) {
+		[self removeFromSuperview];
+	}
+}
+%end
+
+%hook IESLiveLotteryAnimationViewNew
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideTouchView"]) {
+		[self removeFromSuperview];
+	}
+}
+%end
+
+%hook IESLiveConfigurableShortTouchEntranceView
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideTouchView"]) {
+		[self removeFromSuperview];
+	}
+}
+%end
+
+%hook IESLiveRedEnvelopeAniLynxView
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideTouchView"]) {
+		[self removeFromSuperview];
 	}
 }
 %end
@@ -3945,16 +4029,6 @@ static AWEIMReusableCommonCell *currentCell;
 }
 %end
 
-%hook IESLiveActivityBannnerView
-- (void)layoutSubviews {
-	%orig;
-	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideGiftPavilion"]) {
-		self.hidden = YES;
-	}
-}
-
-%end
-
 // 隐藏直播广场
 %hook IESLiveFeedDrawerEntranceView
 - (void)layoutSubviews {
@@ -4042,6 +4116,42 @@ static AWEIMReusableCommonCell *currentCell;
 }
 %end
 
+%hook IESLiveBottomRightCardView
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideLiveGoodsMsg"]) {
+		[self removeFromSuperview];
+	}
+}
+%end
+
+%hook IESLiveGameCPExplainCardContainerImpl
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideLiveGoodsMsg"]) {
+		[self removeFromSuperview];
+	}
+}
+%end
+
+%hook AWEPOILivePurchaseAtmosphereView
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideLiveGoodsMsg"] && self.superview) {
+		[self.superview removeFromSuperview];
+	}
+}
+%end
+
+%hook IESLiveActivityBannnerView
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideLiveGoodsMsg"]) {
+		[self removeFromSuperview];
+	}
+}
+%end
+
 // 隐藏直播间点赞动画
 %hook HTSLiveDiggView
 - (void)setIconImageView:(UIImageView *)arg1 {
@@ -4049,6 +4159,45 @@ static AWEIMReusableCommonCell *currentCell;
 		%orig(nil);
 	} else {
 		%orig(arg1);
+	}
+}
+%end
+
+// 隐藏直播间文字贴纸
+%hook IESLiveStickerView
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideStickerView"]) {
+		[self removeFromSuperview];
+	}
+}
+%end
+
+// 预约直播
+%hook IESLivePreAnnouncementPanelViewNew
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideStickerView"]) {
+		[self removeFromSuperview];
+	}
+}
+%end
+
+// 隐藏进场特效
+%hook IESLiveDynamicUserEnterView
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideLivePopup"]) {
+		[self removeFromSuperview];
+	}
+}
+%end
+
+%hook PlatformCanvasView
+- (void)layoutSubviews {
+	%orig;
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideLivePopup"]) {
+		[self removeFromSuperview];
 	}
 }
 %end
@@ -4322,6 +4471,14 @@ static AWEIMReusableCommonCell *currentCell;
 	return orig;
 }
 
+- (AWEECommerceLabel *)ecommerceBelowLabel {
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideHisShop"]) {
+		return nil;
+	}
+	return %orig;
+}
+
+
 - (bool)preventDownload {
 	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYNoAds"]) {
 		return NO;
@@ -4350,10 +4507,9 @@ static AWEIMReusableCommonCell *currentCell;
 - (UIColor *)awe_smartBackgroundColor {
 	NSString *colorHex = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYVideoBGColor"];
 	if (colorHex && colorHex.length > 0) {
-		UIColor *customColor = [DYYYUtils colorWithHexString:colorHex];
-		if (customColor) {
-			return customColor;
-		}
+		CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+		UIColor *customColor = [DYYYUtils colorFromSchemeHexString:colorHex targetWidth:screenWidth];
+		if (customColor) return customColor;
 	}
 	return %orig;
 }
@@ -4366,10 +4522,9 @@ static AWEIMReusableCommonCell *currentCell;
 	%orig;
 	NSString *colorHex = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYVideoBGColor"];
 	if (colorHex && colorHex.length > 0) {
-		UIColor *customColor = [DYYYUtils colorWithHexString:colorHex];
-		if (customColor) {
-			self.backgroundColor = customColor;
-		}
+		CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+		UIColor *customColor = [DYYYUtils colorFromSchemeHexString:colorHex targetWidth:screenWidth];
+		if (customColor) self.backgroundColor = customColor;
 	}
 }
 
@@ -4459,9 +4614,9 @@ static AWEIMReusableCommonCell *currentCell;
 			}
 
 			if (awemeModel.albumImages.count > 1) {
-				downloadTitle = (currentImageModel.clipVideo != nil) ? @"保存当前实况" : @"保存当前图片";
+				downloadTitle = (currentImageModel.clipVideo != nil || awemeModel.isLivePhoto) ? @"保存当前实况" : @"保存当前图片";
 			} else {
-				downloadTitle = (currentImageModel.clipVideo != nil) ? @"保存实况" : @"保存图片";
+				downloadTitle = (currentImageModel.clipVideo != nil || awemeModel.isLivePhoto) ? @"保存实况" : @"保存图片";
 			}
 		} else if (isNewLivePhoto) {
 			downloadTitle = @"保存实况";
@@ -4923,6 +5078,15 @@ static AWEIMReusableCommonCell *currentCell;
 // 底栏高度
 static CGFloat tabHeight = 0;
 
+static CGFloat customTabBarHeight() {
+        NSString *value = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYTabBarHeight"];
+        if (value.length > 0) {
+                CGFloat h = [value floatValue];
+                return h > 0 ? h : 0;
+        }
+        return 0;
+}
+
 static void DYYYAddCustomViewToParent(UIView *parentView, float transparency) {
 	if (!parentView)
 		return;
@@ -5201,16 +5365,23 @@ static void DYYYAddCustomViewToParent(UIView *parentView, float transparency) {
 %hook AWEFeedTableView
 - (void)layoutSubviews {
 	%orig;
-	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYisEnableFullScreen"]) {
+	CGFloat customHeight = customTabBarHeight();
+	BOOL enableFS = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYisEnableFullScreen"];
+
+	if (enableFS || customHeight > 0) {
 		if (self.superview) {
-			CGFloat currentDifference = self.superview.frame.size.height - self.frame.size.height;
-			if (currentDifference > 0 && currentDifference != tabHeight) {
-				tabHeight = currentDifference;
+			CGFloat diff = self.superview.frame.size.height - self.frame.size.height;
+			if (diff > 0 && diff != tabHeight) {
+				tabHeight = diff;
 			}
 		}
 
 		CGRect frame = self.frame;
-		frame.size.height = self.superview.frame.size.height;
+		if (enableFS) {
+			frame.size.height = self.superview.frame.size.height;
+		} else if (customHeight > 0) {
+			frame.size.height = self.superview.frame.size.height - customHeight;
+		}
 		self.frame = frame;
 	}
 }
@@ -5370,6 +5541,53 @@ static CGFloat currentScale = 1.0;
 }
 %end
 
+// 新增直播间文案调整
+%hook IESLiveStackView
+- (void)layoutSubviews {
+    %orig;
+
+    UIView *superView = self.superview;
+    if (![superView isKindOfClass:%c(HTSEventForwardingView)] ||
+        ![superView.accessibilityLabel isEqualToString:@"ContentContainerLayer"]) {
+        return;
+	}
+
+    NSString *transparentValue = [[NSUserDefaults standardUserDefaults] stringForKey:@"DYYYGlobalTransparency"];
+    if (transparentValue.length > 0) {
+        CGFloat alphaValue = transparentValue.floatValue;
+        if (alphaValue >= 0.0 && alphaValue <= 1.0) {
+            self.alpha = alphaValue;
+        }
+    }
+
+    NSString *vcScaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameScale"];
+    if (vcScaleValue.length > 0) {
+        CGFloat scale = vcScaleValue.floatValue;
+        self.transform = CGAffineTransformIdentity;
+        if (scale > 0 && scale != 1.0) {
+            NSArray *subviews = [self.subviews copy];
+            CGFloat ty = 0;
+            for (UIView *view in subviews) {
+                CGFloat viewHeight = view.frame.size.height;
+                CGFloat contribution = (viewHeight - viewHeight * scale) / 2;
+                ty += contribution;
+            }
+            CGFloat frameWidth = self.frame.size.width;
+            CGFloat tx = (frameWidth - frameWidth * scale) / 2 - frameWidth * (1 - scale);
+            CGAffineTransform newTransform = CGAffineTransformMakeScale(scale, scale);
+            newTransform = CGAffineTransformTranslate(newTransform, tx / scale, ty / scale);
+            self.transform = newTransform;
+        }
+    }
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYisEnableFullScreen"]) {
+        CGRect frame = self.frame;
+        frame.origin.y -= tabHeight;
+        stream_frame_y = frame.origin.y;
+        self.frame = frame;
+    }
+}
+%end
+
 %hook AWEStoryContainerCollectionView
 - (void)layoutSubviews {
 	%orig;
@@ -5471,6 +5689,21 @@ static CGFloat currentScale = 1.0;
 
 - (void)layoutSubviews {
 	%orig;
+
+	CGFloat h = customTabBarHeight();
+	if (h > 0) {
+		if ([self respondsToSelector:@selector(setDesiredHeight:)]) {
+			((void (*)(id, SEL, double))objc_msgSend)(self, @selector(setDesiredHeight:), h);
+		}
+		CGRect frame = self.frame;
+		if (fabs(frame.size.height - h) > 0.5) {
+			frame.size.height = h;
+			if (self.superview) {
+				frame.origin.y = self.superview.bounds.size.height - h;
+			}
+			self.frame = frame;
+		}
+	}
 
 	BOOL hideShop = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideShopButton"];
 	BOOL hideMsg = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideMessageButton"];
@@ -5854,6 +6087,18 @@ static CGFloat currentScale = 1.0;
 	}
 	return nil;
 }
+
+- (NSArray<UIView *> *)findAllViewsWithClassName:(NSString *)className {
+    NSMutableArray *foundViews = [NSMutableArray array];
+    if ([[[self class] description] isEqualToString:className]) {
+        [foundViews addObject:self];
+    }
+    for (UIView *subview in self.subviews) {
+        [foundViews addObjectsFromArray:[subview findAllViewsWithClassName:className]];
+    }
+    return [foundViews copy];
+}
+
 @end
 
 static NSMutableDictionary *keepCellsInfo;

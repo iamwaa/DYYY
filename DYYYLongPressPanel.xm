@@ -241,7 +241,7 @@
 		}
 
 		AWEImageAlbumImageModel *currimge = self.awemeModel.albumImages[self.awemeModel.currentImageIndex - 1];
-		if (currimge.clipVideo != nil) {
+		if (currimge.clipVideo != nil || self.awemeModel.isLivePhoto) {
 			if (self.awemeModel.albumImages.count == 1) {
 				imageViewModel.describeString = @"保存实况";
 			} else {
@@ -621,8 +621,12 @@
 		filterKeywords.duxIconName = @"ic_funnel_outlined_20";
 		filterKeywords.describeString = @"过滤文案";
 		filterKeywords.action = ^{
-		  NSString *descText = [self.awemeModel valueForKey:@"descriptionString"];
-		  DYYYFilterSettingsView *filterView = [[DYYYFilterSettingsView alloc] initWithTitle:@"过滤关键词调整" text:descText];
+                  NSString *descText = [self.awemeModel valueForKey:@"descriptionString"];
+                  NSString *propName = nil;
+                  if (self.awemeModel.propGuideV2) {
+                      propName = self.awemeModel.propGuideV2.propName;
+                  }
+                  DYYYFilterSettingsView *filterView = [[DYYYFilterSettingsView alloc] initWithTitle:@"过滤关键词调整" text:descText propName:propName];
 		  filterView.onConfirm = ^(NSString *selectedText) {
 		    if (selectedText.length > 0) {
 			    NSString *currentKeywords = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYfilterKeywords"] ?: @"";
@@ -1049,7 +1053,7 @@
 		}
 
 		AWEImageAlbumImageModel *currimge = self.awemeModel.albumImages[self.awemeModel.currentImageIndex - 1];
-		if (currimge.clipVideo != nil) {
+		if (currimge.clipVideo != nil || self.awemeModel.isLivePhoto) {
 			if (self.awemeModel.albumImages.count == 1) {
 				imageViewModel.describeString = @"保存实况";
 			} else {
@@ -1430,8 +1434,12 @@
 		filterKeywords.duxIconName = @"ic_funnel_outlined_20";
 		filterKeywords.describeString = @"过滤文案";
 		filterKeywords.action = ^{
-		  NSString *descText = [self.awemeModel valueForKey:@"descriptionString"];
-		  DYYYFilterSettingsView *filterView = [[DYYYFilterSettingsView alloc] initWithTitle:@"过滤关键词调整" text:descText];
+                  NSString *descText = [self.awemeModel valueForKey:@"descriptionString"];
+                  NSString *propName = nil;
+                  if (self.awemeModel.propGuideV2) {
+                      propName = self.awemeModel.propGuideV2.propName;
+                  }
+                  DYYYFilterSettingsView *filterView = [[DYYYFilterSettingsView alloc] initWithTitle:@"过滤关键词调整" text:descText propName:propName];
 		  filterView.onConfirm = ^(NSString *selectedText) {
 		    if (selectedText.length > 0) {
 			    NSString *currentKeywords = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYfilterKeywords"] ?: @"";
