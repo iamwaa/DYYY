@@ -3128,17 +3128,6 @@ static AWEIMReusableCommonCell *currentCell;
 
 %end
 
-%hook ACCGestureResponsibleStickerView
-- (void)layoutSubviews {
-    %orig;
-
-    if (DYYYGetBool(@"DYYYHideChallengeStickers")) {
-        self.hidden = YES;
-        return;
-    }
-}
-%end
-
 // 右下音乐按钮
 %hook AWEMusicCoverButton
 
@@ -5612,7 +5601,7 @@ static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementSta
 - (void)layoutSubviews {
     %orig;
     if (DYYYGetBool(@"DYYYHideEntry")) {
-        [self removeFromSuperview];
+        self.alpha = 0;
         return;
     }
 }
