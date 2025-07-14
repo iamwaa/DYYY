@@ -185,13 +185,17 @@
 %hook AWEFeedChannelManager
 
 - (void)reloadChannelWithChannelModels:(id)arg1 currentChannelIDList:(id)arg2 reloadType:(id)arg3 selectedChannelID:(id)arg4 {
+    NSArray *channelModels = arg1;
+    NSMutableArray *newChannelModels = [NSMutableArray array];
+    NSArray *currentChannelIDList = arg2;
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSMutableArray *newCurrentChannelIDList = [NSMutableArray arrayWithArray:currentChannelIDList];
+    NSString *hideOtherChannels = [defaults objectForKey:@"DYYYHideOtherChannel"] ?: @"";
+    NSArray *hideChannelKeywords = [hideOtherChannels componentsSeparatedByString:@","];
     if (!arg1 || !arg2) {
         %orig(arg1, arg2, arg3, arg4);
         return;
     }
-
-    NSArray *channelModels = arg1;
-    NSArray *currentChannelIDList = arg2;
 
     if (![channelModels isKindOfClass:[NSArray class]] || ![currentChannelIDList isKindOfClass:[NSArray class]]) {
         %orig(arg1, arg2, arg3, arg4);
@@ -203,43 +207,11 @@
         return;
     }
 
-    NSMutableArray *newChannelModels = [NSMutableArray arrayWithCapacity:channelModels.count];
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    NSMutableArray *newCurrentChannelIDList = [NSMutableArray arrayWithArray:currentChannelIDList];
-
-    NSString *hideOtherChannels = [defaults objectForKey:@"DYYYHideOtherChannel"];
-    NSArray *hideChannelKeywords = nil;
-
-    if (hideOtherChannels && [hideOtherChannels isKindOfClass:[NSString class]] && hideOtherChannels.length > 0) {
-        hideChannelKeywords = [hideOtherChannels componentsSeparatedByString:@","];
-        NSMutableArray *filteredKeywords = [NSMutableArray array];
-        for (NSString *keyword in hideChannelKeywords) {
-            if ([keyword isKindOfClass:[NSString class]]) {
-                NSString *trimmedKeyword = [keyword stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-                if (trimmedKeyword.length > 0) {
-                    [filteredKeywords addObject:trimmedKeyword];
-                }
-            }
-        }
-        hideChannelKeywords = [filteredKeywords copy];
-    }
-
-    for (id model in channelModels) {
-        Class AWEHPTopTabItemModelClass = NSClassFromString(@"AWEHPTopTabItemModel");
-        if (!AWEHPTopTabItemModelClass || ![model isKindOfClass:AWEHPTopTabItemModelClass]) {
-            [newChannelModels addObject:model];
-            continue;
-        }
-
-        NSString *channelID = [model valueForKey:@"channelID"];
-        NSString *newChannelTitle = [model valueForKey:@"title"];
-        NSString *oldChannelTitle = [model valueForKey:@"channelTitle"];
+    for (AWEHPTopTabItemModel *tabItemModel in channelModels) {
+        NSString *channelID = tabItemModel.channelID;
+        NSString *newChannelTitle = tabItemModel.title;
+        NSString *oldChannelTitle = tabItemModel.channelTitle;
         BOOL isHideChannel = NO;
-
-        if (!channelID || ![channelID isKindOfClass:[NSString class]]) {
-            [newChannelModels addObject:model];
-            continue;
-        }
 
         if ([channelID isEqualToString:@"homepage_hot_container"]) {
             isHideChannel = [defaults boolForKey:@"DYYYHideHotContainer"];
@@ -270,29 +242,17 @@
         } else if ([channelID isEqualToString:@"homepage_pad_game"]) {
             isHideChannel = [defaults boolForKey:@"DYYYHideGame"];
         }
-
-        if (!isHideChannel && hideChannelKeywords && hideChannelKeywords.count > 0) {
-            NSString *safeOldTitle = ([oldChannelTitle isKindOfClass:[NSString class]]) ? oldChannelTitle : @"";
-            NSString *safeNewTitle = ([newChannelTitle isKindOfClass:[NSString class]]) ? newChannelTitle : @"";
-
-            if (safeOldTitle.length > 0 || safeNewTitle.length > 0) {
-                for (NSString *keyword in hideChannelKeywords) {
-                    if ([keyword isKindOfClass:[NSString class]] && keyword.length > 0) {
-                        if ([safeOldTitle containsString:keyword] || [safeNewTitle containsString:keyword]) {
-                            isHideChannel = YES;
-                            break;
-                        }
-                    }
+        if (oldChannelTitle.length > 0 || newChannelTitle.length > 0) {
+            for (NSString *keyword in hideChannelKeywords) {
+                if (keyword.length > 0 && ([oldChannelTitle containsString:keyword] || [newChannelTitle containsString:keyword])) {
+                    isHideChannel = YES;
                 }
             }
         }
-
         if (!isHideChannel) {
-            [newChannelModels addObject:model];
+            [newChannelModels addObject:tabItemModel];
         } else {
-            if ([newCurrentChannelIDList containsObject:channelID]) {
-                [newCurrentChannelIDList removeObject:channelID];
-            }
+            [newCurrentChannelIDList removeObject:channelID];
         }
     }
 
@@ -2519,7 +2479,7 @@ static AWEIMReusableCommonCell *currentCell;
 
     // 检查是否需要隐藏加号
     if (DYYYGetBool(@"DYYYHideLOTAnimationView")) {
-        self.hidden = YES;
+        [self removeFromSuperview];
         return;
     }
 
@@ -2539,9 +2499,8 @@ static AWEIMReusableCommonCell *currentCell;
 - (void)layoutSubviews {
     %orig;
 
-    // 检查是否需要隐藏头像
     if (DYYYGetBool(@"DYYYHideAvatarButton")) {
-        self.hidden = YES;
+        [self removeFromSuperview];
         return;
     }
 
@@ -2797,18 +2756,28 @@ static AWEIMReusableCommonCell *currentCell;
 
 %end
 
-// 隐藏挑战贴纸
-%hook AWEFeedStickerContainerView
+%hook ACCGestureResponsibleStickerView
 
-- (BOOL)isHidden {
-    BOOL origHidden = %orig;
-    BOOL hideRecommend = DYYYGetBool(@"DYYYHideChallengeStickers");
-    return origHidden || hideRecommend;
-}
+- (void)layoutSubviews {
+    %orig;
 
-- (void)setHidden:(BOOL)hidden {
-    BOOL forceHide = DYYYGetBool(@"DYYYHideChallengeStickers");
-    %orig(forceHide ? YES : hidden);
+    if (DYYYGetBool(@"DYYYHideEditTags")) {
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:NSClassFromString(@"ACCEditTagStickerView")]) {
+                self.hidden = YES;
+                return;
+            }
+        }
+    }
+
+    if (DYYYGetBool(@"DYYYHideChallengeStickers")) {
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:NSClassFromString(@"ACCMordernQuickFlashStickerView")]) {
+                self.hidden = YES;
+                return;
+            }
+        }
+    }
 }
 
 %end
@@ -3214,7 +3183,7 @@ static AWEIMReusableCommonCell *currentCell;
         }
         if (DYYYGetBool(@"DYYYHideFollowPromptView")) {
             self.userInteractionEnabled = NO;
-            self.hidden = YES;
+            [self removeFromSuperview];
             return;
         }
     }
@@ -3579,18 +3548,6 @@ static AWEIMReusableCommonCell *currentCell;
 
 %end
 
-// 隐藏关注直播
-%hook AWEConcernSkylightCapsuleView
-- (void)setHidden:(BOOL)hidden {
-    if (DYYYGetBool(@"DYYYHideConcernCapsuleView")) {
-        self.hidden = YES;
-        return;
-    }
-
-    %orig(hidden);
-}
-%end
-
 %hook AWEHomePageBubbleLiveHeadLabelContentView
 - (void)layoutSubviews {
     %orig;
@@ -3817,10 +3774,9 @@ static AWEIMReusableCommonCell *currentCell;
 }
 %end
 
-// 隐藏关注直播顶端
+// 隐藏关注直播顶端的直播视图
 %hook AWENewLiveSkylightViewController
 
-// 隐藏顶部直播视图 - 添加条件判断
 - (void)showSkylight:(BOOL)arg0 animated:(BOOL)arg1 actionMethod:(unsigned long long)arg2 {
     if (DYYYGetBool(@"DYYYHideLiveView")) {
         return;
@@ -3836,6 +3792,18 @@ static AWEIMReusableCommonCell *currentCell;
     }
 }
 
+%end
+
+// 隐藏关注直播
+%hook AWEConcernSkylightCapsuleView
+- (void)setHidden:(BOOL)hidden {
+    if (DYYYGetBool(@"DYYYHideConcernCapsuleView")) {
+        %orig(YES);
+        return;
+    }
+
+    %orig(hidden);
+}
 %end
 
 %hook AWELiveAutoEnterStyleAView
@@ -5644,7 +5612,7 @@ static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementSta
 - (void)layoutSubviews {
     %orig;
     if (DYYYGetBool(@"DYYYHideEntry")) {
-        self.hidden = YES;
+        [self removeFromSuperview];
         return;
     }
 }
@@ -5954,11 +5922,11 @@ static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementSta
 %hook AWEDemaciaChapterProgressSlider
 
 - (void)layoutSubviews {
+    %orig;
     if (DYYYGetBool(@"DYYYHideChapterProgress")) {
-        self.hidden = YES;
+        [self removeFromSuperview];
         return;
     }
-    %orig;
 }
 
 %end
