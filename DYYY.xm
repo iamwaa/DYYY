@@ -1166,50 +1166,97 @@ static CGFloat rightLabelRightMargin = -1;
 }
 
 %end
-
 %hook AWENormalModeTabBarTextView
 
 - (void)layoutSubviews {
-    %orig;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-      NSString *indexTitle = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYIndexTitle"];
-      NSString *friendsTitle = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYFriendsTitle"];
-      NSString *msgTitle = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYMsgTitle"];
-      NSString *selfTitle = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYSelfTitle"];
+    @try {
+        %orig;
 
-      if (!(indexTitle.length || friendsTitle.length || msgTitle.length || selfTitle.length)) {
-          return;
-      }
+        if (![NSThread isMainThread]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+              [self layoutSubviews];
+            });
+            return;
+        }
 
-      static char kDYTabLabelCacheKey;
-      NSArray *labelCache = objc_getAssociatedObject(self, &kDYTabLabelCacheKey);
-      if (!labelCache) {
-          NSMutableArray *tmp = [NSMutableArray array];
-          for (UIView *subview in [self subviews]) {
-              if ([subview isKindOfClass:[UILabel class]]) {
-                  [tmp addObject:subview];
-              }
-          }
-          labelCache = [tmp copy];
-          objc_setAssociatedObject(self, &kDYTabLabelCacheKey, labelCache, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-      }
+        if (!self || !self.superview) {
+            return;
+        }
 
-      for (UILabel *label in labelCache) {
-          if ([label.text isEqualToString:@"首页"] && indexTitle.length > 0) {
-              label.text = indexTitle;
-              [self setNeedsLayout];
-          } else if ([label.text isEqualToString:@"朋友"] && friendsTitle.length > 0) {
-              label.text = friendsTitle;
-              [self setNeedsLayout];
-          } else if ([label.text isEqualToString:@"消息"] && msgTitle.length > 0) {
-              label.text = msgTitle;
-              [self setNeedsLayout];
-          } else if ([label.text isEqualToString:@"我"] && selfTitle.length > 0) {
-              label.text = selfTitle;
-              [self setNeedsLayout];
-          }
-      }
-    });
+        NSString *indexTitle = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYIndexTitle"];
+        NSString *friendsTitle = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYFriendsTitle"];
+        NSString *msgTitle = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYMsgTitle"];
+        NSString *selfTitle = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYSelfTitle"];
+
+        if (!(indexTitle.length || friendsTitle.length || msgTitle.length || selfTitle.length)) {
+            return;
+        }
+
+        static char kDYTabLabelCacheKey;
+        NSArray *labelCache = objc_getAssociatedObject(self, &kDYTabLabelCacheKey);
+        if (!labelCache) {
+            NSMutableArray *tmp = [NSMutableArray array];
+            if (!tmp) {
+                return;
+            }
+
+            NSArray *subviews = [self subviews];
+            if (!subviews) {
+                return;
+            }
+
+            for (UIView *subview in subviews) {
+                if (subview && [subview isKindOfClass:[UILabel class]]) {
+                    [tmp addObject:subview];
+                }
+            }
+
+            labelCache = [tmp copy];
+            if (labelCache) {
+                objc_setAssociatedObject(self, &kDYTabLabelCacheKey, labelCache, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+        }
+
+        if (!labelCache) {
+            return;
+        }
+
+        for (UILabel *label in labelCache) {
+            if (!label || ![label isKindOfClass:[UILabel class]]) {
+                continue;
+            }
+
+            NSString *labelText = label.text;
+            if (!labelText) {
+                continue;
+            }
+
+            if ([labelText isEqualToString:@"首页"] && indexTitle.length > 0) {
+                label.text = indexTitle;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                  [self setNeedsLayout];
+                });
+            } else if ([labelText isEqualToString:@"朋友"] && friendsTitle.length > 0) {
+                label.text = friendsTitle;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                  [self setNeedsLayout];
+                });
+            } else if ([labelText isEqualToString:@"消息"] && msgTitle.length > 0) {
+                label.text = msgTitle;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                  [self setNeedsLayout];
+                });
+            } else if ([labelText isEqualToString:@"我"] && selfTitle.length > 0) {
+                label.text = selfTitle;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                  [self setNeedsLayout];
+                });
+            }
+        }
+
+    } @catch (NSException *exception) {
+        return;
+    }
 }
 %end
 
@@ -3217,7 +3264,7 @@ static AWEIMReusableCommonCell *currentCell;
         }
         if (DYYYGetBool(@"DYYYHideFollowPromptView")) {
             self.userInteractionEnabled = NO;
-            [self removeFromSuperview];
+            self.hidden = YES;
         }
     }
 }
@@ -5781,17 +5828,16 @@ static CGFloat originalTabHeight = 0;
 
 - (void)prepareForDisplay {
     %orig;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-      BOOL autoRestoreSpeed = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAutoRestoreSpeed"];
-      if (autoRestoreSpeed) {
-          setCurrentSpeedIndex(0);
-      }
-      float speed = getCurrentSpeed();
-      if (speed != 1.0) {
-          [self adjustPlaybackSpeed:speed];
-      }
-      updateSpeedButtonUI();
-    });
+
+    BOOL autoRestoreSpeed = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAutoRestoreSpeed"];
+    if (autoRestoreSpeed) {
+        setCurrentSpeedIndex(0);
+    }
+    float speed = getCurrentSpeed();
+    if (speed != 1.0) {
+        [self adjustPlaybackSpeed:speed];
+    }
+    updateSpeedButtonUI();
 }
 
 %new
@@ -5853,17 +5899,15 @@ static CGFloat originalTabHeight = 0;
 
 - (void)prepareForDisplay {
     %orig;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-      BOOL autoRestoreSpeed = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAutoRestoreSpeed"];
-      if (autoRestoreSpeed) {
-          setCurrentSpeedIndex(0);
-      }
-      float speed = getCurrentSpeed();
-      if (speed != 1.0) {
-          [self adjustPlaybackSpeed:speed];
-      }
-      updateSpeedButtonUI();
-    });
+    BOOL autoRestoreSpeed = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAutoRestoreSpeed"];
+    if (autoRestoreSpeed) {
+        setCurrentSpeedIndex(0);
+    }
+    float speed = getCurrentSpeed();
+    if (speed != 1.0) {
+        [self adjustPlaybackSpeed:speed];
+    }
+    updateSpeedButtonUI();
 }
 
 %new
@@ -6320,7 +6364,7 @@ static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementSta
 - (void)layoutSubviews {
     %orig;
     if (DYYYGetBool(@"DYYYHideEntry")) {
-        self.alpha = 0;
+        [self removeFromSuperview];
     }
 }
 
