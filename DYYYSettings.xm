@@ -222,11 +222,14 @@ extern "C"
               @"cellType" : @20,
               @"imageName" : @"ic_tv_outlined_20"
           },
-          @{@"identifier" : @"DYYYShowScheduleDisplay",
-            @"title" : @"显示进度时长",
-            @"detail" : @"",
-            @"cellType" : @6,
-            @"imageName" : @"ic_playertime_outlined_20"},
+          @{
+              @"identifier" : @"DYYYShowScheduleDisplay",
+              @"title" : @"显示进度时长",
+              @"subTitle" : @"强制显示所有视频的进度条和时长",
+              @"detail" : @"",
+              @"cellType" : @37,
+              @"imageName" : @"ic_playertime_outlined_20"
+          },
           @{@"identifier" : @"DYYYScheduleStyle",
             @"title" : @"进度时长样式",
             @"detail" : @"",
@@ -244,8 +247,9 @@ extern "C"
             @"imageName" : @"ic_playertime_outlined_20"},
           @{@"identifier" : @"DYYYHideVideoProgress",
             @"title" : @"隐藏视频进度",
+            @"subTitle" : @"隐藏视频进度条",
             @"detail" : @"",
-            @"cellType" : @6,
+            @"cellType" : @37,
             @"imageName" : @"ic_playertime_outlined_20"},
           @{
               @"identifier" : @"DYYYEnableAutoPlay",
@@ -970,12 +974,7 @@ extern "C"
             @"subTitle" : @"主页视频左上角的返回按钮",
             @"detail" : @"",
             @"cellType" : @37,
-            @"imageName" : @"ic_eyeslash_outlined_16"},
-          @{@"identifier" : @"DYYYHideSettingsAbout",
-            @"title" : @"隐藏设置关于",
-            @"detail" : @"",
-            @"cellType" : @6,
-            @"imageName" : @"ic_eyeslash_outlined_16"},
+            @"imageName" : @"ic_eyeslash_outlined_16"}
       ];
 
       for (NSDictionary *dict in sidebarSettings) {

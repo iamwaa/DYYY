@@ -14,6 +14,8 @@
 #import "DYYYManager.h"
 
 #import "DYYYConstants.h"
+#import "DYYYFloatClearButton.h"
+#import "DYYYFloatSpeedButton.h"
 #import "DYYYSettingViewController.h"
 #import "DYYYToast.h"
 #import "DYYYUtils.h"
@@ -550,10 +552,6 @@
 %end
 
 %hook AWEFeedTopBarContainer
-- (void)layoutSubviews {
-    %orig;
-    applyTopBarTransparency(self);
-}
 - (void)didMoveToSuperview {
     %orig;
     applyTopBarTransparency(self);
@@ -579,37 +577,38 @@
 
 - (void)layoutSubviews {
     %orig;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      NSString *topTitleConfig = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYModifyTopTabText"];
+      if (topTitleConfig.length == 0)
+          return;
 
-    NSString *topTitleConfig = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYModifyTopTabText"];
-    if (topTitleConfig.length == 0)
-        return;
+      NSArray *titlePairs = [topTitleConfig componentsSeparatedByString:@"#"];
 
-    NSArray *titlePairs = [topTitleConfig componentsSeparatedByString:@"#"];
+      NSString *accessibilityLabel = nil;
+      if ([self.superview respondsToSelector:@selector(accessibilityLabel)]) {
+          accessibilityLabel = self.superview.accessibilityLabel;
+      }
+      if (accessibilityLabel.length == 0)
+          return;
 
-    NSString *accessibilityLabel = nil;
-    if ([self.superview respondsToSelector:@selector(accessibilityLabel)]) {
-        accessibilityLabel = self.superview.accessibilityLabel;
-    }
-    if (accessibilityLabel.length == 0)
-        return;
+      for (NSString *pair in titlePairs) {
+          NSArray *components = [pair componentsSeparatedByString:@"="];
+          if (components.count != 2)
+              continue;
 
-    for (NSString *pair in titlePairs) {
-        NSArray *components = [pair componentsSeparatedByString:@"="];
-        if (components.count != 2)
-            continue;
+          NSString *originalTitle = components[0];
+          NSString *newTitle = components[1];
 
-        NSString *originalTitle = components[0];
-        NSString *newTitle = components[1];
-
-        if ([accessibilityLabel isEqualToString:originalTitle]) {
-            if ([self respondsToSelector:@selector(setContentText:)]) {
-                [self setContentText:newTitle];
-            } else {
-                [self setValue:newTitle forKey:@"contentText"];
-            }
-            break;
-        }
-    }
+          if ([accessibilityLabel isEqualToString:originalTitle]) {
+              if ([self respondsToSelector:@selector(setContentText:)]) {
+                  [self setContentText:newTitle];
+              } else {
+                  [self setValue:newTitle forKey:@"contentText"];
+              }
+              break;
+          }
+      }
+    });
 }
 
 %end
@@ -681,19 +680,20 @@
 
 - (void)layoutSubviews {
     %orig;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
 
-    UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
+      if ([vc isKindOfClass:%c(AWEPlayInteractionViewController)]) {
+          if (self.markLabel) {
+              self.markLabel.textColor = [UIColor whiteColor];
+          }
+      }
 
-    if ([vc isKindOfClass:%c(AWEPlayInteractionViewController)]) {
-        if (self.markLabel) {
-            self.markLabel.textColor = [UIColor whiteColor];
-        }
-    }
-
-    if (DYYYGetBool(@"DYYYHideLocation")) {
-        [self removeFromSuperview];
-        return;
-    }
+      if (DYYYGetBool(@"DYYYHideLocation")) {
+          [self removeFromSuperview];
+          return;
+      }
+    });
 }
 
 %end
@@ -767,6 +767,22 @@
 - (void)closeSettings:(UIButton *)button {
     [button.superview.window.rootViewController dismissViewControllerAnimated:YES completion:nil];
 }
+
+- (void)makeKeyAndVisible {
+    %orig;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      if (!isFloatSpeedButtonEnabled)
+          return;
+
+      if (speedButton && ![speedButton isDescendantOfView:self]) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [self addSubview:speedButton];
+            [speedButton loadSavedPosition];
+            [speedButton resetFadeTimer];
+          });
+      }
+    });
+}
 %end
 
 %end
@@ -796,6 +812,34 @@
 
 // 重写全局透明方法
 %hook AWEPlayInteractionViewController
+- (void)loadView {
+    %orig;
+    if (hideButton) {
+        hideButton.hidden = NO;
+        hideButton.alpha = 0.5;
+    }
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    isInPlayInteractionVC = YES;
+    dyyyInteractionViewVisible = YES;
+    if (hideButton) {
+        hideButton.hidden = NO;
+        hideButton.alpha = 0.5;
+    }
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    dyyyInteractionViewVisible = YES;
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    %orig;
+    isInPlayInteractionVC = NO;
+    dyyyInteractionViewVisible = NO;
+}
 
 - (UIView *)view {
     UIView *originalView = %orig;
@@ -877,7 +921,7 @@
                                     }];
         });
 
-        return nil; // 阻止原始 block 立即执行
+        return nil;
     }
 
     return r;
@@ -887,27 +931,28 @@
 %hook AWEPlayInteractionProgressContainerView
 - (void)layoutSubviews {
     %orig;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      if (![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFullScreen"]) {
+          return;
+      }
 
-    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFullScreen"]) {
-        return;
-    }
+      static char kDYProgressBgKey;
+      NSArray *bgViews = objc_getAssociatedObject(self, &kDYProgressBgKey);
+      if (!bgViews) {
+          NSMutableArray *tmp = [NSMutableArray array];
+          for (UIView *subview in self.subviews) {
+              if ([subview class] == [UIView class]) {
+                  [tmp addObject:subview];
+              }
+          }
+          bgViews = [tmp copy];
+          objc_setAssociatedObject(self, &kDYProgressBgKey, bgViews, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      }
 
-    static char kDYProgressBgKey;
-    NSArray *bgViews = objc_getAssociatedObject(self, &kDYProgressBgKey);
-    if (!bgViews) {
-        NSMutableArray *tmp = [NSMutableArray array];
-        for (UIView *subview in self.subviews) {
-            if ([subview class] == [UIView class]) {
-                [tmp addObject:subview];
-            }
-        }
-        bgViews = [tmp copy];
-        objc_setAssociatedObject(self, &kDYProgressBgKey, bgViews, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-
-    for (UIView *v in bgViews) {
-        v.backgroundColor = [UIColor clearColor];
-    }
+      for (UIView *v in bgViews) {
+          v.backgroundColor = [UIColor clearColor];
+      }
+    });
 }
 
 %end
@@ -1401,41 +1446,42 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 - (void)didMoveToWindow {
     %orig;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      BOOL longPressCopyEnabled = DYYYGetBool(kDYYYLongPressCopyEnabledKey);
 
-    BOOL longPressCopyEnabled = DYYYGetBool(kDYYYLongPressCopyEnabledKey);
+      if (![[NSUserDefaults standardUserDefaults] objectForKey:kDYYYLongPressCopyEnabledKey]) {
+          longPressCopyEnabled = NO;
+          [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kDYYYLongPressCopyEnabledKey];
+          [[NSUserDefaults standardUserDefaults] synchronize];
+      }
 
-    if (![[NSUserDefaults standardUserDefaults] objectForKey:kDYYYLongPressCopyEnabledKey]) {
-        longPressCopyEnabled = NO;
-        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kDYYYLongPressCopyEnabledKey];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-    }
+      UIGestureRecognizer *existingGesture = objc_getAssociatedObject(self, &kLongPressGestureKey);
+      if (existingGesture && !longPressCopyEnabled) {
+          [self removeGestureRecognizer:existingGesture];
+          objc_setAssociatedObject(self, &kLongPressGestureKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+          return;
+      }
 
-    UIGestureRecognizer *existingGesture = objc_getAssociatedObject(self, &kLongPressGestureKey);
-    if (existingGesture && !longPressCopyEnabled) {
-        [self removeGestureRecognizer:existingGesture];
-        objc_setAssociatedObject(self, &kLongPressGestureKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        return;
-    }
+      if (longPressCopyEnabled && !objc_getAssociatedObject(self, &kLongPressGestureKey)) {
+          UILongPressGestureRecognizer *highPriorityLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleHighPriorityLongPress:)];
+          highPriorityLongPress.minimumPressDuration = 0.3;
 
-    if (longPressCopyEnabled && !objc_getAssociatedObject(self, &kLongPressGestureKey)) {
-        UILongPressGestureRecognizer *highPriorityLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleHighPriorityLongPress:)];
-        highPriorityLongPress.minimumPressDuration = 0.3;
+          [self addGestureRecognizer:highPriorityLongPress];
 
-        [self addGestureRecognizer:highPriorityLongPress];
+          UIView *currentView = self;
+          while (currentView.superview) {
+              currentView = currentView.superview;
 
-        UIView *currentView = self;
-        while (currentView.superview) {
-            currentView = currentView.superview;
+              for (UIGestureRecognizer *recognizer in currentView.gestureRecognizers) {
+                  if ([recognizer isKindOfClass:[UILongPressGestureRecognizer class]] || [recognizer isKindOfClass:[UIPinchGestureRecognizer class]]) {
+                      [recognizer requireGestureRecognizerToFail:highPriorityLongPress];
+                  }
+              }
+          }
 
-            for (UIGestureRecognizer *recognizer in currentView.gestureRecognizers) {
-                if ([recognizer isKindOfClass:[UILongPressGestureRecognizer class]] || [recognizer isKindOfClass:[UIPinchGestureRecognizer class]]) {
-                    [recognizer requireGestureRecognizerToFail:highPriorityLongPress];
-                }
-            }
-        }
-
-        objc_setAssociatedObject(self, &kLongPressGestureKey, highPriorityLongPress, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
+          objc_setAssociatedObject(self, &kLongPressGestureKey, highPriorityLongPress, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      }
+    });
 }
 
 %new
@@ -1469,25 +1515,27 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 - (void)layoutSubviews {
     %orig;
-    self.transform = CGAffineTransformIdentity;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      self.transform = CGAffineTransformIdentity;
 
-    NSString *descriptionOffsetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDescriptionVerticalOffset"];
-    CGFloat verticalOffset = 0;
-    if (descriptionOffsetValue.length > 0) {
-        verticalOffset = [descriptionOffsetValue floatValue];
-    }
+      NSString *descriptionOffsetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDescriptionVerticalOffset"];
+      CGFloat verticalOffset = 0;
+      if (descriptionOffsetValue.length > 0) {
+          verticalOffset = [descriptionOffsetValue floatValue];
+      }
 
-    UIView *parentView = self.superview;
-    UIView *grandParentView = nil;
+      UIView *parentView = self.superview;
+      UIView *grandParentView = nil;
 
-    if (parentView) {
-        grandParentView = parentView.superview;
-    }
+      if (parentView) {
+          grandParentView = parentView.superview;
+      }
 
-    if (grandParentView && verticalOffset != 0) {
-        CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(0, verticalOffset);
-        grandParentView.transform = translationTransform;
-    }
+      if (grandParentView && verticalOffset != 0) {
+          CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(0, verticalOffset);
+          grandParentView.transform = translationTransform;
+      }
+    });
 }
 
 %end
@@ -1496,31 +1544,32 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 - (void)layoutSubviews {
     %orig;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      self.transform = CGAffineTransformIdentity;
 
-    self.transform = CGAffineTransformIdentity;
+      // 添加垂直偏移支持
+      NSString *verticalOffsetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameVerticalOffset"];
+      CGFloat verticalOffset = 0;
+      if (verticalOffsetValue.length > 0) {
+          verticalOffset = [verticalOffsetValue floatValue];
+      }
 
-    // 添加垂直偏移支持
-    NSString *verticalOffsetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameVerticalOffset"];
-    CGFloat verticalOffset = 0;
-    if (verticalOffsetValue.length > 0) {
-        verticalOffset = [verticalOffsetValue floatValue];
-    }
+      UIView *parentView = self.superview;
+      UIView *grandParentView = nil;
 
-    UIView *parentView = self.superview;
-    UIView *grandParentView = nil;
+      if (parentView) {
+          grandParentView = parentView.superview;
+      }
 
-    if (parentView) {
-        grandParentView = parentView.superview;
-    }
+      // 检查祖父视图是否为 AWEBaseElementView 类型
+      if (grandParentView && [grandParentView.superview isKindOfClass:%c(AWEBaseElementView)]) {
+          CGRect scaledFrame = grandParentView.frame;
+          CGFloat translationX = -scaledFrame.origin.x;
 
-    // 检查祖父视图是否为 AWEBaseElementView 类型
-    if (grandParentView && [grandParentView.superview isKindOfClass:%c(AWEBaseElementView)]) {
-        CGRect scaledFrame = grandParentView.frame;
-        CGFloat translationX = -scaledFrame.origin.x;
-
-        CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(translationX, verticalOffset);
-        grandParentView.transform = translationTransform;
-    }
+          CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(translationX, verticalOffset);
+          grandParentView.transform = translationTransform;
+      }
+    });
 }
 
 %end
@@ -1528,6 +1577,8 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 %hook AWEFeedVideoButton
 
 - (void)setImage:(id)arg1 {
+    %orig;
+
     NSString *nameString = nil;
 
     if ([self respondsToSelector:@selector(imageNameString)]) {
@@ -1597,8 +1648,6 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
             }
         }
     }
-
-    %orig;
 }
 
 %end
@@ -2445,8 +2494,7 @@ static AWEIMReusableCommonCell *currentCell;
 
 - (void)layoutSubviews {
     %orig;
-    self.hidden = YES;
-    return;
+    [self removeFromSuperview];
 }
 
 %end
@@ -2466,7 +2514,7 @@ static AWEIMReusableCommonCell *currentCell;
     %orig;
 
     if (DYYYGetBool(@"DYYYHideComment")) {
-        self.hidden = YES;
+        [self removeFromSuperview];
         return;
     }
 }
@@ -2519,7 +2567,7 @@ static AWEIMReusableCommonCell *currentCell;
 %hook AWENearbySkyLightCapsuleView
 - (void)layoutSubviews {
     if (DYYYGetBool(@"DYYYHideNearbyCapsuleView")) {
-        self.hidden = YES;
+        [self removeFromSuperview];
         return;
     }
     %orig;
@@ -2902,21 +2950,19 @@ static AWEIMReusableCommonCell *currentCell;
 // 移除下面推荐框黑条
 %hook AWEPlayInteractionRelatedVideoView
 - (void)layoutSubviews {
+    %orig;
     if (DYYYGetBool(@"DYYYHideBottomRelated")) {
         [self removeFromSuperview];
-        return;
     }
-    %orig;
 }
 %end
 
 %hook AWEFeedRelatedSearchTipView
 - (void)layoutSubviews {
-    if (DYYYGetBool(@"DYYYHideBottomRelated")) {
-        self.hidden = YES;
-        return;
-    }
     %orig;
+    if (DYYYGetBool(@"DYYYHideBottomRelated")) {
+        [self removeFromSuperview];
+    }
 }
 %end
 
@@ -3084,8 +3130,7 @@ static AWEIMReusableCommonCell *currentCell;
 
     if ([accessibilityLabel isEqualToString:@"拍照搜同款"] || [accessibilityLabel isEqualToString:@"扫一扫"]) {
         if (DYYYGetBool(@"DYYYHideScancode")) {
-            self.hidden = YES;
-            return;
+            [self removeFromSuperview];
         }
     }
 
@@ -3094,7 +3139,7 @@ static AWEIMReusableCommonCell *currentCell;
             UIView *parent = self.superview;
             // 父视图是AWEBaseElementView(排除用户主页返回按钮) 按钮类不是AWENoxusHighlightButton(排除横屏返回按钮)
             if ([parent isKindOfClass:%c(AWEBaseElementView)] && ![self isKindOfClass:%c(AWENoxusHighlightButton)]) {
-                self.hidden = YES;
+                [self removeFromSuperview];
             }
             return;
         }
@@ -3109,7 +3154,7 @@ static AWEIMReusableCommonCell *currentCell;
     %orig;
 
     if (DYYYGetBool(@"DYYYHideReply")) {
-        self.view.hidden = YES;
+        [self.view removeFromSuperview];
         return;
     }
 }
@@ -3173,7 +3218,6 @@ static AWEIMReusableCommonCell *currentCell;
         if (DYYYGetBool(@"DYYYHideFollowPromptView")) {
             self.userInteractionEnabled = NO;
             [self removeFromSuperview];
-            return;
         }
     }
 }
@@ -3414,12 +3458,10 @@ static AWEIMReusableCommonCell *currentCell;
 %hook AWETemplatePlayletView
 
 - (void)layoutSubviews {
-
-    if (DYYYGetBool(@"DYYYHideTemplatePlaylet")) {
-        self.hidden = YES;
-        return;
-    }
     %orig;
+    if (DYYYGetBool(@"DYYYHideTemplatePlaylet")) {
+        [self removeFromSuperview];
+    }
 }
 %end
 
@@ -3514,21 +3556,11 @@ static AWEIMReusableCommonCell *currentCell;
 %end
 
 // 隐藏下面底部热点框
-%hook AWENewHotSpotBottomBarView
-- (void)layoutSubviews {
-    if (DYYYGetBool(@"DYYYHideHotspot")) {
-        self.hidden = YES;
-        return;
-    }
-    %orig;
-}
-%end
 
 %hook AWETemplateHotspotView
 
 - (void)layoutSubviews {
     %orig;
-
     if (DYYYGetBool(@"DYYYHideHotspot")) {
         [self removeFromSuperview];
         return;
@@ -3716,8 +3748,7 @@ static AWEIMReusableCommonCell *currentCell;
     %orig;
     if (DYYYGetBool(@"DYYYHideRecommendTips")) {
         if (self.accessibilityLabel) {
-            self.hidden = YES;
-            return;
+            [self removeFromSuperview];
         }
     }
 }
@@ -4339,7 +4370,7 @@ static AWEIMReusableCommonCell *currentCell;
     BOOL skipHotSpot = DYYYGetBool(@"DYYYSkipHotSpot");
     BOOL filterHDR = DYYYGetBool(@"DYYYFilterFeedHDR");
 
-    BOOL shouldFilterAds = noAds && (self.hotSpotLynxCardModel || self.isAds);
+    BOOL shouldFilterAds = noAds && (self.isAds);
     BOOL shouldFilterHotSpot = skipHotSpot && self.hotSpotLynxCardModel;
     BOOL shouldFilterRecLive = skipLive && (self.cellRoom != nil);
     BOOL shouldFilterHDR = NO;
@@ -4471,19 +4502,13 @@ static AWEIMReusableCommonCell *currentCell;
 }
 
 - (bool)preventDownload {
-    if (DYYYGetBool(@"DYYYNoAds")) {
-        return NO;
-    } else {
-        return %orig;
-    }
+    return NO;
 }
 
 - (void)setAdLinkType:(long long)arg1 {
     if (DYYYGetBool(@"DYYYNoAds")) {
         arg1 = 0;
-    } else {
     }
-
     %orig;
 }
 
@@ -5070,36 +5095,250 @@ static AWEIMReusableCommonCell *currentCell;
 
 // 底栏高度
 static CGFloat tabHeight = 0;
+static CGFloat originalTabHeight = 0;
 
-static CGFloat customTabBarHeight() {
-    NSString *value = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYTabBarHeight"];
-    if (value.length > 0) {
-        CGFloat h = [value floatValue];
-        return h > 0 ? h : 0;
+%hook AWENormalModeTabBar
+
+- (void)layoutSubviews {
+    %orig;
+
+    if (originalTabHeight == 0 && self.frame.size.height > 30) {
+        originalTabHeight = self.frame.size.height;
     }
-    return 0;
+
+    CGFloat customHeight = DYYYGetFloat(@"DYYYTabBarHeight");
+    if (customHeight > 0) {
+        tabHeight = customHeight;
+    } else if (originalTabHeight > 0) {
+        tabHeight = originalTabHeight;
+    } else {
+        tabHeight = self.frame.size.height;
+    }
+
+    if (tabHeight <= 0)
+        return;
+
+    if ([self respondsToSelector:@selector(setDesiredHeight:)]) {
+        ((void (*)(id, SEL, double))objc_msgSend)(self, @selector(setDesiredHeight:), tabHeight);
+    }
+
+    if (fabs(self.frame.size.height - tabHeight) > 0.1) {
+        CGRect frame = self.frame;
+        frame.size.height = tabHeight;
+        if (self.superview) {
+            frame.origin.y = self.superview.bounds.size.height - tabHeight;
+        }
+        self.frame = frame;
+    }
+
+    BOOL hideShop = DYYYGetBool(@"DYYYHideShopButton");
+    BOOL hideMsg = DYYYGetBool(@"DYYYHideMessageButton");
+    BOOL hideFri = DYYYGetBool(@"DYYYHideFriendsButton");
+    BOOL hideMe = DYYYGetBool(@"DYYYHideMyButton");
+
+    NSMutableArray *visibleButtons = [NSMutableArray array];
+    NSMutableArray *buttonsToRemove = [NSMutableArray array];
+    BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    UIView *ipadContainerView = nil;
+
+    Class generalButtonClass = %c(AWENormalModeTabBarGeneralButton);
+    Class plusButtonClass = %c(AWENormalModeTabBarGeneralPlusButton);
+    Class tabBarButtonClass = %c(UITabBarButton);
+
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:generalButtonClass] || [subview isKindOfClass:plusButtonClass]) {
+            NSString *label = subview.accessibilityLabel;
+            BOOL shouldHide = NO;
+            if ([label isEqualToString:@"商城"])
+                shouldHide = hideShop;
+            else if ([label containsString:@"消息"])
+                shouldHide = hideMsg;
+            else if ([label containsString:@"朋友"])
+                shouldHide = hideFri;
+            else if ([label containsString:@"我"])
+                shouldHide = hideMe;
+
+            if (shouldHide) {
+                [buttonsToRemove addObject:subview];
+            } else {
+                [visibleButtons addObject:subview];
+            }
+        } else if ([subview isKindOfClass:tabBarButtonClass]) {
+            [buttonsToRemove addObject:subview];
+        } else if (isPad && ipadContainerView == nil && [subview class] == [UIView class] && fabs(subview.frame.size.width - self.bounds.size.width) > 0.1) {
+            ipadContainerView = subview;
+        }
+    }
+
+    for (UIView *button in buttonsToRemove) {
+        button.userInteractionEnabled = NO;
+        [button removeFromSuperview];
+    }
+
+    [visibleButtons sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
+      return [@(a.frame.origin.x) compare:@(b.frame.origin.x)];
+    }];
+
+    if (isPad) {
+        // iPad端布局逻辑
+        CGFloat containerWidth = ipadContainerView ? ipadContainerView.bounds.size.width : self.bounds.size.width;
+        CGFloat offsetX = ipadContainerView ? ipadContainerView.frame.origin.x : 0;
+        CGFloat buttonWidth = (visibleButtons.count > 0) ? (containerWidth / visibleButtons.count) : 0;
+
+        // 在目标容器内均匀分布按钮
+        for (NSInteger i = 0; i < visibleButtons.count; i++) {
+            UIView *button = visibleButtons[i];
+            button.frame = CGRectMake(offsetX + (i * buttonWidth), button.frame.origin.y, buttonWidth, button.frame.size.height);
+        }
+    } else {
+        // iPhone端布局逻辑
+        CGFloat totalWidth = self.bounds.size.width;
+        CGFloat buttonWidth = (visibleButtons.count > 0) ? (totalWidth / visibleButtons.count) : 0;
+
+        for (NSInteger i = 0; i < visibleButtons.count; i++) {
+            UIView *button = visibleButtons[i];
+            button.frame = CGRectMake(i * buttonWidth, button.frame.origin.y, buttonWidth, button.frame.size.height);
+        }
+    }
 }
 
+- (void)setHidden:(BOOL)hidden {
+    %orig(hidden);
+
+    // 禁用首页刷新功能
+    if (DYYYGetBool(@"DYYYDisableHomeRefresh")) {
+        Class generalButtonClass = %c(AWENormalModeTabBarGeneralButton);
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:generalButtonClass]) {
+                AWENormalModeTabBarGeneralButton *button = (AWENormalModeTabBarGeneralButton *)subview;
+                if ([button.accessibilityLabel isEqualToString:@"首页"]) {
+                    // status == 2 表示选中状态
+                    button.userInteractionEnabled = (button.status != 2);
+                }
+            }
+        }
+    }
+
+    // 背景和分隔线处理
+    BOOL hideBottomBg = DYYYGetBool(@"DYYYHideBottomBg");
+    BOOL enableFullScreen = DYYYGetBool(@"DYYYEnableFullScreen");
+
+    UIView *backgroundView = nil;
+    for (UIView *subview in self.subviews) {
+        if ([subview class] == [UIView class]) {
+            BOOL hasImageView = NO;
+            for (UIView *childView in subview.subviews) {
+                if ([childView isKindOfClass:[UIImageView class]]) {
+                    hasImageView = YES;
+                    break;
+                }
+            }
+            if (hasImageView) {
+                backgroundView = subview;
+                break;
+            }
+        }
+    }
+
+    if (backgroundView) {
+        if (hideBottomBg) {
+            backgroundView.hidden = YES;
+        } else if (enableFullScreen) {
+            BOOL isHomeSelected = NO;
+            BOOL isFriendsSelected = NO;
+            Class generalButtonClass = %c(AWENormalModeTabBarGeneralButton);
+
+            for (UIView *subview in self.subviews) {
+                if ([subview isKindOfClass:generalButtonClass]) {
+                    AWENormalModeTabBarGeneralButton *button = (AWENormalModeTabBarGeneralButton *)subview;
+                    if (button.status == 2) {
+                        if ([button.accessibilityLabel isEqualToString:@"首页"])
+                            isHomeSelected = YES;
+                        else if ([button.accessibilityLabel containsString:@"朋友"])
+                            isFriendsSelected = YES;
+                    }
+                }
+            }
+
+            BOOL hideFriendsButton = DYYYGetBool(@"DYYYHideFriendsButton");
+            BOOL shouldShowBackground = isHomeSelected || (isFriendsSelected && !hideFriendsButton);
+            backgroundView.hidden = shouldShowBackground;
+        }
+    }
+
+    if (enableFullScreen) {
+        for (UIView *subview in self.subviews) {
+            if (subview.frame.size.height > 0 && subview.frame.size.height <= 0.5 && subview.frame.size.width > 300) {
+                subview.hidden = YES;
+            }
+        }
+    }
+}
+
+%end
+
+%hook AWEConcernCellLastView
+- (void)layoutSubviews {
+    %orig;
+
+    if (DYYYGetBool(@"DYYYEnableFullScreen") && tabHeight > 0) {
+        for (UIView *subview in self.subviews) {
+            CGRect frame = subview.frame;
+            frame.origin.y -= tabHeight;
+            subview.frame = frame;
+        }
+    }
+}
+%end
+
 %hook AWECommentContainerViewController
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    dyyyCommentViewVisible = YES;
+    updateSpeedButtonVisibility();
+    updateClearButtonVisibility();
+    NSString *transparentValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYTopBarTransparent"];
+    if (transparentValue && transparentValue.length > 0) {
+        CGFloat alphaValue = [transparentValue floatValue];
+        if (alphaValue >= 0.0 && alphaValue <= 1.0) {
+
+            UIView *parentView = self.view.superview;
+            if (parentView) {
+                for (UIView *subview in parentView.subviews) {
+                    if ([subview.accessibilityLabel isEqualToString:@"搜索"]) {
+                        CGFloat finalAlpha = (alphaValue < 0.011) ? 0.011 : alphaValue;
+                        subview.alpha = finalAlpha;
+                    }
+                }
+            }
+        }
+    }
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    dyyyCommentViewVisible = NO;
+    updateSpeedButtonVisibility();
+    updateClearButtonVisibility();
+}
 
 - (void)viewDidLayoutSubviews {
     %orig;
 
-    BOOL enableCommentBlur = DYYYGetBool(@"DYYYEnableCommentBlur");
-    if (!enableCommentBlur)
+    if (!DYYYGetBool(@"DYYYEnableCommentBlur"))
         return;
 
     Class containerViewClass = NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView");
-    UIView *containerView = [DYYYUtils findSubviewOfClass:containerViewClass inView:self.view];
-    if (containerView) {
+    NSArray<UIView *> *containerViews = [DYYYUtils findAllSubviewsOfClass:containerViewClass inView:self.view];
+    for (UIView *containerView in containerViews) {
         for (UIView *subview in containerView.subviews) {
-            if (subview.alpha > 0.1f && subview.backgroundColor && CGColorGetAlpha(subview.backgroundColor.CGColor) > 0.1f) {
+            if (subview.hidden == NO && subview.backgroundColor && CGColorGetAlpha(subview.backgroundColor.CGColor) == 1) {
                 float userTransparency = [[[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYCommentBlurTransparent"] floatValue];
                 if (userTransparency <= 0 || userTransparency > 1) {
                     userTransparency = 0.8;
                 }
                 [DYYYUtils applyBlurEffectToView:subview transparency:userTransparency blurViewTag:999];
-                [DYYYUtils clearBackgroundRecursivelyInView:subview];
             }
         }
     }
@@ -5119,7 +5358,6 @@ static CGFloat customTabBarHeight() {
             UIView *parentView = middleContainer.superview;
             for (UIView *innerSubview in parentView.subviews) {
                 if ([innerSubview isKindOfClass:[UIView class]]) {
-                    // NSLog(@"[innerSubview] %@", innerSubview);
                     if (innerSubview.subviews.count > 0) {
                         innerSubview.subviews[0].hidden = YES;
                     }
@@ -5132,11 +5370,9 @@ static CGFloat customTabBarHeight() {
                 }
             }
         } else {
-            for (UIView *innerSubview in middleContainer.subviews) {
-                if (innerSubview.alpha > 0.1f && innerSubview.backgroundColor && CGColorGetAlpha(innerSubview.backgroundColor.CGColor) > 0.1f) {
-                    [DYYYUtils applyBlurEffectToView:innerSubview transparency:0.2f blurViewTag:999];
-                    [DYYYUtils clearBackgroundRecursivelyInView:innerSubview];
-                    break;
+            for (UIView *subview in middleContainer.subviews) {
+                if (subview.hidden == NO && subview.backgroundColor && CGColorGetAlpha(subview.backgroundColor.CGColor) == 1) {
+                    [DYYYUtils applyBlurEffectToView:subview transparency:0.2f blurViewTag:999];
                 }
             }
         }
@@ -5145,7 +5381,89 @@ static CGFloat customTabBarHeight() {
 
 %end
 
+// 开启评论区毛玻璃后滚动区域填满底部
+%hook AWEListKitMagicCollectionView
+
+- (void)layoutSubviews {
+    %orig;
+
+    if (!DYYYGetBool(@"DYYYEnableCommentBlur")) {
+        return;
+    }
+
+    UICollectionView *collectionView = (UICollectionView *)self;
+
+    UIView *superview = collectionView.superview;
+    CGRect targetFrame = superview.bounds;
+    if (superview == nil || CGSizeEqualToSize(targetFrame.size, CGSizeZero) || CGRectEqualToRect(collectionView.frame, targetFrame)) {
+        return;
+    }
+
+    collectionView.frame = targetFrame;
+}
+
+%end
+
 %hook UIView
+- (id)initWithFrame:(CGRect)frame {
+    UIView *view = %orig;
+    if (hideButton && hideButton.isElementsHidden) {
+        for (NSString *className in targetClassNames) {
+            if ([view isKindOfClass:NSClassFromString(className)]) {
+                if ([view isKindOfClass:NSClassFromString(@"AWELeftSideBarEntranceView")]) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                      UIViewController *controller = [hideButton findViewController:view];
+                      if ([controller isKindOfClass:NSClassFromString(@"AWEFeedContainerViewController")]) {
+                          view.alpha = 0.0;
+                      }
+                    });
+                    break;
+                }
+                view.alpha = 0.0;
+                break;
+            }
+        }
+    }
+    return view;
+}
+
+- (void)didAddSubview:(UIView *)subview {
+    %orig;
+    if (hideButton && hideButton.isElementsHidden) {
+        for (NSString *className in targetClassNames) {
+            if ([subview isKindOfClass:NSClassFromString(className)]) {
+                if ([subview isKindOfClass:NSClassFromString(@"AWELeftSideBarEntranceView")]) {
+                    UIViewController *controller = [hideButton findViewController:subview];
+                    if ([controller isKindOfClass:NSClassFromString(@"AWEFeedContainerViewController")]) {
+                        subview.alpha = 0.0;
+                    }
+                    break;
+                }
+                subview.alpha = 0.0;
+                break;
+            }
+        }
+    }
+}
+
+- (void)willMoveToSuperview:(UIView *)newSuperview {
+    %orig;
+    if (hideButton && hideButton.isElementsHidden) {
+        for (NSString *className in targetClassNames) {
+            if ([self isKindOfClass:NSClassFromString(className)]) {
+                if ([self isKindOfClass:NSClassFromString(@"AWELeftSideBarEntranceView")]) {
+                    UIViewController *controller = [hideButton findViewController:self];
+                    if ([controller isKindOfClass:NSClassFromString(@"AWEFeedContainerViewController")]) {
+                        self.alpha = 0.0;
+                    }
+                    break;
+                }
+                self.alpha = 0.0;
+                break;
+            }
+        }
+    }
+}
 - (void)layoutSubviews {
     %orig;
 
@@ -5233,6 +5551,47 @@ static CGFloat customTabBarHeight() {
 %hook AWEPlayInteractionViewController
 - (void)viewDidLayoutSubviews {
     %orig;
+    if (isFloatSpeedButtonEnabled) {
+        BOOL hasRightStack = NO;
+        Class stackClass = NSClassFromString(@"AWEElementStackView");
+        for (UIView *sub in self.view.subviews) {
+            if ([sub isKindOfClass:stackClass] && ([sub.accessibilityLabel isEqualToString:@"right"] || [DYYYUtils containsSubviewOfClass:NSClassFromString(@"AWEPlayInteractionUserAvatarView")
+                                                                                                                                   inView:self.view])) {
+                hasRightStack = YES;
+                break;
+            }
+        }
+        if (hasRightStack) {
+            if (speedButton == nil) {
+                speedButtonSize = [[NSUserDefaults standardUserDefaults] floatForKey:@"DYYYSpeedButtonSize"] ?: 32.0;
+                CGRect screenBounds = [UIScreen mainScreen].bounds;
+                CGRect initialFrame = CGRectMake((screenBounds.size.width - speedButtonSize) / 2, (screenBounds.size.height - speedButtonSize) / 2, speedButtonSize, speedButtonSize);
+                speedButton = [[FloatingSpeedButton alloc] initWithFrame:initialFrame];
+                speedButton.interactionController = self;
+                showSpeedX = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYSpeedButtonShowX"];
+                updateSpeedButtonUI();
+            } else {
+                [speedButton resetButtonState];
+                if (speedButton.interactionController == nil || speedButton.interactionController != self) {
+                    speedButton.interactionController = self;
+                }
+                if (speedButton.frame.size.width != speedButtonSize) {
+                    CGPoint center = speedButton.center;
+                    CGRect newFrame = CGRectMake(0, 0, speedButtonSize, speedButtonSize);
+                    speedButton.frame = newFrame;
+                    speedButton.center = center;
+                    speedButton.layer.cornerRadius = speedButtonSize / 2;
+                }
+            }
+            dyyyInteractionViewVisible = YES;
+            UIWindow *keyWindow = [UIApplication sharedApplication].keyWindow;
+            if (keyWindow && ![speedButton isDescendantOfView:keyWindow]) {
+                [keyWindow addSubview:speedButton];
+                [speedButton loadSavedPosition];
+                [speedButton resetFadeTimer];
+            }
+        }
+    }
 
     if (!DYYYGetBool(@"DYYYEnableFullScreen")) {
         return;
@@ -5279,6 +5638,169 @@ static CGFloat customTabBarHeight() {
     }
 }
 
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    BOOL hasRightStack = NO;
+    Class stackClass = NSClassFromString(@"AWEElementStackView");
+    for (UIView *sub in self.view.subviews) {
+        if ([sub isKindOfClass:stackClass] && ([sub.accessibilityLabel isEqualToString:@"right"] || [DYYYUtils containsSubviewOfClass:NSClassFromString(@"AWEPlayInteractionUserAvatarView")
+                                                                                                                               inView:self.view])) {
+            hasRightStack = YES;
+            break;
+        }
+    }
+    if (hasRightStack) {
+        dyyyInteractionViewVisible = NO;
+        dyyyCommentViewVisible = self.isCommentVCShowing;
+        updateSpeedButtonVisibility();
+        updateClearButtonVisibility();
+    }
+}
+
+%new
+- (UIViewController *)firstAvailableUIViewController {
+    UIResponder *responder = [self.view nextResponder];
+    while (responder != nil) {
+        if ([responder isKindOfClass:[UIViewController class]]) {
+            return (UIViewController *)responder;
+        }
+        responder = [responder nextResponder];
+    }
+    return nil;
+}
+
+%new
+- (void)speedButtonTapped:(UIButton *)sender {
+    [(FloatingSpeedButton *)sender resetFadeTimer];
+    NSArray *speeds = getSpeedOptions();
+    if (speeds.count == 0)
+        return;
+
+    NSInteger currentIndex = getCurrentSpeedIndex();
+    NSInteger newIndex = (currentIndex + 1) % speeds.count;
+
+    setCurrentSpeedIndex(newIndex);
+
+    float newSpeed = [speeds[newIndex] floatValue];
+
+    NSString *formattedSpeed;
+    if (fmodf(newSpeed, 1.0) == 0) {
+        formattedSpeed = [NSString stringWithFormat:@"%.0f", newSpeed];
+    } else if (fmodf(newSpeed * 10, 1.0) == 0) {
+        formattedSpeed = [NSString stringWithFormat:@"%.1f", newSpeed];
+    } else {
+        formattedSpeed = [NSString stringWithFormat:@"%.2f", newSpeed];
+    }
+
+    if (showSpeedX) {
+        formattedSpeed = [formattedSpeed stringByAppendingString:@"x"];
+    }
+
+    [sender setTitle:formattedSpeed forState:UIControlStateNormal];
+
+    [UIView animateWithDuration:0.1
+        delay:0
+        options:UIViewAnimationOptionCurveEaseOut
+        animations:^{
+          sender.transform = CGAffineTransformMakeScale(1.1, 1.1);
+        }
+        completion:^(BOOL finished) {
+          [UIView animateWithDuration:0.1
+                                delay:0
+                              options:UIViewAnimationOptionCurveEaseIn
+                           animations:^{
+                             sender.transform = CGAffineTransformIdentity;
+                           }
+                           completion:nil];
+        }];
+
+    BOOL speedApplied = NO;
+
+    UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+    while (rootVC.presentedViewController) {
+        rootVC = rootVC.presentedViewController;
+    }
+
+    NSArray *viewControllers = findViewControllersInHierarchy(rootVC);
+
+    for (UIViewController *vc in viewControllers) {
+        if ([vc isKindOfClass:%c(AWEAwemePlayVideoViewController)]) {
+            [(AWEAwemePlayVideoViewController *)vc setVideoControllerPlaybackRate:newSpeed];
+            speedApplied = YES;
+        }
+        if ([vc isKindOfClass:%c(AWEDPlayerFeedPlayerViewController)]) {
+            [(AWEDPlayerFeedPlayerViewController *)vc setVideoControllerPlaybackRate:newSpeed];
+            speedApplied = YES;
+        }
+    }
+
+    if (!speedApplied) {
+        [DYYYUtils showToast:@"无法找到视频控制器"];
+    }
+}
+
+%new
+- (void)buttonTouchDown:(UIButton *)sender {
+    [UIView animateWithDuration:0.1
+                     animations:^{
+                       sender.alpha = 0.7;
+                       sender.transform = CGAffineTransformMakeScale(0.95, 0.95);
+                     }];
+}
+
+%new
+- (void)buttonTouchUp:(UIButton *)sender {
+    [UIView animateWithDuration:0.1
+                     animations:^{
+                       sender.alpha = 1.0;
+                       sender.transform = CGAffineTransformIdentity;
+                     }];
+}
+
+%end
+
+%hook AWEAwemePlayVideoViewController
+
+- (void)setIsAutoPlay:(BOOL)arg0 {
+    %orig(arg0);
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYUserAgreementAccepted"]) {
+          float defaultSpeed = [[NSUserDefaults standardUserDefaults] floatForKey:@"DYYYDefaultSpeed"];
+          if (defaultSpeed > 0 && defaultSpeed != 1) {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                [self setVideoControllerPlaybackRate:defaultSpeed];
+              });
+          }
+      }
+      float speed = getCurrentSpeed();
+      if (speed != 1.0) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [self adjustPlaybackSpeed:speed];
+          });
+      }
+    });
+}
+
+- (void)prepareForDisplay {
+    %orig;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      BOOL autoRestoreSpeed = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAutoRestoreSpeed"];
+      if (autoRestoreSpeed) {
+          setCurrentSpeedIndex(0);
+      }
+      float speed = getCurrentSpeed();
+      if (speed != 1.0) {
+          [self adjustPlaybackSpeed:speed];
+      }
+      updateSpeedButtonUI();
+    });
+}
+
+%new
+- (void)adjustPlaybackSpeed:(float)speed {
+    [self setVideoControllerPlaybackRate:speed];
+}
+
 %end
 
 %hook AWEDPlayerFeedPlayerViewController
@@ -5290,13 +5812,12 @@ static CGFloat customTabBarHeight() {
         if (contentView && contentView.superview) {
             CGRect frame = contentView.frame;
             CGFloat parentHeight = contentView.superview.frame.size.height;
-            CGFloat h = customTabBarHeight();
-            if (h > 0) {
-                if (frame.size.height == parentHeight - h) {
+            if (tabHeight > 0) {
+                if (frame.size.height == parentHeight - tabHeight) {
                     frame.size.height = parentHeight;
                     contentView.frame = frame;
-                } else if (frame.size.height == parentHeight - (h * 2)) {
-                    frame.size.height = parentHeight - h;
+                } else if (frame.size.height == parentHeight - (tabHeight * 2)) {
+                    frame.size.height = parentHeight - tabHeight;
                     contentView.frame = frame;
                 }
             } else {
@@ -5312,33 +5833,228 @@ static CGFloat customTabBarHeight() {
     }
 }
 
+- (void)setIsAutoPlay:(BOOL)arg0 {
+    %orig(arg0);
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYUserAgreementAccepted"]) {
+          float defaultSpeed = [[NSUserDefaults standardUserDefaults] floatForKey:@"DYYYDefaultSpeed"];
+          if (defaultSpeed > 0 && defaultSpeed != 1) {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                [self setVideoControllerPlaybackRate:defaultSpeed];
+              });
+          }
+      }
+      float speed = getCurrentSpeed();
+      if (speed != 1.0) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [self adjustPlaybackSpeed:speed];
+          });
+      }
+    });
+}
+
+- (void)prepareForDisplay {
+    %orig;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      BOOL autoRestoreSpeed = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAutoRestoreSpeed"];
+      if (autoRestoreSpeed) {
+          setCurrentSpeedIndex(0);
+      }
+      float speed = getCurrentSpeed();
+      if (speed != 1.0) {
+          [self adjustPlaybackSpeed:speed];
+      }
+      updateSpeedButtonUI();
+    });
+}
+
+%new
+- (void)adjustPlaybackSpeed:(float)speed {
+    [self setVideoControllerPlaybackRate:speed];
+}
+
 %end
 
 %hook AWEFeedTableView
 - (void)layoutSubviews {
     %orig;
-    CGFloat h = customTabBarHeight();
-    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
-        if (self.superview) {
-            CGFloat currentDifference = self.superview.frame.size.height - self.frame.size.height;
-            if (currentDifference > 0 && tabHeight == 0) {
-                tabHeight = currentDifference;
-            }
-        }
 
+    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
         CGRect frame = self.frame;
         frame.size.height = self.superview.frame.size.height;
         self.frame = frame;
-    } else if (!DYYYGetBool(@"DYYYEnableFullScreen") && h > 0) {
+    } else if (tabHeight > 0) {
+        UIWindow *window = [UIApplication sharedApplication].keyWindow;
+        if (window && window.safeAreaInsets.bottom == 0)
+            return;
+
         CGRect frame = self.frame;
-        frame.size.height = self.superview.frame.size.height - h;
+        frame.size.height = self.superview.frame.size.height - tabHeight;
         self.frame = frame;
     }
 }
 %end
 
+%hook AWEFeedTableViewCell
+- (void)prepareForReuse {
+    if (hideButton && hideButton.isElementsHidden) {
+        [hideButton hideUIElements];
+    }
+    %orig;
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (hideButton && hideButton.isElementsHidden) {
+        [hideButton hideUIElements];
+    }
+}
+%end
+
+%hook AWEFeedViewCell
+- (void)layoutSubviews {
+    if (hideButton && hideButton.isElementsHidden) {
+        [hideButton hideUIElements];
+    }
+    %orig;
+}
+
+- (void)setModel:(id)model {
+    if (hideButton && hideButton.isElementsHidden) {
+        [hideButton hideUIElements];
+    }
+    %orig;
+}
+%end
+
+%hook UIViewController
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    isAppInTransition = YES;
+    if (hideButton && hideButton.isElementsHidden) {
+        [hideButton hideUIElements];
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+      isAppInTransition = NO;
+    });
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    %orig;
+    isAppInTransition = YES;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+      isAppInTransition = NO;
+    });
+}
+%end
+
+%hook AFDPureModePageContainerViewController
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    isPureViewVisible = YES;
+    updateClearButtonVisibility();
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    isPureViewVisible = NO;
+    updateClearButtonVisibility();
+}
+%end
+
+%hook AWEFeedContainerViewController
+- (void)aweme:(id)arg1 currentIndexWillChange:(NSInteger)arg2 {
+    if (hideButton && hideButton.isElementsHidden) {
+        [hideButton hideUIElements];
+    }
+    %orig;
+}
+
+- (void)aweme:(id)arg1 currentIndexDidChange:(NSInteger)arg2 {
+    if (hideButton && hideButton.isElementsHidden) {
+        [hideButton hideUIElements];
+    }
+    %orig;
+}
+
+- (void)viewWillLayoutSubviews {
+    %orig;
+    if (hideButton && hideButton.isElementsHidden) {
+        [hideButton hideUIElements];
+    }
+}
+%end
+
+%hook AppDelegate
+- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    BOOL result = %orig;
+    initTargetClassNames();
+
+    BOOL isEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFloatClearButton"];
+    if (isEnabled) {
+        if (hideButton) {
+            [hideButton removeFromSuperview];
+            hideButton = nil;
+        }
+
+        CGFloat buttonSize = [[NSUserDefaults standardUserDefaults] floatForKey:@"DYYYEnableFloatClearButtonSize"] ?: 40.0;
+        hideButton = [[HideUIButton alloc] initWithFrame:CGRectMake(0, 0, buttonSize, buttonSize)];
+        hideButton.alpha = 0.5;
+
+        NSString *savedPositionString = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYHideUIButtonPosition"];
+        if (savedPositionString) {
+            hideButton.center = CGPointFromString(savedPositionString);
+        } else {
+            CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+            CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+            hideButton.center = CGPointMake(screenWidth - buttonSize / 2 - 5, screenHeight / 2);
+        }
+
+        hideButton.hidden = NO;
+        [getKeyWindow() addSubview:hideButton];
+
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIWindowDidBecomeKeyNotification
+                                                          object:nil
+                                                           queue:[NSOperationQueue mainQueue]
+                                                      usingBlock:^(NSNotification *_Nonnull notification) {
+                                                        updateClearButtonVisibility();
+                                                      }];
+
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
+                                                          object:nil
+                                                           queue:[NSOperationQueue mainQueue]
+                                                      usingBlock:^(NSNotification *_Nonnull notification) {
+                                                        isAppActive = YES;
+                                                        updateClearButtonVisibility();
+                                                      }];
+
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillResignActiveNotification
+                                                          object:nil
+                                                           queue:[NSOperationQueue mainQueue]
+                                                      usingBlock:^(NSNotification *_Nonnull notification) {
+                                                        isAppActive = NO;
+                                                        updateClearButtonVisibility();
+                                                      }];
+    }
+
+    return result;
+}
+%end
+
 %hook AWEElementStackView
 static CGFloat currentScale = 1.0;
+- (void)setAlpha:(CGFloat)alpha {
+    %orig;
+    if (speedButton && isFloatSpeedButtonEnabled) {
+        if (alpha == 0) {
+            dyyyCommentViewVisible = YES;
+        } else if (alpha == 1) {
+            dyyyCommentViewVisible = NO;
+        }
+        updateSpeedButtonVisibility();
+        updateClearButtonVisibility();
+    }
+}
 - (void)layoutSubviews {
     %orig;
     UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
@@ -5434,6 +6150,7 @@ static CGFloat currentScale = 1.0;
 %hook AWELiveNewPreStreamViewController
 static char kDyLastAppliedScaleKey;
 static char kDyLastAppliedShiftKey;
+static char kDyLastAppliedTabHeightKey;
 static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementStackView"), NSClassFromString(@"IESLiveStackView") ];
 - (void)viewDidLayoutSubviews {
     %orig;
@@ -5459,11 +6176,14 @@ static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementSta
     BOOL shouldShiftUp = DYYYGetBool(@"DYYYEnableFullScreen");
     BOOL lastAppliedShift = [objc_getAssociatedObject(self, &kDyLastAppliedShiftKey) boolValue];
 
-    NSString *vcScaleValue = DYYYGetString(@"DYYYNicknameScale");
-    CGFloat targetScale = (vcScaleValue.length > 0) ? MAX(0.01, [vcScaleValue floatValue]) : 1.0;
+    CGFloat vcScaleValue = DYYYGetFloat(@"DYYYNicknameScale");
+    CGFloat targetScale = (vcScaleValue != 0.0) ? MAX(0.01, vcScaleValue) : 1.0;
     CGFloat lastAppliedScale = [objc_getAssociatedObject(self, &kDyLastAppliedScaleKey) floatValue] ?: 1.0;
 
-    if (fabs(targetScale - lastAppliedScale) < 0.01 && shouldShiftUp == lastAppliedShift) {
+    CGFloat targetHeight = tabHeight;
+    CGFloat lastAppliedTabHeight = [objc_getAssociatedObject(self, &kDyLastAppliedTabHeightKey) floatValue];
+
+    if (fabs(targetScale - lastAppliedScale) < 0.01 && fabs(targetHeight - lastAppliedTabHeight) < 0.1 && shouldShiftUp == lastAppliedShift) {
         return;
     }
 
@@ -5485,7 +6205,7 @@ static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementSta
 
         if (shouldShiftUp) {
             const CGFloat divisor = CGAffineTransformIsIdentity(finalTransform) ? 1.0 : targetScale;
-            finalTransform = CGAffineTransformTranslate(finalTransform, 0, -tabHeight / divisor);
+            finalTransform = CGAffineTransformTranslate(finalTransform, 0, -targetHeight / divisor);
         }
 
         targetView.transform = finalTransform;
@@ -5493,6 +6213,7 @@ static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementSta
 
     objc_setAssociatedObject(self, &kDyLastAppliedScaleKey, @(targetScale), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kDyLastAppliedShiftKey, @(shouldShiftUp), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kDyLastAppliedTabHeightKey, @(targetHeight), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 %end
 
@@ -5603,207 +6324,6 @@ static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementSta
     if (DYYYGetBool(@"DYYYHideEntry")) {
         self.alpha = 0;
         return;
-    }
-}
-
-%end
-
-%hook AWENormalModeTabBar
-
-- (void)layoutSubviews {
-    %orig;
-
-    CGFloat h = customTabBarHeight();
-    if (h > 0) {
-        if ([self respondsToSelector:@selector(setDesiredHeight:)]) {
-            ((void (*)(id, SEL, double))objc_msgSend)(self, @selector(setDesiredHeight:), h);
-        }
-        CGRect frame = self.frame;
-        if (fabs(frame.size.height - h) > 0.5) {
-            frame.size.height = h;
-            if (self.superview) {
-                frame.origin.y = self.superview.bounds.size.height - h;
-            }
-            self.frame = frame;
-        }
-    }
-
-    BOOL hideShop = DYYYGetBool(@"DYYYHideShopButton");
-    BOOL hideMsg = DYYYGetBool(@"DYYYHideMessageButton");
-    BOOL hideFri = DYYYGetBool(@"DYYYHideFriendsButton");
-    BOOL hideMe = DYYYGetBool(@"DYYYHideMyButton");
-
-    NSMutableArray *visibleButtons = [NSMutableArray array];
-    Class generalButtonClass = %c(AWENormalModeTabBarGeneralButton);
-    Class plusButtonClass = %c(AWENormalModeTabBarGeneralPlusButton);
-    Class tabBarButtonClass = %c(UITabBarButton);
-
-    for (UIView *subview in self.subviews) {
-        if (![subview isKindOfClass:generalButtonClass] && ![subview isKindOfClass:plusButtonClass])
-            continue;
-
-        NSString *label = subview.accessibilityLabel;
-        BOOL shouldHide = NO;
-
-        if ([label isEqualToString:@"商城"]) {
-            shouldHide = hideShop;
-        } else if ([label containsString:@"消息"]) {
-            shouldHide = hideMsg;
-        } else if ([label containsString:@"朋友"]) {
-            shouldHide = hideFri;
-        } else if ([label containsString:@"我"]) {
-            shouldHide = hideMe;
-        }
-
-        if (!shouldHide) {
-            [visibleButtons addObject:subview];
-        } else {
-            subview.userInteractionEnabled = NO;
-            [subview removeFromSuperview];
-        }
-    }
-
-    for (UIView *subview in self.subviews) {
-        if (![subview isKindOfClass:tabBarButtonClass])
-            continue;
-        subview.userInteractionEnabled = NO;
-        [subview removeFromSuperview];
-    }
-
-    [visibleButtons sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
-      return [@(a.frame.origin.x) compare:@(b.frame.origin.x)];
-    }];
-
-    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-        // iPad端布局逻辑
-        UIView *targetView = nil;
-        CGFloat containerWidth = self.bounds.size.width;
-        CGFloat offsetX = 0;
-
-        // 查找目标容器视图
-        for (UIView *subview in self.subviews) {
-            if ([subview class] == [UIView class] && fabs(subview.frame.size.width - self.bounds.size.width) > 0.1) {
-                targetView = subview;
-                containerWidth = subview.frame.size.width;
-                offsetX = subview.frame.origin.x;
-                break;
-            }
-        }
-
-        // 在目标容器内均匀分布按钮
-        CGFloat buttonWidth = containerWidth / visibleButtons.count;
-        for (NSInteger i = 0; i < visibleButtons.count; i++) {
-            UIView *button = visibleButtons[i];
-            button.frame = CGRectMake(offsetX + (i * buttonWidth), button.frame.origin.y, buttonWidth, button.frame.size.height);
-        }
-    } else {
-        // iPhone端布局逻辑
-        CGFloat totalWidth = self.bounds.size.width;
-        CGFloat buttonWidth = totalWidth / visibleButtons.count;
-
-        for (NSInteger i = 0; i < visibleButtons.count; i++) {
-            UIView *button = visibleButtons[i];
-            button.frame = CGRectMake(i * buttonWidth, button.frame.origin.y, buttonWidth, button.frame.size.height);
-        }
-    }
-}
-
-- (void)setHidden:(BOOL)hidden {
-    %orig(hidden);
-
-    Class generalButtonClass = %c(AWENormalModeTabBarGeneralButton);
-    BOOL disableHomeRefresh = DYYYGetBool(@"DYYYDisableHomeRefresh");
-
-    for (UIView *subview in self.subviews) {
-        if ([subview isKindOfClass:generalButtonClass]) {
-            AWENormalModeTabBarGeneralButton *button = (AWENormalModeTabBarGeneralButton *)subview;
-            if ([button.accessibilityLabel isEqualToString:@"首页"] && disableHomeRefresh) {
-                button.userInteractionEnabled = (button.status != 2);
-            }
-        }
-    }
-
-    BOOL hideBottomBg = DYYYGetBool(@"DYYYHideBottomBg");
-
-    // 如果开启了隐藏底部背景，则直接隐藏背景视图
-    if (hideBottomBg) {
-        UIView *backgroundView = nil;
-        for (UIView *subview in self.subviews) {
-            if ([subview class] == [UIView class]) {
-                BOOL hasImageView = NO;
-                for (UIView *childView in subview.subviews) {
-                    if ([childView isKindOfClass:[UIImageView class]]) {
-                        hasImageView = YES;
-                        break;
-                    }
-                }
-                if (hasImageView) {
-                    backgroundView = subview;
-                    backgroundView.hidden = YES;
-                    break;
-                }
-            }
-        }
-    } else {
-        // 仅对全屏模式处理背景显示逻辑
-        if (DYYYGetBool(@"DYYYEnableFullScreen")) {
-            UIView *backgroundView = nil;
-            BOOL hideFriendsButton = DYYYGetBool(@"DYYYHideFriendsButton");
-            BOOL isHomeSelected = NO;
-            BOOL isFriendsSelected = NO;
-
-            for (UIView *subview in self.subviews) {
-                if ([subview class] == [UIView class]) {
-                    BOOL hasImageView = NO;
-                    for (UIView *childView in subview.subviews) {
-                        if ([childView isKindOfClass:[UIImageView class]]) {
-                            hasImageView = YES;
-                            break;
-                        }
-                    }
-                    if (hasImageView) {
-                        backgroundView = subview;
-                        break;
-                    }
-                }
-            }
-
-            // 查找当前选中的按钮
-            for (UIView *subview in self.subviews) {
-                if ([subview isKindOfClass:generalButtonClass]) {
-                    AWENormalModeTabBarGeneralButton *button = (AWENormalModeTabBarGeneralButton *)subview;
-                    // status == 2 表示按钮处于选中状态
-                    if (button.status == 2) {
-                        if ([button.accessibilityLabel isEqualToString:@"首页"]) {
-                            isHomeSelected = YES;
-                        } else if ([button.accessibilityLabel containsString:@"朋友"]) {
-                            isFriendsSelected = YES;
-                        }
-                    }
-                }
-            }
-
-            // 根据当前选中的按钮决定是否显示背景
-            if (backgroundView) {
-                BOOL shouldShowBackground = isHomeSelected || (isFriendsSelected && !hideFriendsButton);
-                backgroundView.hidden = shouldShowBackground;
-            }
-        }
-    }
-
-    // 隐藏分隔线
-    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
-        for (UIView *subview in self.subviews) {
-            if (![subview isKindOfClass:[UIView class]])
-                continue;
-            if (subview.frame.size.height <= 0.5 && subview.frame.size.width > 300) {
-                subview.hidden = YES;
-                CGRect frame = subview.frame;
-                frame.size.height = 0;
-                subview.frame = frame;
-                subview.alpha = 0;
-            }
-        }
     }
 }
 
@@ -6146,50 +6666,6 @@ static NSString *const kStreamlineSidebarKey = @"DYYYHideSidebarElements";
 
 %end
 
-%hook AWESettingsTableViewController
-- (void)viewDidLoad {
-    %orig;
-
-    if (DYYYGetBool(@"DYYYHideSettingsAbout")) {
-        [self removeAboutSection];
-    }
-}
-
-%new
-- (void)removeAboutSection {
-    // 获取 viewModel 属性
-    id viewModel = [self viewModel];
-    if (!viewModel) {
-        return;
-    }
-
-    NSArray *sectionDataArray = [viewModel valueForKey:@"sectionDataArray"];
-    if (!sectionDataArray || ![sectionDataArray isKindOfClass:[NSArray class]]) {
-        return;
-    }
-
-    NSMutableArray *mutableSections = [sectionDataArray mutableCopy];
-
-    // 遍历查找"关于"部分
-    for (id sectionModel in [sectionDataArray copy]) {
-
-        Class sectionModelClass = NSClassFromString(@"AWESettingSectionModel");
-        if (!sectionModelClass || ![sectionModel isKindOfClass:sectionModelClass]) {
-            continue;
-        }
-
-        // 获取 sectionHeaderTitle
-        NSString *sectionHeaderTitle = [sectionModel valueForKey:@"sectionHeaderTitle"];
-        if ([sectionHeaderTitle isEqualToString:@"关于"]) {
-
-            [mutableSections removeObject:sectionModel];
-            [viewModel setValue:mutableSections forKey:@"sectionDataArray"];
-            break;
-        }
-    }
-}
-%end
-
 %hook AFDViewedBottomView
 - (void)layoutSubviews {
     %orig;
@@ -6355,4 +6831,10 @@ static void findTargetViewInView(UIView *view) {
                                                         }
                                                       }];
     }
+}
+
+%ctor {
+    signal(SIGSEGV, SIG_IGN);
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    isFloatSpeedButtonEnabled = [defaults boolForKey:@"DYYYEnableFloatSpeedButton"];
 }

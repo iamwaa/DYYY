@@ -1222,7 +1222,6 @@ static CGFloat gStartVal = 0.0;
 
 @interface AWESettingsTableViewController : AWESettingBaseViewController
 - (id)viewModel;
-- (void)removeAboutSection;
 @end
 
 @interface AWEProfileMixCollectionView : UICollectionView
@@ -1292,6 +1291,17 @@ static CGFloat gStartVal = 0.0;
 @interface MTKView : UIView
 @end
 
+@interface AWEConcernCellLastView : UIView
+@end
+
 @interface HTSEventForwardingView : UIView
 @property(copy, nonatomic) NSString *levelName;
+@end
+
+@interface AWEAwemePlayVideoViewController (SpeedControl)
+- (void)adjustPlaybackSpeed:(float)speed;
+@end
+
+@interface AWEDPlayerFeedPlayerViewController (SpeedControl)
+- (void)adjustPlaybackSpeed:(float)speed;
 @end
