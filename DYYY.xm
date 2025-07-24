@@ -824,19 +824,17 @@
 }
 
 - (UIView *)view {
-    UIView *originalView = %orig;
-
     NSString *transparentValue = DYYYGetString(@"DYYYGlobalTransparency");
-    if (transparentValue.length > 0) {
-        CGFloat alphaValue = transparentValue.floatValue;
-        if (alphaValue >= 0.0 && alphaValue <= 1.0) {
-            for (UIView *subview in originalView.subviews) {
-                if (subview.tag != DYYY_IGNORE_GLOBAL_ALPHA_TAG) {
-                    if (subview.alpha > 0) {
-                        subview.alpha = alphaValue;
-                    }
-                }
-            }
+    NSScanner *scanner = [NSScanner scannerWithString:transparentValue];
+    float alphaValue;
+    if (![scanner scanFloat:&alphaValue] || !scanner.isAtEnd || alphaValue < 0 || alphaValue > 1) {
+        return %orig;
+    }
+
+    UIView *originalView = %orig;
+    for (UIView *subview in originalView.subviews) {
+        if (subview.alpha > 0 && fabs(subview.alpha - alphaValue) > 0.01 && subview.tag != DYYY_IGNORE_GLOBAL_ALPHA_TAG) {
+            subview.alpha = alphaValue;
         }
     }
 
@@ -850,13 +848,12 @@
 - (void)layoutSubviews {
     %orig;
 
-    NSString *transparentValue = [[NSUserDefaults standardUserDefaults] stringForKey:@"DYYYGlobalTransparency"];
-    if (!transparentValue.length)
+    NSString *transparentValue = DYYYGetString(@"DYYYGlobalTransparency");
+    NSScanner *scanner = [NSScanner scannerWithString:transparentValue];
+    float alphaValue;
+    if (![scanner scanFloat:&alphaValue] || !scanner.isAtEnd || alphaValue < 0 || alphaValue > 1) {
         return;
-
-    CGFloat alphaValue = transparentValue.floatValue;
-    if (alphaValue < 0.0 || alphaValue > 1.0)
-        return;
+    }
 
     if ([NSStringFromClass([self.superview class]) isEqualToString:NSStringFromClass([self class])])
         return;
@@ -3151,7 +3148,7 @@ static AWEIMReusableCommonCell *currentCell;
 %hook AWEHotSearchInnerBottomView
 - (void)layoutSubviews {
     if (DYYYGetBool(@"DYYYHideHotSearch")) {
-        self.hidden = YES;
+        [self removeFromSuperview];
         return;
     }
     %orig;
@@ -3383,14 +3380,6 @@ static AWEIMReusableCommonCell *currentCell;
             imgView.hidden = YES;
         }
     }
-
-    // NSString *transparentValue = DYYYGetString(@"DYYYGlobalTransparency");
-    // if (transparentValue.length > 0) {
-    //     CGFloat alphaValue = transparentValue.floatValue;
-    //     if (alphaValue >= 0.0 && alphaValue <= 1.0) {
-    //         self.alpha = alphaValue;
-    //     }
-    // }
 
     %orig;
 }
@@ -4070,7 +4059,7 @@ static AWEIMReusableCommonCell *currentCell;
 - (void)layoutSubviews {
     %orig;
     if (DYYYGetBool(@"DYYYHideLiveRoomClose")) {
-        self.hidden = YES;
+        [self removeFromSuperview];
         return;
     }
 }
@@ -4087,8 +4076,18 @@ static AWEIMReusableCommonCell *currentCell;
 }
 %end
 
-// 隐藏直播间商品信息
+// 隐藏直播间商品和推广
 %hook IESECLivePluginLayoutView
+- (void)layoutSubviews {
+    if (DYYYGetBool(@"DYYYHideLiveGoodsMsg")) {
+        self.hidden = YES;
+        return;
+    }
+    %orig;
+}
+%end
+
+%hook IESECLiveGoodsCardView
 - (void)layoutSubviews {
     if (DYYYGetBool(@"DYYYHideLiveGoodsMsg")) {
         self.hidden = YES;
@@ -4100,7 +4099,6 @@ static AWEIMReusableCommonCell *currentCell;
 
 %hook IESLiveBottomRightCardView
 - (void)layoutSubviews {
-
     if (DYYYGetBool(@"DYYYHideLiveGoodsMsg")) {
         self.hidden = YES;
         return;
@@ -5729,6 +5727,11 @@ static CGFloat originalTabHeight = 0;
         }
     }
 
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    if (window && window.safeAreaInsets.bottom == 0) {
+        return;
+    }
+
     if (!DYYYGetBool(@"DYYYEnableFullScreen")) {
         return;
     }
@@ -6165,8 +6168,57 @@ static CGFloat originalTabHeight = 0;
 }
 %end
 
+%hook AWELiveNewPreStreamViewController
+
+static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementStackView"), NSClassFromString(@"IESLiveStackView") ];
+static char kCachedTargetViewsKey;
+static Class GuideViewClass = nil;
+static Class MuteViewClass = nil;
+static Class TagViewClass = nil;
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+
+    NSHashTable *cachedTargetViews = objc_getAssociatedObject(self, &kCachedTargetViewsKey);
+    if (!cachedTargetViews) {
+        cachedTargetViews = [NSHashTable weakObjectsHashTable];
+        objc_setAssociatedObject(self, &kCachedTargetViewsKey, cachedTargetViews, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        UIViewController *PreStreamVC = (UIViewController *)self;
+        for (Class targetClass in kTargetViewClasses) {
+            NSArray *foundViews = [DYYYUtils findAllSubviewsOfClass:targetClass inView:PreStreamVC.view];
+            for (UIView *view in foundViews) {
+                [cachedTargetViews addObject:view];
+            }
+        }
+    }
+
+    if (cachedTargetViews.count > 0) {
+        NSString *transparentValue = DYYYGetString(@"DYYYGlobalTransparency");
+        NSScanner *scanner = [NSScanner scannerWithString:transparentValue];
+        float alphaValue;
+        if (![scanner scanFloat:&alphaValue] || !scanner.isAtEnd || alphaValue < 0 || alphaValue > 1) {
+            return;
+        }
+
+        for (UIView *targetView in cachedTargetViews) {
+            if (targetView.alpha > 0 && fabs(targetView.alpha - alphaValue) > 0.01 && targetView.tag != DYYY_IGNORE_GLOBAL_ALPHA_TAG) {
+                targetView.alpha = alphaValue;
+            }
+        }
+    }
+}
+
+%end
+
 %hook AWEElementStackView
-static CGFloat currentScale = 1.0;
+
++ (void)initialize {
+GuideViewClass = NSClassFromString(@"AWELivePrestreamGuideView");
+MuteViewClass = NSClassFromString(@"AFDCancelMuteAwemeView");
+TagViewClass = NSClassFromString(@"AWELiveFeedLabelTagView");
+}
+
 - (void)setAlpha:(CGFloat)alpha {
     %orig;
     if (speedButton && isFloatSpeedButtonEnabled) {
@@ -6179,16 +6231,64 @@ static CGFloat currentScale = 1.0;
         updateClearButtonVisibility();
     }
 }
+
 - (void)layoutSubviews {
     %orig;
+
     UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
+
     if ([viewController isKindOfClass:%c(AWECommentInputViewController)]) {
         NSString *transparentValue = DYYYGetString(@"DYYYGlobalTransparency");
-        if (transparentValue.length > 0) {
-            CGFloat alphaValue = transparentValue.floatValue;
-            if (alphaValue >= 0.0 && alphaValue <= 1.0) {
-                self.alpha = alphaValue;
-            }
+        NSScanner *scanner = [NSScanner scannerWithString:transparentValue];
+        float alphaValue;
+        if (![scanner scanFloat:&alphaValue] || !scanner.isAtEnd || alphaValue < 0 || alphaValue > 1) {
+            return;
+        }
+
+        if (self.alpha > 0 && fabs(self.alpha - alphaValue) > 0.01 && self.tag != DYYY_IGNORE_GLOBAL_ALPHA_TAG) {
+            self.alpha = alphaValue;
+        }
+    }
+
+    if ([viewController isKindOfClass:%c(AWELiveNewPreStreamViewController)]) {
+        const BOOL shouldShiftUp = DYYYGetBool(@"DYYYEnableFullScreen");
+        const CGFloat targetHeight = tabHeight;
+        const CGFloat labelScaleValue = DYYYGetFloat(@"DYYYNicknameScale");
+        const CGFloat targetLabelScale = (labelScaleValue != 0.0) ? MAX(0.01, labelScaleValue) : 1.0;
+        const CGFloat elementScaleValue = DYYYGetFloat(@"DYYYElementScale");
+        const CGFloat targetElementScale = (elementScaleValue != 0.0) ? MAX(0.01, elementScaleValue) : 1.0;
+        
+        CGAffineTransform targetTransform = CGAffineTransformIdentity;
+        CGFloat boundsWidth = self.bounds.size.width;
+        CGFloat currentScale = 1.0;
+        CGFloat tx = 0;
+        CGFloat ty = 0;
+
+        if ([DYYYUtils containsSubviewOfClass:GuideViewClass inView:self]) {
+            currentScale = targetLabelScale;
+            tx = 0; // 中对齐
+        } else if ([DYYYUtils containsSubviewOfClass:MuteViewClass inView:self]) {
+            currentScale = targetElementScale;
+            tx = (boundsWidth - boundsWidth * currentScale) / 2; // 右对齐
+        } else if ([DYYYUtils containsSubviewOfClass:TagViewClass inView:self]) {
+            currentScale = targetLabelScale;
+            tx = (boundsWidth - boundsWidth * currentScale) / -2; // 左对齐
+        }
+
+        NSArray *subviews = [self.subviews copy];
+        for (UIView *view in subviews) {
+            CGFloat viewHeight = view.bounds.size.height;
+            ty += (viewHeight - viewHeight * currentScale) / 2;
+        }
+
+        if (shouldShiftUp) {
+            ty -= targetHeight;
+        }
+
+        targetTransform = CGAffineTransformMake(currentScale, 0, 0, currentScale, tx, ty);
+
+        if (!CGAffineTransformEqualToTransform(self.transform, targetTransform)) {
+            self.transform = targetTransform;
         }
     }
 
@@ -6199,8 +6299,6 @@ static CGFloat currentScale = 1.0;
             self.transform = CGAffineTransformIdentity;
             if (scaleValue.length > 0) {
                 CGFloat scale = [scaleValue floatValue];
-                if (currentScale != scale)
-                    currentScale = scale;
                 if (scale > 0 && scale != 1.0) {
                     NSArray *subviews = [self.subviews copy];
                     CGFloat ty = 0;
@@ -6239,6 +6337,7 @@ static CGFloat currentScale = 1.0;
         }
     }
 }
+
 - (NSArray<__kindof UIView *> *)arrangedSubviews {
 
     UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
@@ -6269,162 +6368,75 @@ static CGFloat currentScale = 1.0;
     NSArray *originalSubviews = %orig;
     return originalSubviews;
 }
+
 %end
 
-%hook AWELivePreStreamView
+%hook IESLiveStackView
 
-static char kDyCachedAllStackViewsKey;
-static char kDyCachedGuideStackViewKey;
-static char kDyCachedYYLabelStackViewKey;
-static char kDyFirstLayoutCompleteKey;
++ (void)initialize {
+GuideViewClass = NSClassFromString(@"AWELivePrestreamGuideView");
+MuteViewClass = NSClassFromString(@"AFDCancelMuteAwemeView");
+TagViewClass = NSClassFromString(@"AWELiveFeedLabelTagView");
+}
 
-static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementStackView"), NSClassFromString(@"IESLiveStackView") ];
+- (void)setAlpha:(CGFloat)alpha {
+    %orig;
+    if (speedButton && isFloatSpeedButtonEnabled) {
+        if (alpha == 0) {
+            dyyyCommentViewVisible = YES;
+        } else if (alpha == 1) {
+            dyyyCommentViewVisible = NO;
+        }
+        updateSpeedButtonVisibility();
+        updateClearButtonVisibility();
+    }
+}
 
 - (void)layoutSubviews {
     %orig;
 
-    const BOOL shouldShiftUp = DYYYGetBool(@"DYYYEnableFullScreen");
-    const CGFloat targetHeight = tabHeight;
-    const CGFloat labelScaleValue = DYYYGetFloat(@"DYYYNicknameScale");
-    const CGFloat targetLabelScale = (labelScaleValue != 0.0) ? MAX(0.01, labelScaleValue) : 1.0;
-    const CGFloat elementScaleValue = DYYYGetFloat(@"DYYYElementScale");
-    const CGFloat targetElementScale = (elementScaleValue != 0.0) ? MAX(0.01, elementScaleValue) : 1.0;
-    const CGFloat transparentValue = DYYYGetFloat(@"DYYYGlobalTransparency");
-    const CGFloat targetAlpha = (transparentValue >= 0.0 && transparentValue <= 1.0) ? transparentValue : 1.0;
+    UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
 
-    UIView *preStreamView = (UIView *)self;
+    if ([viewController isKindOfClass:%c(AWELiveNewPreStreamViewController)]) {
+        const BOOL shouldShiftUp = DYYYGetBool(@"DYYYEnableFullScreen");
+        const CGFloat targetHeight = tabHeight;
+        const CGFloat labelScaleValue = DYYYGetFloat(@"DYYYNicknameScale");
+        const CGFloat targetLabelScale = (labelScaleValue != 0.0) ? MAX(0.01, labelScaleValue) : 1.0;
+        const CGFloat elementScaleValue = DYYYGetFloat(@"DYYYElementScale");
+        const CGFloat targetElementScale = (elementScaleValue != 0.0) ? MAX(0.01, elementScaleValue) : 1.0;
+        
+        CGAffineTransform targetTransform = CGAffineTransformIdentity;
+        CGFloat boundsWidth = self.bounds.size.width;
+        CGFloat currentScale = 1.0;
+        CGFloat tx = 0;
+        CGFloat ty = 0;
 
-    NSNumber *firstLayoutComplete = objc_getAssociatedObject(self, &kDyFirstLayoutCompleteKey);
-    BOOL isFirstLayout = !firstLayoutComplete.boolValue;
-
-    NSPointerArray *allStackViews = objc_getAssociatedObject(self, &kDyCachedAllStackViewsKey);
-    if (!allStackViews || allStackViews.count == 0) {
-        allStackViews = [NSPointerArray weakObjectsPointerArray];
-        for (Class targetClass in kTargetViewClasses) {
-            if (targetClass) {
-                for (UIView *view in [DYYYUtils findAllSubviewsOfClass:targetClass inView:preStreamView]) {
-                    [allStackViews addPointer:(__bridge void *)view];
-                }
-            }
-        }
-        objc_setAssociatedObject(self, &kDyCachedAllStackViewsKey, allStackViews, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    if (allStackViews.count == 0)
-        return;
-
-    // 第一次布局时重新查找guideStackView，之后使用缓存
-    UIView *guideStackView = nil;
-    if (isFirstLayout) {
-        Class guideViewClass = NSClassFromString(@"AWELivePrestreamGuideView");
-        UIView *guideView = guideViewClass ? [DYYYUtils findSubviewOfClass:guideViewClass inView:preStreamView] : nil;
-        if (guideView) {
-            for (Class stackClass in kTargetViewClasses) {
-                guideStackView = (UIView *)[DYYYUtils findAncestorResponderOfClass:stackClass fromView:guideView];
-                if (guideStackView) {
-                    objc_setAssociatedObject(self, &kDyCachedGuideStackViewKey, guideStackView, OBJC_ASSOCIATION_ASSIGN);
-                    break;
-                }
-            }
-        }
-    } else {
-        guideStackView = objc_getAssociatedObject(self, &kDyCachedGuideStackViewKey);
-        if (guideStackView && !guideStackView.window) {
-            Class guideViewClass = NSClassFromString(@"AWELivePrestreamGuideView");
-            UIView *guideView = guideViewClass ? [DYYYUtils findSubviewOfClass:guideViewClass inView:preStreamView] : nil;
-            if (guideView) {
-                for (Class stackClass in kTargetViewClasses) {
-                    guideStackView = (UIView *)[DYYYUtils findAncestorResponderOfClass:stackClass fromView:guideView];
-                    if (guideStackView) {
-                        objc_setAssociatedObject(self, &kDyCachedGuideStackViewKey, guideStackView, OBJC_ASSOCIATION_ASSIGN);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    UIView *yyLabelStackView = nil;
-    if (isFirstLayout) {
-        Class yyLabelViewClass = NSClassFromString(@"YYLabel");
-        UIView *yyLabelView = yyLabelViewClass ? [DYYYUtils findSubviewOfClass:yyLabelViewClass inView:preStreamView] : nil;
-        if (yyLabelView) {
-            for (Class stackClass in kTargetViewClasses) {
-                yyLabelStackView = (UIView *)[DYYYUtils findAncestorResponderOfClass:stackClass fromView:yyLabelView];
-                if (yyLabelStackView) {
-                    objc_setAssociatedObject(self, &kDyCachedYYLabelStackViewKey, yyLabelStackView, OBJC_ASSOCIATION_ASSIGN);
-                    break;
-                }
-            }
-        }
-    } else {
-        yyLabelStackView = objc_getAssociatedObject(self, &kDyCachedYYLabelStackViewKey);
-        if (!yyLabelStackView || !yyLabelStackView.window) {
-            Class yyLabelViewClass = NSClassFromString(@"YYLabel");
-            UIView *yyLabelView = yyLabelViewClass ? [DYYYUtils findSubviewOfClass:yyLabelViewClass inView:preStreamView] : nil;
-            if (yyLabelView) {
-                for (Class stackClass in kTargetViewClasses) {
-                    yyLabelStackView = (UIView *)[DYYYUtils findAncestorResponderOfClass:stackClass fromView:yyLabelView];
-                    if (yyLabelStackView) {
-                        objc_setAssociatedObject(self, &kDyCachedYYLabelStackViewKey, yyLabelStackView, OBJC_ASSOCIATION_ASSIGN);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    for (UIView *stackView in allStackViews) {
-        if (!stackView.window)
-            continue;
-
-        if (fabs(stackView.alpha - targetAlpha) > 0.01) {
-            stackView.alpha = targetAlpha;
-        }
-
-        const CGFloat midX = CGRectGetMidX(stackView.bounds);
-        const CGFloat midY = CGRectGetMidY(stackView.bounds);
-        CGFloat currentScale, tx;
-
-        if (stackView == guideStackView) {
+        if ([DYYYUtils containsSubviewOfClass:GuideViewClass inView:self]) {
             currentScale = targetLabelScale;
             tx = 0; // 中对齐
-        } else if (stackView == yyLabelStackView) {
+        } else if ([DYYYUtils containsSubviewOfClass:MuteViewClass inView:self]) {
+            currentScale = targetElementScale;
+            tx = (boundsWidth - boundsWidth * currentScale) / 2; // 右对齐
+        } else if ([DYYYUtils containsSubviewOfClass:TagViewClass inView:self]) {
             currentScale = targetLabelScale;
-            tx = midX * (currentScale - 1); // 左对齐
-        } else {
-            if (isFirstLayout) {
-                BOOL isLeftSideView = stackView.frame.origin.x < preStreamView.bounds.size.width * 0.5;
-                if (isLeftSideView) {
-                    currentScale = targetLabelScale;
-                    tx = midX * (currentScale - 1); // 左对齐
-                } else {
-                    currentScale = targetElementScale;
-                    tx = midX * (1 - currentScale); // 右对齐
-                }
-            } else {
-                currentScale = targetElementScale;
-                tx = midX * (1 - currentScale); // 右对齐
-            }
+            tx = (boundsWidth - boundsWidth * currentScale) / -2; // 左对齐
         }
 
-        CGAffineTransform targetTransform = CGAffineTransformIdentity;
-        if (fabs(currentScale - 1.0) >= 0.01) {
-            CGFloat ty = midY * (1 - currentScale); // 下对齐
-            targetTransform = CGAffineTransformConcat(CGAffineTransformMakeScale(currentScale, currentScale), CGAffineTransformMakeTranslation(tx, ty));
+        NSArray *subviews = [self.subviews copy];
+        for (UIView *view in subviews) {
+            CGFloat viewHeight = view.bounds.size.height;
+            ty += (viewHeight - viewHeight * currentScale) / 2;
         }
 
         if (shouldShiftUp) {
-            const CGFloat divisor = (currentScale > 0.01) ? currentScale : 1.0;
-            targetTransform = CGAffineTransformTranslate(targetTransform, 0, -targetHeight / divisor);
+            ty -= targetHeight;
         }
 
-        if (!CGAffineTransformEqualToTransform(stackView.transform, targetTransform)) {
-            stackView.transform = targetTransform;
-        }
-    }
+        targetTransform = CGAffineTransformMake(currentScale, 0, 0, currentScale, tx, ty);
 
-    if (isFirstLayout) {
-        objc_setAssociatedObject(self, &kDyFirstLayoutCompleteKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (!CGAffineTransformEqualToTransform(self.transform, targetTransform)) {
+            self.transform = targetTransform;
+        }
     }
 }
 
@@ -6526,7 +6538,7 @@ static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementSta
 %hook AWELandscapeFeedEntryView
 - (void)setCenter:(CGPoint)center {
     if (DYYYGetBool(@"DYYYEnableFullScreen")) {
-        center.y += 50;
+        center.y += tabHeight * 0.5;
     }
 
     %orig(center);
@@ -6536,6 +6548,15 @@ static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementSta
     %orig;
     if (DYYYGetBool(@"DYYYHideEntry")) {
         [self removeFromSuperview];
+        return;
+    }
+
+    NSString *scaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameScale"];
+    CGFloat scale = scaleValue.length > 0 ? [scaleValue floatValue] : 1.0;
+    if (scale > 0 && scale != 1.0) {
+        self.transform = CGAffineTransformMakeScale(scale, scale);
+    } else {
+        self.transform = CGAffineTransformIdentity;
     }
 }
 
@@ -6707,141 +6728,86 @@ static NSArray<Class> *kTargetViewClasses = @[ NSClassFromString(@"AWEElementSta
 }
 %end
 
-static NSMutableDictionary *keepCellsInfo;
-static NSMutableDictionary *sectionKeepInfo;
-
-static NSString *const kAWELeftSideBarTopRightLayoutView = @"AWELeftSideBarTopRightLayoutView";
-static NSString *const kAWELeftSideBarFunctionContainerView = @"AWELeftSideBarFunctionContainerView";
-static NSString *const kAWELeftSideBarWeatherView = @"AWELeftSideBarWeatherView";
-
 static NSString *const kStreamlineSidebarKey = @"DYYYHideSidebarElements";
 
-%hook AWELeftSideBarViewController
+%hook AWELeftSideBarModel
 
-- (void)viewDidLoad {
-    %orig;
-
-    if (!DYYYGetBool(kStreamlineSidebarKey)) {
-        return;
-    }
-
-    if (!keepCellsInfo) {
-        keepCellsInfo = [NSMutableDictionary dictionary];
-    }
-    if (!sectionKeepInfo) {
-        sectionKeepInfo = [NSMutableDictionary dictionary];
-    }
-}
-
-- (void)viewDidDisappear:(BOOL)animated {
-    %orig;
+- (NSArray *)moduleModels {
+    NSArray *originalModels = %orig;
 
     if (!DYYYGetBool(kStreamlineSidebarKey)) {
-        return;
+        return originalModels;
     }
 
-    [keepCellsInfo removeAllObjects];
-    [sectionKeepInfo removeAllObjects];
-}
+    // 只保留这两个 moduleID
+    NSSet *allowedModuleIDs = [NSSet setWithArray:@[@"top_area", @"more_function_module", @"notification_module_module"]];
 
-- (UICollectionViewCell *)collectionView:(UICollectionView *)collectionView cellForItemAtIndexPath:(NSIndexPath *)indexPath {
-    UICollectionViewCell *cell = %orig;
+    NSMutableArray *filteredModels = [NSMutableArray array];
 
-    if (!DYYYGetBool(kStreamlineSidebarKey)) {
-        return cell;
-    }
-
-    if (!cell)
-        return cell;
-
-    @try {
-        BOOL shouldKeep = [DYYYUtils containsSubviewOfClass:NSClassFromString(kAWELeftSideBarTopRightLayoutView) inView:cell.contentView] ||
-                          [DYYYUtils containsSubviewOfClass:NSClassFromString(kAWELeftSideBarFunctionContainerView) inView:cell.contentView] ||
-                          [DYYYUtils containsSubviewOfClass:NSClassFromString(kAWELeftSideBarWeatherView) inView:cell.contentView];
-
-        NSString *key = [NSString stringWithFormat:@"%ld-%ld", (long)indexPath.section, (long)indexPath.row];
-        keepCellsInfo[key] = @(shouldKeep);
-        if (shouldKeep) {
-            sectionKeepInfo[@(indexPath.section)] = @YES;
-        } else if (!sectionKeepInfo[@(indexPath.section)]) {
-            sectionKeepInfo[@(indexPath.section)] = @NO;
+    for (id moduleModel in originalModels) {
+        if ([moduleModel respondsToSelector:@selector(moduleID)]) {
+            NSString *moduleID = [moduleModel moduleID];
+            if ([allowedModuleIDs containsObject:moduleID]) {
+                // 进一步过滤模块内的items
+                id filteredModule = [self filterModuleItems:moduleModel];
+                if (filteredModule) {
+                    [filteredModels addObject:filteredModule];
+                }
+            }
         }
-
-        if (!shouldKeep) {
-            cell.hidden = YES;
-            cell.alpha = 0;
-            CGRect frame = cell.frame;
-            frame.size.width = 0;
-            frame.size.height = 0;
-            cell.frame = frame;
-        } else if ([DYYYUtils containsSubviewOfClass:NSClassFromString(kAWELeftSideBarFunctionContainerView) inView:cell.contentView]) {
-            [self adjustContainerViewLayout:cell];
-        }
-    } @catch (NSException *exception) {
-        NSLog(@"Error in cellForItemAtIndexPath: %@", exception);
     }
 
-    return cell;
+    return [filteredModels copy];
 }
 
-- (CGSize)collectionView:(UICollectionView *)collectionView layout:(id)layout sizeForItemAtIndexPath:(NSIndexPath *)indexPath {
-    CGSize originalSize = %orig;
-
+- (NSArray *)bottomModuleModels {
+    NSArray *originalBottomModels = %orig;
+    
     if (!DYYYGetBool(kStreamlineSidebarKey)) {
-        return originalSize;
+        return originalBottomModels;
     }
-
-    NSString *key = [NSString stringWithFormat:@"%ld-%ld", (long)indexPath.section, (long)indexPath.row];
-    NSNumber *shouldKeep = keepCellsInfo[key];
-
-    if (shouldKeep != nil && ![shouldKeep boolValue]) {
-        return CGSizeZero;
-    }
-
-    return originalSize;
-}
-
-- (UIEdgeInsets)collectionView:(UICollectionView *)collectionView layout:(id)layout insetForSectionAtIndex:(NSInteger)section {
-    UIEdgeInsets originalInsets = %orig;
-
-    if (!DYYYGetBool(kStreamlineSidebarKey)) {
-        return originalInsets;
-    }
-
-    BOOL hasKeepCells = [sectionKeepInfo[@(section)] boolValue];
-
-    if (!hasKeepCells) {
-        return UIEdgeInsetsZero;
-    }
-
-    return originalInsets;
+    
+    return @[];
 }
 
 %new
-- (void)adjustContainerViewLayout:(UICollectionViewCell *)containerCell {
-    if (!DYYYGetBool(kStreamlineSidebarKey)) {
-        return;
+- (id)filterModuleItems:(id)moduleModel {
+    if (![moduleModel respondsToSelector:@selector(items)] || 
+        ![moduleModel respondsToSelector:@selector(moduleID)]) {
+        return moduleModel;
     }
-
-    UICollectionView *collectionView = [self collectionView];
-    if (!collectionView || !containerCell)
-        return;
-
-    UIView *containerView = [DYYYUtils findSubviewOfClass:NSClassFromString(kAWELeftSideBarFunctionContainerView) inView:containerCell.contentView];
-    if (!containerView)
-        return;
-
-    CGFloat windowHeight = collectionView.window.bounds.size.height;
-    CGFloat currentY = [containerCell convertPoint:containerCell.bounds.origin toView:nil].y;
-    CGFloat newHeight = windowHeight - currentY - 20;
-
-    CGRect containerFrame = containerView.frame;
-    containerFrame.size.height = newHeight;
-    containerView.frame = containerFrame;
-
-    CGRect cellFrame = containerCell.frame;
-    cellFrame.size.height = newHeight;
-    containerCell.frame = cellFrame;
+    
+    NSString *moduleID = [moduleModel moduleID];
+    NSArray *originalItems = [moduleModel items];
+    
+    if ([moduleID isEqualToString:@"top_area"]) {
+        // 只保留天气、设置、扫一扫
+        NSMutableArray *filteredItems = [NSMutableArray array];
+        
+        for (id item in originalItems) {
+            if ([item respondsToSelector:@selector(businessType)]) {
+                NSString *businessType = [item businessType];
+                
+                // 保留需要的组件
+                if ([businessType isEqualToString:@"weather_time_tip_component"] ||
+                    [businessType isEqualToString:@"setting_page_component"] ||
+                    [businessType isEqualToString:@"top_area_vertical_cell"]) {
+                    [filteredItems addObject:item];
+                }
+            }
+        }
+        
+        // 创建新的模块对象，保持原有属性但更新items
+        if ([moduleModel respondsToSelector:@selector(copy)]) {
+            id newModule = [moduleModel copy];
+            if ([newModule respondsToSelector:@selector(setItems:)]) {
+                [newModule setItems:[filteredItems copy]];
+            }
+            return newModule;
+        }
+    }
+    
+    return moduleModel;
 }
 
 %end

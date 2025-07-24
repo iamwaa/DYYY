@@ -1,7 +1,7 @@
 #import <Photos/Photos.h>
 #import <UIKit/UIKit.h>
 
-// 获取指定类型设置，键名不存在或类型错误时返回nil
+// 获取指定类型设置
 #define DYYYGetBool(key) [[NSUserDefaults standardUserDefaults] boolForKey:key]
 #define DYYYGetFloat(key) [[NSUserDefaults standardUserDefaults] floatForKey:key]
 #define DYYYGetInteger(key) [[NSUserDefaults standardUserDefaults] integerForKey:key]
@@ -1046,7 +1046,8 @@ static CGFloat gStartVal = 0.0;
 // 直播间商品信息
 @interface IESECLivePluginLayoutView : UIView
 @end
-
+@interface IESECLiveGoodsCardView : UIView
+@end
 // 直播间点赞动画
 @interface HTSLiveDiggView : UIView
 @end
@@ -1310,4 +1311,30 @@ static CGFloat gStartVal = 0.0;
 
 @interface AWEDPlayerFeedPlayerViewController (SpeedControl)
 - (void)adjustPlaybackSpeed:(float)speed;
+@end
+
+@interface AWELeftSideBarModel : NSObject
+@property(nonatomic, copy) NSArray *moduleModels;
+@property(nonatomic, retain) NSArray *bottomModuleModels;
+- (NSArray *)moduleModels;
+- (NSArray *)bottomModuleModels;
+- (id)filterModuleItems:(id)moduleModel;
+@end
+
+@interface AWELeftSideBarModuleModel : NSObject
+@property(nonatomic, copy) NSArray *items;
+@property(nonatomic, copy) NSString *moduleID;
+@property(nonatomic, copy) NSString *moduleType;
+- (NSArray *)items;
+- (NSString *)moduleID;
+- (NSString *)moduleType;
+- (void)setItems:(NSArray *)items;
+- (id)copy;
+@end
+
+@interface AWELeftSideBarItemModel : NSObject
+@property(nonatomic, copy) NSString *businessType;
+@property(nonatomic, copy) NSString *businessId;
+- (NSString *)businessType;
+- (NSString *)businessId;
 @end
