@@ -85,21 +85,15 @@
               @"DYYYHideTimeProgress" : @[ @"DYYYRemoveTimeProgress" ],
               @"DYYYHideLOTAnimationView" : @[ @"DYYYHideFollowPromptView" ],
               @"DYYYHideFollowPromptView" : @[ @"DYYYHideLOTAnimationView" ],
-              @"DYYYDanmuRainbowRotating" : @[ @"DYYYdanmuColor" ],
-              @"DYYYEnabsuijiyanse" : @[ @"DYYYLabelColor" ],
+              @"DYYYSkipLive" : @[ @"DYYYSkipAllLive" ],
+              @"DYYYSkipAllLive" : @[ @"DYYYSkipLive" ],
           },
 
           // ===== 互斥激活配置 =====
           // 当源设置项关闭时，目标设置项才能激活
           @"mutualExclusions" : @{
-              @"DYYYEnableDoubleOpenComment" : @[ @"DYYYEnableDoubleOpenAlertController" ],
-              @"DYYYEnableDoubleOpenAlertController" : @[ @"DYYYEnableDoubleOpenComment" ],
-              @"DYYYEnabshijianjindu" : @[ @"DYYYHideTimeProgress" ],
-              @"DYYYHideTimeProgress" : @[ @"DYYYEnabshijianjindu" ],
-              @"DYYYHideLOTAnimationView" : @[ @"DYYYHideFollowPromptView" ],
-              @"DYYYHideFollowPromptView" : @[ @"DYYYHideLOTAnimationView" ],
-              @"DYYYDanmuRainbowRotating" : @[ @"DYYYdanmuColor" ],
-              @"DYYYEnabsuijiyanse" : @[ @"DYYYLabelColor" ],
+              @"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ],
+              @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor" ],
               @"DYYYisEnableCommentBlur" : @[ @"WaaCommentTransparency", @"WaaInputBoxTransparency" ],
           },
 
