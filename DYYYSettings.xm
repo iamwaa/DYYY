@@ -269,6 +269,14 @@ extern "C"
               @"cellType" : @37,
               @"imageName" : @"ic_play_outlined_12"
           },
+          @{
+              @"identifier" : @"DYYYEnableBackgroundListen",
+              @"title" : @"启用后台播放",
+              @"subTitle" : @"使受到后台播放限制的视频可以在后台继续播放",
+              @"detail" : @"",
+              @"cellType" : @37,
+              @"imageName" : @"ic_play_outlined_12"
+          },
           @{@"identifier" : @"DYYYDefaultSpeed",
             @"title" : @"设置默认倍速",
             @"detail" : @"",
@@ -987,7 +995,7 @@ extern "C"
           @{
               @"identifier" : @"DYYYHideGradient",
               @"title" : @"隐藏遮罩效果",
-              @"subTitle" : @"优化视频文案展开时出现的黑色背景遮罩效果，但可能对部分视频的文案可读性产生一定影响。",
+              @"subTitle" : @"移除视频文案或图片滑条可能出现的黑色背景遮罩效果，但可能对部分视频的文案可读性产生一定影响。",
               @"detail" : @"",
               @"cellType" : @37,
               @"imageName" : @"ic_eyeslash_outlined_16"
@@ -1866,8 +1874,9 @@ extern "C"
       NSArray *downloadSettings = @[
           @{@"identifier" : @"DYYYInterfaceDownload",
             @"title" : @"接口解析保存媒体",
-            @"detail" : @"不填关闭",
-            @"cellType" : @26,
+            @"subTitle" : @"填入自定义的解析接口，标准格式请查阅\nGithub 仓库内的 README 文件",
+            @"detail" : @"",
+            @"cellType" : @20,
             @"imageName" : @"ic_cloudarrowdown_outlined_20"},
           @{@"identifier" : @"DYYYShowAllVideoQuality",
             @"title" : @"接口显示清晰选项",
@@ -2534,6 +2543,14 @@ extern "C"
               @"identifier" : @"DYYYDisableAutoEnterLive",
               @"title" : @"禁用自动进入直播",
               @"subTitle" : @"禁止顶栏直播下自动进入直播间",
+              @"detail" : @"",
+              @"cellType" : @37,
+              @"imageName" : @"ic_video_outlined_20"
+          },
+          @{
+              @"identifier" : @"DYYYDisableAutoHideLive",
+              @"title" : @"禁止直播标签收缩",
+              @"subTitle" : @"禁止直播类型选择标签自动收缩成直播发现标签",
               @"detail" : @"",
               @"cellType" : @37,
               @"imageName" : @"ic_video_outlined_20"

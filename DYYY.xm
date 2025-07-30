@@ -1585,6 +1585,30 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 %end
 
+%hook AWENormalModeTabBarGeneralPlusButton
+- (void)setImage:(UIImage *)image forState:(UIControlState)state {
+
+    if ([self.accessibilityLabel isEqualToString:@"拍摄"]) {
+
+        NSString *documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+        NSString *dyyyFolderPath = [documentsPath stringByAppendingPathComponent:@"DYYY"];
+
+        NSString *customImagePath = [dyyyFolderPath stringByAppendingPathComponent:@"tab_plus.png"];
+
+        if ([[NSFileManager defaultManager] fileExistsAtPath:customImagePath]) {
+            UIImage *customImage = [UIImage imageWithContentsOfFile:customImagePath];
+            if (customImage) {
+
+                %orig(customImage, state);
+                return;
+            }
+        }
+    }
+
+    %orig;
+}
+%end
+
 // 获取资源的地址
 %hook AWEURLModel
 %new - (NSURL *)getDYYYSrcURLDownload {
@@ -3057,11 +3081,20 @@ static AWEIMReusableCommonCell *currentCell;
     %orig;
 
     if (DYYYGetBool(@"DYYYHideSearchBubble")) {
-        self.hidden = YES;
+        [self removeFromSuperview];
         return;
     }
 }
 
+%end
+
+%hook AWEFeedLiveTabTopSelectionView
+- (void)setHideTimer:(id)timer {
+    if (DYYYGetBool(@"DYYYDisableAutoHideLive")) {
+        timer = nil;
+    }
+    %orig(timer);
+}
 %end
 
 // 右下音乐按钮
@@ -3126,7 +3159,12 @@ static AWEIMReusableCommonCell *currentCell;
 - (void)layoutSubviews {
     if (DYYYGetBool(@"DYYYHideGradient")) {
         UIView *parent = self.superview;
-        if ([parent.accessibilityLabel isEqualToString:@"暂停，按钮"] || [parent.accessibilityLabel isEqualToString:@"播放，按钮"] || [parent.accessibilityLabel isEqualToString:@"“切换视角，按钮"]) {
+        if (
+            [parent.accessibilityLabel isEqualToString:@"暂停，按钮"] || 
+            [parent.accessibilityLabel isEqualToString:@"播放，按钮"] || 
+            [parent.accessibilityLabel isEqualToString:@"“切换视角，按钮"] ||
+            [parent isKindOfClass:%c(AWEStoryProgressContainerView)]
+        ) {
             self.hidden = YES;
         }
         return;
@@ -3233,6 +3271,21 @@ static AWEIMReusableCommonCell *currentCell;
     } else {
         if (class_getInstanceMethod([self class], @selector(prefersStatusBarHidden)) !=
             class_getInstanceMethod([%c(AWEFullPageFeedNewContainerViewController) class], @selector(prefersStatusBarHidden))) {
+            return %orig;
+        }
+        return NO;
+    }
+}
+%end
+
+// 纯净模式状态栏
+%hook AFDPureModePageContainerViewController
+- (BOOL)prefersStatusBarHidden {
+    if (DYYYGetBool(@"DYYYHideStatusbar")) {
+        return YES;
+    } else {
+        if (class_getInstanceMethod([self class], @selector(prefersStatusBarHidden)) !=
+            class_getInstanceMethod([%c(AFDPureModePageContainerViewController) class], @selector(prefersStatusBarHidden))) {
             return %orig;
         }
         return NO;
@@ -3554,20 +3607,6 @@ static AWEIMReusableCommonCell *currentCell;
 }
 %end
 
-// 隐藏图片滑条
-%hook AWEStoryProgressContainerView
-- (BOOL)isHidden {
-    BOOL originalValue = %orig;
-    BOOL customHide = DYYYGetBool(@"DYYYHideDotsIndicator");
-    return originalValue || customHide;
-}
-
-- (void)setHidden:(BOOL)hidden {
-    BOOL forceHide = DYYYGetBool(@"DYYYHideDotsIndicator");
-    %orig(forceHide ? YES : hidden);
-}
-%end
-
 // 隐藏昵称右侧
 %hook UILabel
 - (void)layoutSubviews {
@@ -3646,6 +3685,19 @@ static AWEIMReusableCommonCell *currentCell;
         }
     }
 }
+%end
+
+%hook AWEProfilePostEmptyPublishGuideCollectionViewCell
+
+- (void)didMoveToSuperview {
+    %orig;
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+    if ([(UIView *)self superview]) {
+        [(UIView *)self setHidden:YES];
+    }
+}
+}
+
 %end
 
 %hook AWEProfileTaskCardStyleListCollectionViewCell
@@ -4506,6 +4558,15 @@ static AWEIMReusableCommonCell *currentCell;
 }
 %end
 
+%hook AWEAwemeStatusModel
+- (void)setListenVideoStatus:(NSInteger)status {
+    if (status == 1 && DYYYGetBool(@"DYYYEnableBackgroundListen")) {
+        status = 2;
+    }
+    %orig(status);
+}
+%end
+
 %hook MTKView
 
 - (void)layoutSubviews {
@@ -5117,6 +5178,7 @@ static CGFloat originalTabHeight = 0;
     Class generalButtonClass = %c(AWENormalModeTabBarGeneralButton);
     Class plusButtonClass = %c(AWENormalModeTabBarGeneralPlusButton);
     Class tabBarButtonClass = %c(UITabBarButton);
+    Class barBackgroundClass = NSClassFromString(@"_UIBarBackground");
 
     for (UIView *subview in self.subviews) {
         if ([subview isKindOfClass:generalButtonClass] || [subview isKindOfClass:plusButtonClass]) {
@@ -5140,6 +5202,8 @@ static CGFloat originalTabHeight = 0;
             [buttonsToRemove addObject:subview];
         } else if (isPad && ipadContainerView == nil && [subview class] == [UIView class] && fabs(subview.frame.size.width - self.bounds.size.width) > 0.1) {
             ipadContainerView = subview;
+        } else if (DYYYGetBool(@"DYYYHideBottomBg") && ![subview isKindOfClass:barBackgroundClass]) {
+            [buttonsToRemove addObject:subview];
         }
     }
 
@@ -5247,6 +5311,38 @@ static CGFloat originalTabHeight = 0;
             BOOL shouldShowBackground = isHomeSelected || (isFriendsSelected && !hideFriendsButton);
             backgroundView.hidden = shouldShowBackground;
         }
+    }
+
+    if (enableFullScreen) {
+        BOOL isHomeSelected = NO;
+        BOOL isFriendsSelected = NO;
+        BOOL hideFriendsButton = DYYYGetBool(@"DYYYHideFriendsButton");
+        Class generalButtonClass = %c(AWENormalModeTabBarGeneralButton);
+
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:generalButtonClass]) {
+                AWENormalModeTabBarGeneralButton *button = (AWENormalModeTabBarGeneralButton *)subview;
+                if (button.status == 2) {
+                    if ([button.accessibilityLabel isEqualToString:@"首页"]) {
+                        isHomeSelected = YES;
+                    } else if ([button.accessibilityLabel containsString:@"朋友"]) {
+                        isFriendsSelected = YES;
+                    }
+                }
+            }
+        }
+
+        BOOL shouldHideBackground = isHomeSelected || (isFriendsSelected && !hideFriendsButton);
+        
+        void (^__block traverseSubviews)(UIView *, BOOL) = ^(UIView *view, BOOL hide) {
+            for (UIView *subview in view.subviews) {
+                if (fabs(subview.frame.size.height - tabHeight) < 0.1) {
+                    subview.hidden = hide;
+                }
+            }
+        };
+
+        traverseSubviews(self, shouldHideBackground);
     }
 
     if (enableFullScreen) {
@@ -6588,6 +6684,28 @@ static Class TagViewClass = nil;
     for (UIView *view in bgViews) {
         view.backgroundColor = [UIColor clearColor];
     }
+}
+%end
+
+// 隐藏图片滑条
+%hook AWEStoryProgressContainerView
+- (void)setCenter:(CGPoint)center {
+    UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
+    if ([vc isKindOfClass:NSClassFromString(@"AWEFeedPlayControlImpl.PureModePageCellViewController")] && DYYYGetBool(@"DYYYEnableFullScreen")) {
+        center.y -= tabHeight;
+    }
+    %orig(center);
+}
+
+- (BOOL)isHidden {
+    BOOL originalValue = %orig;
+    BOOL customHide = DYYYGetBool(@"DYYYHideDotsIndicator");
+    return originalValue || customHide;
+}
+
+- (void)setHidden:(BOOL)hidden {
+    BOOL forceHide = DYYYGetBool(@"DYYYHideDotsIndicator");
+    %orig(forceHide ? YES : hidden);
 }
 %end
 
