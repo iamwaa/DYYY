@@ -794,35 +794,6 @@
 
 // 重写全局透明方法
 %hook AWEPlayInteractionViewController
-- (void)loadView {
-    %orig;
-    if (hideButton) {
-        hideButton.hidden = NO;
-        hideButton.alpha = 0.5;
-    }
-}
-
-- (void)viewWillAppear:(BOOL)animated {
-    %orig;
-    isInPlayInteractionVC = YES;
-    dyyyInteractionViewVisible = YES;
-    if (hideButton) {
-        hideButton.hidden = NO;
-        hideButton.alpha = 0.5;
-    }
-}
-
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    dyyyInteractionViewVisible = YES;
-}
-
-- (void)viewWillDisappear:(BOOL)animated {
-    %orig;
-    isInPlayInteractionVC = NO;
-    dyyyInteractionViewVisible = NO;
-}
-
 - (UIView *)view {
     NSString *transparentValue = DYYYGetString(@"DYYYGlobalTransparency");
     NSScanner *scanner = [NSScanner scannerWithString:transparentValue];
@@ -5812,6 +5783,15 @@ static CGFloat originalTabHeight = 0;
 %end
 
 %hook AWEPlayInteractionViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    isInPlayInteractionVC = YES;
+    dyyyInteractionViewVisible = YES;
+    updateSpeedButtonVisibility();
+    updateClearButtonVisibility();
+}
+
 - (void)viewDidLayoutSubviews {
     %orig;
     if (isFloatSpeedButtonEnabled) {
@@ -6208,13 +6188,11 @@ static CGFloat originalTabHeight = 0;
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     isPureViewVisible = YES;
-    updateClearButtonVisibility();
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
     %orig;
     isPureViewVisible = NO;
-    updateClearButtonVisibility();
 }
 %end
 
@@ -6348,11 +6326,24 @@ static Class TagViewClass = nil;
     TagViewClass = NSClassFromString(@"AWELiveFeedLabelTagView");
 }
 
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    dyyyCommentViewVisible = NO;
+    updateSpeedButtonVisibility();
+    updateClearButtonVisibility();
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    dyyyCommentViewVisible = YES;
+    updateSpeedButtonVisibility();
+    updateClearButtonVisibility();
+}
+
 - (void)setAlpha:(CGFloat)alpha {
     %orig;
     if (speedButton && isFloatSpeedButtonEnabled) {
         if (alpha == 0) {
-            dyyyCommentViewVisible = YES;
         } else if (alpha == 1) {
             dyyyCommentViewVisible = NO;
         }
