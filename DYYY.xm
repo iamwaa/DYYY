@@ -1651,49 +1651,51 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 %new
 - (void)applyBlurEffectToView:(UIView *)containerView {
-    if (!containerView) {
-        return;
-    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (!containerView) {
+          return;
+      }
 
-    containerView.backgroundColor = [UIColor clearColor];
+      containerView.backgroundColor = [UIColor clearColor];
 
-    float userRadius = [[[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNotificationCornerRadius"] floatValue];
-    if (!userRadius || userRadius < 0 || userRadius > 50) {
-        userRadius = 12;
-    }
+      float userRadius = [[[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNotificationCornerRadius"] floatValue];
+      if (!userRadius || userRadius < 0 || userRadius > 50) {
+          userRadius = 12;
+      }
 
-    containerView.layer.cornerRadius = userRadius;
-    containerView.layer.masksToBounds = YES;
+      containerView.layer.cornerRadius = userRadius;
+      containerView.layer.masksToBounds = YES;
 
-    for (UIView *subview in containerView.subviews) {
-        if ([subview isKindOfClass:[UIVisualEffectView class]] && subview.tag == 999) {
-            [subview removeFromSuperview];
-        }
-    }
+      for (UIView *subview in containerView.subviews) {
+          if ([subview isKindOfClass:[UIVisualEffectView class]] && subview.tag == 999) {
+              [subview removeFromSuperview];
+          }
+      }
 
-    BOOL isDarkMode = [DYYYUtils isDarkMode];
-    UIBlurEffectStyle blurStyle = isDarkMode ? UIBlurEffectStyleDark : UIBlurEffectStyleLight;
-    UIBlurEffect *blurEffect = [UIBlurEffect effectWithStyle:blurStyle];
-    UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blurEffect];
+      BOOL isDarkMode = [DYYYUtils isDarkMode];
+      UIBlurEffectStyle blurStyle = isDarkMode ? UIBlurEffectStyleDark : UIBlurEffectStyleLight;
+      UIBlurEffect *blurEffect = [UIBlurEffect effectWithStyle:blurStyle];
+      UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blurEffect];
 
-    blurView.frame = containerView.bounds;
-    blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    blurView.tag = 999;
-    blurView.layer.cornerRadius = userRadius;
-    blurView.layer.masksToBounds = YES;
+      blurView.frame = containerView.bounds;
+      blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+      blurView.tag = 999;
+      blurView.layer.cornerRadius = userRadius;
+      blurView.layer.masksToBounds = YES;
 
-    float userTransparency = [[[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYCommentBlurTransparent"] floatValue];
-    if (userTransparency <= 0 || userTransparency > 1) {
-        userTransparency = 0.5;
-    }
+      float userTransparency = [[[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYCommentBlurTransparent"] floatValue];
+      if (userTransparency <= 0 || userTransparency > 1) {
+          userTransparency = 0.5;
+      }
 
-    blurView.alpha = userTransparency;
+      blurView.alpha = userTransparency;
 
-    [containerView insertSubview:blurView atIndex:0];
+      [containerView insertSubview:blurView atIndex:0];
 
-    [self clearBackgroundRecursivelyInView:containerView];
+      [self clearBackgroundRecursivelyInView:containerView];
 
-    [self setLabelsColorWhiteInView:containerView];
+      [self setLabelsColorWhiteInView:containerView];
+    });
 }
 
 %new
@@ -3130,12 +3132,8 @@ static AWEIMReusableCommonCell *currentCell;
 - (void)layoutSubviews {
     if (DYYYGetBool(@"DYYYHideGradient")) {
         UIView *parent = self.superview;
-        if (
-            [parent.accessibilityLabel isEqualToString:@"暂停，按钮"] || 
-            [parent.accessibilityLabel isEqualToString:@"播放，按钮"] || 
-            [parent.accessibilityLabel isEqualToString:@"“切换视角，按钮"] ||
-            [parent isKindOfClass:%c(AWEStoryProgressContainerView)]
-        ) {
+        if ([parent.accessibilityLabel isEqualToString:@"暂停，按钮"] || [parent.accessibilityLabel isEqualToString:@"播放，按钮"] || [parent.accessibilityLabel isEqualToString:@"“切换视角，按钮"] ||
+            [parent isKindOfClass:%c(AWEStoryProgressContainerView)]) {
             self.hidden = YES;
         }
         return;
@@ -3663,10 +3661,10 @@ static AWEIMReusableCommonCell *currentCell;
 - (void)didMoveToSuperview {
     %orig;
     if (DYYYGetBool(@"DYYYHidePostView")) {
-    if ([(UIView *)self superview]) {
-        [(UIView *)self setHidden:YES];
+        if ([(UIView *)self superview]) {
+            [(UIView *)self setHidden:YES];
+        }
     }
-}
 }
 
 %end
@@ -4124,6 +4122,16 @@ static AWEIMReusableCommonCell *currentCell;
 }
 %end
 
+%hook IESECLiveCardSizeComponent
+- (void)layoutSubviews {
+    if (DYYYGetBool(@"DYYYHideLiveGoodsMsg")) {
+        self.hidden = YES;
+        return;
+    }
+    %orig;
+}
+%end
+
 %hook IESECLiveGoodsCardView
 - (void)layoutSubviews {
     if (DYYYGetBool(@"DYYYHideLiveGoodsMsg")) {
@@ -4447,7 +4455,8 @@ static AWEIMReusableCommonCell *currentCell;
             }
         }
     }
-    return shouldFilterAds || shouldFilterRecLive || shouldFilterAllLive || shouldFilterHotSpot || shouldFilterHDR || shouldFilterLowLikes || shouldFilterKeywords || shouldFilterProp || shouldFilterTime || shouldFilterUser;
+    return shouldFilterAds || shouldFilterRecLive || shouldFilterAllLive || shouldFilterHotSpot || shouldFilterHDR || shouldFilterLowLikes || shouldFilterKeywords || shouldFilterProp ||
+           shouldFilterTime || shouldFilterUser;
 }
 
 - (AWEECommerceLabel *)ecommerceBelowLabel {
@@ -5304,13 +5313,13 @@ static CGFloat originalTabHeight = 0;
         }
 
         BOOL shouldHideBackground = isHomeSelected || (isFriendsSelected && !hideFriendsButton);
-        
+
         void (^__block traverseSubviews)(UIView *, BOOL) = ^(UIView *view, BOOL hide) {
-            for (UIView *subview in view.subviews) {
-                if (fabs(subview.frame.size.height - tabHeight) < 0.1) {
-                    subview.hidden = hide;
-                }
-            }
+          for (UIView *subview in view.subviews) {
+              if (fabs(subview.frame.size.height - tabHeight) < 0.1) {
+                  subview.hidden = hide;
+              }
+          }
         };
 
         traverseSubviews(self, shouldHideBackground);
@@ -6688,8 +6697,14 @@ static Class TagViewClass = nil;
 
 - (void)layoutSubviews {
     %orig;
-    if (DYYYGetBool(@"DYYYHideEntry")) {
+    if (DYYYGetBool(@"DYYYRemoveEntry")) {
         [self removeFromSuperview];
+        return;
+    }
+    if (DYYYGetBool(@"DYYYHideEntry")) {
+        for(UIView *subview in self.subviews) {
+            subview.hidden = YES;
+        }
         return;
     }
 
