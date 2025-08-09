@@ -560,38 +560,36 @@
 
 - (void)layoutSubviews {
     %orig;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-      NSString *topTitleConfig = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYModifyTopTabText"];
-      if (topTitleConfig.length == 0)
-          return;
+    NSString *topTitleConfig = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYModifyTopTabText"];
+    if (topTitleConfig.length == 0)
+        return;
 
-      NSArray *titlePairs = [topTitleConfig componentsSeparatedByString:@"#"];
+    NSArray *titlePairs = [topTitleConfig componentsSeparatedByString:@"#"];
 
-      NSString *accessibilityLabel = nil;
-      if ([self.superview respondsToSelector:@selector(accessibilityLabel)]) {
-          accessibilityLabel = self.superview.accessibilityLabel;
-      }
-      if (accessibilityLabel.length == 0)
-          return;
+    NSString *accessibilityLabel = nil;
+    if ([self.superview respondsToSelector:@selector(accessibilityLabel)]) {
+        accessibilityLabel = self.superview.accessibilityLabel;
+    }
+    if (accessibilityLabel.length == 0)
+        return;
 
-      for (NSString *pair in titlePairs) {
-          NSArray *components = [pair componentsSeparatedByString:@"="];
-          if (components.count != 2)
-              continue;
+    for (NSString *pair in titlePairs) {
+        NSArray *components = [pair componentsSeparatedByString:@"="];
+        if (components.count != 2)
+            continue;
 
-          NSString *originalTitle = components[0];
-          NSString *newTitle = components[1];
+        NSString *originalTitle = components[0];
+        NSString *newTitle = components[1];
 
-          if ([accessibilityLabel isEqualToString:originalTitle]) {
-              if ([self respondsToSelector:@selector(setContentText:)]) {
-                  [self setContentText:newTitle];
-              } else {
-                  [self setValue:newTitle forKey:@"contentText"];
-              }
-              break;
-          }
-      }
-    });
+        if ([accessibilityLabel isEqualToString:originalTitle]) {
+            if ([self respondsToSelector:@selector(setContentText:)]) {
+                [self setContentText:newTitle];
+            } else {
+                [self setValue:newTitle forKey:@"contentText"];
+            }
+            break;
+        }
+    }
 }
 
 %end
@@ -752,18 +750,17 @@
 
 - (void)makeKeyAndVisible {
     %orig;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-      if (!isFloatSpeedButtonEnabled)
-          return;
 
-      if (speedButton && ![speedButton isDescendantOfView:self]) {
-          dispatch_async(dispatch_get_main_queue(), ^{
-            [self addSubview:speedButton];
-            [speedButton loadSavedPosition];
-            [speedButton resetFadeTimer];
-          });
-      }
-    });
+    if (!isFloatSpeedButtonEnabled)
+        return;
+
+    if (speedButton && ![speedButton isDescendantOfView:self]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [self addSubview:speedButton];
+          [speedButton loadSavedPosition];
+          [speedButton resetFadeTimer];
+        });
+    }
 }
 %end
 
@@ -881,28 +878,27 @@
 %hook AWEPlayInteractionProgressContainerView
 - (void)layoutSubviews {
     %orig;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-      if (![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFullScreen"]) {
-          return;
-      }
 
-      static char kDYProgressBgKey;
-      NSArray *bgViews = objc_getAssociatedObject(self, &kDYProgressBgKey);
-      if (!bgViews) {
-          NSMutableArray *tmp = [NSMutableArray array];
-          for (UIView *subview in self.subviews) {
-              if ([subview class] == [UIView class]) {
-                  [tmp addObject:subview];
-              }
-          }
-          bgViews = [tmp copy];
-          objc_setAssociatedObject(self, &kDYProgressBgKey, bgViews, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-      }
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFullScreen"]) {
+        return;
+    }
 
-      for (UIView *v in bgViews) {
-          v.backgroundColor = [UIColor clearColor];
-      }
-    });
+    static char kDYProgressBgKey;
+    NSArray *bgViews = objc_getAssociatedObject(self, &kDYProgressBgKey);
+    if (!bgViews) {
+        NSMutableArray *tmp = [NSMutableArray array];
+        for (UIView *subview in self.subviews) {
+            if ([subview class] == [UIView class]) {
+                [tmp addObject:subview];
+            }
+        }
+        bgViews = [tmp copy];
+        objc_setAssociatedObject(self, &kDYProgressBgKey, bgViews, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    for (UIView *v in bgViews) {
+        v.backgroundColor = [UIColor clearColor];
+    }
 }
 
 %end
@@ -1350,42 +1346,41 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 - (void)didMoveToWindow {
     %orig;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-      BOOL longPressCopyEnabled = DYYYGetBool(kDYYYLongPressCopyEnabledKey);
 
-      if (![[NSUserDefaults standardUserDefaults] objectForKey:kDYYYLongPressCopyEnabledKey]) {
-          longPressCopyEnabled = NO;
-          [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kDYYYLongPressCopyEnabledKey];
-          [[NSUserDefaults standardUserDefaults] synchronize];
-      }
+    BOOL longPressCopyEnabled = DYYYGetBool(kDYYYLongPressCopyEnabledKey);
 
-      UIGestureRecognizer *existingGesture = objc_getAssociatedObject(self, &kLongPressGestureKey);
-      if (existingGesture && !longPressCopyEnabled) {
-          [self removeGestureRecognizer:existingGesture];
-          objc_setAssociatedObject(self, &kLongPressGestureKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-          return;
-      }
+    if (![[NSUserDefaults standardUserDefaults] objectForKey:kDYYYLongPressCopyEnabledKey]) {
+        longPressCopyEnabled = NO;
+        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kDYYYLongPressCopyEnabledKey];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }
 
-      if (longPressCopyEnabled && !objc_getAssociatedObject(self, &kLongPressGestureKey)) {
-          UILongPressGestureRecognizer *highPriorityLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleHighPriorityLongPress:)];
-          highPriorityLongPress.minimumPressDuration = 0.3;
+    UIGestureRecognizer *existingGesture = objc_getAssociatedObject(self, &kLongPressGestureKey);
+    if (existingGesture && !longPressCopyEnabled) {
+        [self removeGestureRecognizer:existingGesture];
+        objc_setAssociatedObject(self, &kLongPressGestureKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return;
+    }
 
-          [self addGestureRecognizer:highPriorityLongPress];
+    if (longPressCopyEnabled && !objc_getAssociatedObject(self, &kLongPressGestureKey)) {
+        UILongPressGestureRecognizer *highPriorityLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleHighPriorityLongPress:)];
+        highPriorityLongPress.minimumPressDuration = 0.3;
 
-          UIView *currentView = self;
-          while (currentView.superview) {
-              currentView = currentView.superview;
+        [self addGestureRecognizer:highPriorityLongPress];
 
-              for (UIGestureRecognizer *recognizer in currentView.gestureRecognizers) {
-                  if ([recognizer isKindOfClass:[UILongPressGestureRecognizer class]] || [recognizer isKindOfClass:[UIPinchGestureRecognizer class]]) {
-                      [recognizer requireGestureRecognizerToFail:highPriorityLongPress];
-                  }
-              }
-          }
+        UIView *currentView = self;
+        while (currentView.superview) {
+            currentView = currentView.superview;
 
-          objc_setAssociatedObject(self, &kLongPressGestureKey, highPriorityLongPress, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-      }
-    });
+            for (UIGestureRecognizer *recognizer in currentView.gestureRecognizers) {
+                if ([recognizer isKindOfClass:[UILongPressGestureRecognizer class]] || [recognizer isKindOfClass:[UIPinchGestureRecognizer class]]) {
+                    [recognizer requireGestureRecognizerToFail:highPriorityLongPress];
+                }
+            }
+        }
+
+        objc_setAssociatedObject(self, &kLongPressGestureKey, highPriorityLongPress, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
 }
 
 %new
@@ -1419,27 +1414,26 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 - (void)layoutSubviews {
     %orig;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-      self.transform = CGAffineTransformIdentity;
 
-      NSString *descriptionOffsetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDescriptionVerticalOffset"];
-      CGFloat verticalOffset = 0;
-      if (descriptionOffsetValue.length > 0) {
-          verticalOffset = [descriptionOffsetValue floatValue];
-      }
+    self.transform = CGAffineTransformIdentity;
 
-      UIView *parentView = self.superview;
-      UIView *grandParentView = nil;
+    NSString *descriptionOffsetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDescriptionVerticalOffset"];
+    CGFloat verticalOffset = 0;
+    if (descriptionOffsetValue.length > 0) {
+        verticalOffset = [descriptionOffsetValue floatValue];
+    }
 
-      if (parentView) {
-          grandParentView = parentView.superview;
-      }
+    UIView *parentView = self.superview;
+    UIView *grandParentView = nil;
 
-      if (grandParentView && verticalOffset != 0) {
-          CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(0, verticalOffset);
-          grandParentView.transform = translationTransform;
-      }
-    });
+    if (parentView) {
+        grandParentView = parentView.superview;
+    }
+
+    if (grandParentView && verticalOffset != 0) {
+        CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(0, verticalOffset);
+        grandParentView.transform = translationTransform;
+    }
 }
 
 %end
@@ -1448,32 +1442,31 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 - (void)layoutSubviews {
     %orig;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-      self.transform = CGAffineTransformIdentity;
 
-      // 添加垂直偏移支持
-      NSString *verticalOffsetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameVerticalOffset"];
-      CGFloat verticalOffset = 0;
-      if (verticalOffsetValue.length > 0) {
-          verticalOffset = [verticalOffsetValue floatValue];
-      }
+    self.transform = CGAffineTransformIdentity;
 
-      UIView *parentView = self.superview;
-      UIView *grandParentView = nil;
+    // 添加垂直偏移支持
+    NSString *verticalOffsetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameVerticalOffset"];
+    CGFloat verticalOffset = 0;
+    if (verticalOffsetValue.length > 0) {
+        verticalOffset = [verticalOffsetValue floatValue];
+    }
 
-      if (parentView) {
-          grandParentView = parentView.superview;
-      }
+    UIView *parentView = self.superview;
+    UIView *grandParentView = nil;
 
-      // 检查祖父视图是否为 AWEBaseElementView 类型
-      if (grandParentView && [grandParentView.superview isKindOfClass:%c(AWEBaseElementView)]) {
-          CGRect scaledFrame = grandParentView.frame;
-          CGFloat translationX = -scaledFrame.origin.x;
+    if (parentView) {
+        grandParentView = parentView.superview;
+    }
 
-          CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(translationX, verticalOffset);
-          grandParentView.transform = translationTransform;
-      }
-    });
+    // 检查祖父视图是否为 AWEBaseElementView 类型
+    if (grandParentView && [grandParentView.superview isKindOfClass:%c(AWEBaseElementView)]) {
+        CGRect scaledFrame = grandParentView.frame;
+        CGFloat translationX = -scaledFrame.origin.x;
+
+        CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(translationX, verticalOffset);
+        grandParentView.transform = translationTransform;
+    }
 }
 
 %end
@@ -3263,6 +3256,32 @@ static AWEIMReusableCommonCell *currentCell;
 %end
 
 // 隐藏昵称上方元素
+%hook AWEFeedAnchorContainerView
+
+- (void)layoutSubviews {
+    %orig;
+    BOOL hideFeedAnchor = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
+    BOOL hideLocation = DYYYGetBool(@"DYYYHideLocation");
+    if (hideFeedAnchor && hideLocation) {
+        self.hidden = YES;
+        return;
+    } else if (hideFeedAnchor || hideLocation) {
+        BOOL isLocation = NO;
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:%c(AWEFeedTemplateAnchorView)] || [subview isKindOfClass:%c(AWEPOITradeEntryAnchorView)]) {
+                isLocation = YES;
+                break;
+            }
+        }
+        if ((isLocation && hideLocation) || (!isLocation && hideFeedAnchor)) {
+            self.hidden = YES;
+            return;
+        }
+    }
+}
+
+%end
+
 %hook AWEFeedTemplateAnchorView
 
 - (void)layoutSubviews {
@@ -5685,6 +5704,36 @@ static CGFloat originalTabHeight = 0;
 
 %end
 
+// 开启评论区毛玻璃后滚动区域填满底部
+%hook AWEListKitMagicCollectionView
+
+- (void)layoutSubviews {
+    %orig;
+
+    if (!DYYYGetBool(@"DYYYEnableCommentBlur")) {
+        return;
+    }
+
+    UICollectionView *collectionView = (UICollectionView *)self;
+
+    UIView *superview = collectionView.superview;
+    CGRect targetFrame = superview.bounds;
+    if (superview == nil || CGSizeEqualToSize(targetFrame.size, CGSizeZero) || CGRectEqualToRect(collectionView.frame, targetFrame)) {
+        return;
+    }
+
+    collectionView.frame = targetFrame;
+
+    CGFloat commentOffset = 166.0;
+
+    UIEdgeInsets inset = collectionView.contentInset;
+    inset.bottom = commentOffset;
+    collectionView.contentInset = inset;
+    collectionView.scrollIndicatorInsets = inset;
+}
+
+%end
+
 %hook UIView
 - (id)initWithFrame:(CGRect)frame {
     UIView *view = %orig;
@@ -6560,8 +6609,8 @@ static Class TagViewClass = nil;
         if (shouldShiftUp) {
             ty -= targetHeight;
         }
-
-        targetTransform = CGAffineTransformMake(currentScale, 0, 0, currentScale, tx, ty);
+        // 这里控制的是整个 View 的缩放比例，应该始终固定不变的，不然会变小
+        targetTransform = CGAffineTransformMake(1.0, 0, 0, currentScale, tx, ty);
 
         if (!CGAffineTransformEqualToTransform(self.transform, targetTransform)) {
             self.transform = targetTransform;
@@ -6702,7 +6751,7 @@ static Class TagViewClass = nil;
         return;
     }
     if (DYYYGetBool(@"DYYYHideEntry")) {
-        for(UIView *subview in self.subviews) {
+        for (UIView *subview in self.subviews) {
             subview.hidden = YES;
         }
         return;
