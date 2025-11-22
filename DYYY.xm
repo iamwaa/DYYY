@@ -2227,10 +2227,26 @@ static AWEIMReusableCommonCell *currentCell;
     %orig;
 
     UIView *superview = self.superview;
-
     if ([superview isKindOfClass:NSClassFromString(@"AWEBaseElementView")]) {
-        if (DYYYGetBool(@"DYYYHideCancelMute")) {
+        BOOL hideCancelMute = DYYYGetBool(@"DYYYHideCancelMute");
+        BOOL hideMusicButton = DYYYGetBool(@"DYYYHideMusicButton");
+
+        if (hideCancelMute && hideMusicButton) {
+            [superview removeFromSuperview];
+        } else if (hideCancelMute) {
             self.hidden = YES;
+            return;
+        }
+    }
+}
+
+- (void)willMoveToSuperview:(UIView *)newSuperview {
+    %orig;
+
+    if (newSuperview == nil && DYYYGetBool(@"DYYYHideMusicButton")) {
+        UIView *superview = self.superview;
+        if ([superview isKindOfClass:NSClassFromString(@"AWEBaseElementView")]) {
+            [superview removeFromSuperview];
             return;
         }
     }
@@ -2748,32 +2764,32 @@ static AWEIMReusableCommonCell *currentCell;
 }
 %end
 
+// 右下音乐按钮
 %hook AWEMusicCoverButton
 
 - (void)layoutSubviews {
     %orig;
     NSString *accessibilityLabel = self.accessibilityLabel;
-    if ([accessibilityLabel isEqualToString:@"音乐详情"]) {
-        if (DYYYGetBool(@"DYYYHideMusicButton")) {
-            UIView *parent = self.superview;
-            if (parent) {
-                [parent removeFromSuperview];
-            }
-            return;
-        }
-    }
+
+	if ([accessibilityLabel isEqualToString:@"音乐详情"]) {
+		if (DYYYGetBool(@"DYYYHideMusicButton")) {
+			self.alpha = 0;
+			return;
+		}
+	}
 }
 
 %end
 
+// 右下听抖音按钮
 %hook AWEPlayInteractionListenFeedView
 - (void)layoutSubviews {
     %orig;
 
-    if (DYYYGetBool(@"DYYYHideMusicButton")) {
-        [self removeFromSuperview];
-        return;
-    }
+	if (DYYYGetBool(@"DYYYHideMusicButton")) {
+		self.alpha = 0;
+		return;
+	}
 }
 %end
 
@@ -5654,8 +5670,10 @@ static void *TabBarHeightObservationContext = &TabBarHeightObservationContext;
     BOOL isDetailVC = (DetailVCClass && [vc isKindOfClass:DetailVCClass]);
     BOOL isPlayVC = ((PlayVCClass1 && [vc isKindOfClass:PlayVCClass1]) || (PlayVCClass2 && [vc isKindOfClass:PlayVCClass2]));
 
-    if (isPlayVC && enableBlur) {
-        if (frame.origin.x != 0) {
+    if (isPlayVC) {
+        NSString *transparencyValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"WaaCommentTransparency"];
+        BOOL needCheck = enableBlur || (transparencyValue.length > 0 && [transparencyValue doubleValue] < 1.0);
+        if (needCheck && frame.origin.x != 0) {
             return;
         }
     }

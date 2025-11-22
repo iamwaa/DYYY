@@ -64,6 +64,8 @@
                   @"DYYYClearButtonIcon", @"DYYYEnableFloatClearButtonSize", @"DYYYRemoveTimeProgress", @"DYYYHideTimeProgress", @"DYYYHideDanmaku", @"DYYYHideSlider", @"DYYYHideTabBar",
                   @"DYYYHideSpeed", @"DYYYHideChapter"
               ],
+              @"WaaEnableCommentColor" : @[ @"WaaCommentColor" ],
+			  @"DYYYisEnableFullScreen" : @[ @"WaaHidePurityRrogress" ],
               @"DYYYEnableModernPanel" : @[ @"DYYYLongPressPanelBlur", @"DYYYLongPressPanelDark" ],
               @"DYYYEnableDoubleTapMenu" : @[ @"DYYYDoubleTapMenuSettings" ],
           },
@@ -91,7 +93,11 @@
 
           // ===== 互斥激活配置 =====
           // 当源设置项关闭时，目标设置项才能激活
-          @"mutualExclusions" : @{@"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ], @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor" ]},
+          @"mutualExclusions" : @{
+              @"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ],
+              @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor" ],
+              @"DYYYisEnableCommentBlur" : @[ @"WaaCommentTransparency", @"WaaInputBoxTransparency" ],
+          },
 
           // ===== 值依赖配置 =====
           // 基于字符串值的依赖关系

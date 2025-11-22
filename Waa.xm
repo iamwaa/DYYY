@@ -1,0 +1,366 @@
+// Modified By @Waa
+
+#import "AwemeHeaders.h"
+#import "DYYYBottomAlertView.h"
+#import <UIKit/UIKit.h>
+#import <objc/runtime.h>
+
+#pragma mark - 外观功能
+
+// 调整评论区透明度
+@interface UIView(Comment)
+- (void)setBackgroundColor:(UIColor *)backgroundColor;
+@end
+
+%hook UIView
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    CGFloat transparency = 1.0;
+    BOOL shouldModify = NO;
+    NSString *transparencyKey = nil;
+
+    UIView *superview = self.superview;
+    while (superview) {
+        superview = superview.superview;
+    }
+
+    superview = self.superview;
+    BOOL isFirstChildOfMiddleContainer = NO;
+    BOOL isFirstChildOfCommentContainer = NO;
+    
+    while (superview && !(isFirstChildOfMiddleContainer || isFirstChildOfCommentContainer)) {
+        if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer")]) {
+            isFirstChildOfMiddleContainer = (superview.subviews.firstObject == self);
+        }
+        else if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
+            isFirstChildOfCommentContainer = (superview.subviews.firstObject == self);
+        }
+        superview = superview.superview;
+    }
+
+    UIResponder *responder = self.nextResponder;
+    BOOL isInCommentPanel = [responder isKindOfClass:NSClassFromString(@"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController")];
+
+    if (isFirstChildOfMiddleContainer) {
+        transparencyKey = @"WaaInputBoxTransparency";
+        shouldModify = YES;
+    } 
+    else if (isFirstChildOfCommentContainer || isInCommentPanel) {
+        transparencyKey = @"WaaCommentTransparency";
+        shouldModify = YES;
+    }
+
+    if (shouldModify && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+        NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:transparencyKey];
+        if (transparencyStr.length > 0) {
+            transparency = [transparencyStr floatValue];
+            transparency = MAX(0.0, MIN(1.0, transparency));
+        }
+
+        CGFloat r, g, b, a;
+        if ([backgroundColor getRed:&r green:&g blue:&b alpha:&a]) {
+            backgroundColor = [UIColor colorWithRed:r green:g blue:b alpha:transparency];
+        } else {
+            backgroundColor = [backgroundColor colorWithAlphaComponent:transparency];
+        }
+    }
+
+    %orig(backgroundColor);
+}
+%end
+
+// 调整评论区文字颜色
+UIColor *darkerColorForColor(UIColor *color) {
+    CGFloat hue, saturation, brightness, alpha;
+    if ([color getHue:&hue saturation:&saturation brightness:&brightness alpha:&alpha]) {
+        return [UIColor colorWithHue:hue saturation:saturation brightness:brightness * 0.9 alpha:alpha];
+    }
+    return color;
+}
+
+@interface UIView (CustomColor)
+- (void)traverseSubviews:(UIView *)view customColor:(UIColor *)customColor;
+- (void)updateActionViewLabelColorRecursive:(UIView *)view;
+@end
+
+@implementation UIView (CustomColor)
+
+- (void)traverseSubviews:(UIView *)view customColor:(UIColor *)customColor {
+    if ([view isKindOfClass:[UILabel class]]) {
+        UILabel *label = (UILabel *)view;
+        if ([label.text containsString:@"条评论"]) {
+            label.textColor = customColor;
+        }
+    }
+
+    for (UIView *subview in view.subviews) {
+        [self traverseSubviews:subview customColor:customColor];
+    }
+}
+
+- (void)updateActionViewLabelColorRecursive:(UIView *)view {
+    NSString *customHexColor = DYYYGetString(@"WaaCommentColor");
+    if (customHexColor.length == 0) return;
+
+    unsigned int hexValue = 0;
+    NSScanner *scanner = [NSScanner scannerWithString:[customHexColor hasPrefix:@"#"] ? [customHexColor substringFromIndex:1] : customHexColor];
+    if (![scanner scanHexInt:&hexValue]) return;
+
+    UIColor *customColor = [UIColor colorWithRed:((hexValue >> 16) & 0xFF) / 255.0
+                                           green:((hexValue >> 8) & 0xFF) / 255.0
+                                            blue:(hexValue & 0xFF) / 255.0
+                                           alpha:1.0];
+    UIColor *darkerColor = darkerColorForColor(customColor);
+
+    if ([view isKindOfClass:[UILabel class]]) {
+        ((UILabel *)view).textColor = darkerColor;
+    }
+
+    for (UIView *subview in view.subviews) {
+        [self updateActionViewLabelColorRecursive:subview];
+    }
+}
+
+@end
+
+%hook UIView
+
+- (void)layoutSubviews {
+    %orig;
+
+    NSString *className = NSStringFromClass([self class]);
+    BOOL isCommentColorEnabled = DYYYGetBool(@"WaaEnableCommentColor");
+
+    if (isCommentColorEnabled) {
+        NSString *customHexColor = DYYYGetString(@"WaaCommentColor");
+        UIColor *customColor = nil;
+
+        if (customHexColor.length > 0) {
+            unsigned int hexValue = 0;
+            NSScanner *scanner = [NSScanner scannerWithString:[customHexColor hasPrefix:@"#"] ? [customHexColor substringFromIndex:1] : customHexColor];
+            if ([scanner scanHexInt:&hexValue]) {
+                customColor = [UIColor colorWithRed:((hexValue >> 16) & 0xFF) / 255.0
+                                              green:((hexValue >> 8) & 0xFF) / 255.0
+                                               blue:(hexValue & 0xFF) / 255.0
+                                              alpha:1.0];
+            }
+        }
+
+        // 用户名、内容、时间属地
+        if (customColor) {
+            UIColor *darkerColor = darkerColorForColor(customColor);
+            Class YYLabelClass = NSClassFromString(@"YYLabel");
+
+            for (UIView *subview in self.subviews) {
+                NSString *subviewClassName = NSStringFromClass([subview class]);
+
+                if ([subview isKindOfClass:[UILabel class]] &&
+                    [subviewClassName isEqualToString:@"AWECommentSwiftBizUI.CommentInteractionBaseLabel"]) {
+                    ((UILabel *)subview).textColor = darkerColor;
+                } else if (YYLabelClass && [subview isKindOfClass:YYLabelClass] &&
+                           [subviewClassName isEqualToString:@"AWECommentPanelListSwiftImpl.BaseCellCommentLabel"]) {
+                    ((UILabel *)subview).textColor = customColor;
+                } else if ([subview isKindOfClass:[UILabel class]] &&
+                           [subviewClassName isEqualToString:@"AWECommentPanelHeaderSwiftImpl.CommentHeaderCell"]) {
+                    ((UILabel *)subview).textColor = customColor;
+                }
+            }
+
+            // 展开按钮
+            for (UIView *subview in self.subviews) {
+                if ([subview isKindOfClass:[UIButton class]]) {
+                    UIButton *button = (UIButton *)subview;
+                    NSString *buttonText = [button titleForState:UIControlStateNormal];
+                    if ([buttonText containsString:@"展开"] && [buttonText containsString:@"条回复"]) {
+                        [button setTitleColor:darkerColor forState:UIControlStateNormal];
+                    }
+                }
+            }
+
+            [self traverseSubviews:self customColor:customColor];
+        }
+    }
+
+    // 点赞数量
+    UIView *superview = self.superview;
+    while (superview) {
+        if ([NSStringFromClass([superview class]) isEqualToString:@"AWECommentPanelListSwiftImpl.ActionView"]) {
+            if (isCommentColorEnabled) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self updateActionViewLabelColorRecursive:self];
+                });
+            }
+            break;
+        }
+        superview = superview.superview;
+    }
+
+    // 隐藏输入框上方横线
+    for (UIView *subview in self.subviews) {
+        CGRect frame = subview.frame;
+
+        NSString *superclassName = NSStringFromClass([subview.superview class]);
+        BOOL isInTargetContainer = [superclassName isEqualToString:@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer"];
+
+        CGFloat parentWidth = self.bounds.size.width;
+        BOOL widthMatch = fabs(frame.size.width - parentWidth) < 1.0;
+        BOOL heightMatch = frame.size.height > 0 && frame.size.height < 1.0;
+
+        if (isInTargetContainer && widthMatch && heightMatch) {
+            subview.hidden = YES;
+        }
+    }
+}
+
+%end
+
+// 调整评论区图标颜色
+BOOL isTargetCommentSubview(UIView *view) {
+    static NSSet<NSString *> *targetClassNames;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        targetClassNames = [NSSet setWithArray:@[
+            @"AWECommentPanelListSwiftImpl.ActionView",
+            @"AWECommentPanelListSwiftImpl.CommentFooterView"
+        ]];
+    });
+
+    while (view) {
+        if ([targetClassNames containsObject:NSStringFromClass([view class])]) {
+            return YES;
+        }
+        view = view.superview;
+    }
+    return NO;
+}
+
+%hook UIImageView
+
+- (void)setImage:(UIImage *)image {
+    BOOL isCommentColorEnabled = DYYYGetBool(@"WaaEnableCommentColor");
+    NSString *customHexColor = DYYYGetString(@"WaaCommentColor");
+    UIColor *customColor = nil;
+
+    if (customHexColor.length > 0) {
+        unsigned int hexValue = 0;
+        NSScanner *scanner = [NSScanner scannerWithString:[customHexColor hasPrefix:@"#"] ? [customHexColor substringFromIndex:1] : customHexColor];
+        if ([scanner scanHexInt:&hexValue]) {
+            customColor = [UIColor colorWithRed:((hexValue >> 16) & 0xFF) / 255.0
+                                          green:((hexValue >> 8) & 0xFF) / 255.0
+                                           blue:(hexValue & 0xFF) / 255.0
+                                          alpha:1.0];
+        }
+    }
+
+    if (isCommentColorEnabled && customColor && isTargetCommentSubview(self)) {
+        UIImage *templateImage = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        %orig(templateImage);
+        self.tintColor = darkerColorForColor(customColor);
+        return;
+    }
+
+    %orig;
+}
+
+%end
+
+#pragma mark - 隐藏功能
+
+// 双指清屏增强
+@interface AFDRoundRectangleBoxView : UIView
+@end
+
+static void removeTargetSubviews(UIView *view) {
+    if (!view) return;
+
+    Class roundViewClass = objc_getClass("AFDRoundRectangleBoxView");
+    if (roundViewClass && [view isKindOfClass:roundViewClass]) {
+        UIColor *bgColor = view.backgroundColor;
+        CGFloat r, g, b, a;
+        [bgColor getRed:&r green:&g blue:&b alpha:&a];
+        if (fabs(r - 1.0) < 0.01 && fabs(g - 1.0) < 0.01 && fabs(b - 1.0) < 0.01 && fabs(a - 0.117647) < 0.01) {
+            [view removeFromSuperview];
+            return;
+        }
+    }
+    Class storyViewClass = objc_getClass("AWEStoryProgressContainerView");
+    if (storyViewClass && [view isKindOfClass:storyViewClass]) {
+        [view removeFromSuperview];
+        return;
+    }
+
+    for (UIView *subview in view.subviews) {
+        removeTargetSubviews(subview);
+    }
+}
+
+%hook AFDPureModePageContainerViewController
+
+- (void)viewDidLoad {
+    %orig;
+
+    Class targetClass = objc_getClass("AFDPureModePageContainerViewController");
+    BOOL isPureModeEnabled = NO;
+    @try {
+        isPureModeEnabled = DYYYGetBool(@"WaaEnablePureModePlus");
+    } @catch (NSException *e) {
+        return;
+    }
+    if (!isPureModeEnabled || !targetClass || ![self isKindOfClass:targetClass]) {
+        return;
+    }
+
+    UIView *mainView = self.view;
+    if ([mainView isKindOfClass:[UIView class]]) {
+        UIColor *bgColor = mainView.backgroundColor;
+        CGFloat r, g, b, a;
+        [bgColor getRed:&r green:&g blue:&b alpha:&a];
+        if (fabs(r - 0.0) < 0.01 && fabs(g - 0.0) < 0.01 && fabs(b - 0.0) < 0.01 && fabs(a - 1.0) < 0.01) {
+            removeTargetSubviews(mainView);
+        }
+    }
+}
+
+%end
+
+#pragma mark - 增强功能
+
+// 修复关注二次确认
+%group WaaFollowfixGroup
+%hook UITapGestureRecognizer
+
+- (void)setState:(UIGestureRecognizerState)state {
+    if (state == UIGestureRecognizerStateEnded) {
+        UIView *targetView = self.view;
+        if ([targetView isKindOfClass:NSClassFromString(@"AWEPlayInteractionFollowPromptView")] || 
+            [targetView.superview isKindOfClass:NSClassFromString(@"AWEPlayInteractionFollowPromptView")]) {
+
+            if (DYYYGetBool(@"DYYYfollowTips")) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [DYYYBottomAlertView showAlertWithTitle:@"关注确认"
+						message:@"是否确认关注？"
+					      avatarURL:nil
+				       cancelButtonText:@"取消"
+				      confirmButtonText:@"关注"
+					   cancelAction:nil
+					    closeAction:nil
+					  confirmAction:^{
+					    %orig(state);
+					}];
+                });
+                return;
+            }
+        }
+    }
+    %orig(state);
+}
+
+%end
+%end
+
+%ctor {
+    %init;
+
+    if (DYYYGetBool(@"WaaFollowfix")) {
+        %init(WaaFollowfixGroup);
+    }
+}
