@@ -11,14 +11,13 @@
 @implementation DYYYSettingsHelper
 
 // 获取用户默认设置
-+ (bool)getUserDefaults:(NSString *)key {
++ (BOOL)getUserDefaults:(NSString *)key {
     return [[NSUserDefaults standardUserDefaults] boolForKey:key];
 }
 
 // 设置用户默认设置
 + (void)setUserDefaults:(id)object forKey:(NSString *)key {
     [[NSUserDefaults standardUserDefaults] setObject:object forKey:key];
-    [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
 // 显示自定义关于弹窗
@@ -97,6 +96,7 @@
               @"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ],
               @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor" ],
               @"DYYYisEnableCommentBlur" : @[ @"WaaCommentTransparency", @"WaaInputBoxTransparency" ],
+              @"DYYYSkipPhoto": @[@"DYYYSkipPhotoText"]
           },
 
           // ===== 值依赖配置 =====
@@ -114,6 +114,121 @@
     });
 
     return config;
+}
+
+static NSDictionary<NSString *, NSArray<NSString *> *> *DYYYDependencyTargetSourcesLookup(void) {
+    static NSDictionary<NSString *, NSArray<NSString *> *> *lookup = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      NSDictionary *dependencies = [DYYYSettingsHelper settingsDependencyConfig][@"dependencies"];
+      NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *reverseMap = [NSMutableDictionary dictionary];
+      [dependencies enumerateKeysAndObjectsUsingBlock:^(NSString *sourceKey, NSArray *dependentItems, BOOL *stop) {
+        if (![dependentItems isKindOfClass:[NSArray class]]) {
+            return;
+        }
+        for (NSString *identifier in dependentItems) {
+            if (identifier.length == 0) {
+                continue;
+            }
+            NSMutableArray<NSString *> *sources = reverseMap[identifier];
+            if (!sources) {
+                sources = [NSMutableArray array];
+                reverseMap[identifier] = sources;
+            }
+            [sources addObject:sourceKey];
+        }
+      }];
+      lookup = [reverseMap copy];
+    });
+    return lookup;
+}
+
+static NSDictionary<NSString *, NSArray<NSString *> *> *DYYYMutualExclusionTargetsLookup(void) {
+    static NSDictionary<NSString *, NSArray<NSString *> *> *lookup = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      NSDictionary *mutualExclusions = [DYYYSettingsHelper settingsDependencyConfig][@"mutualExclusions"];
+      NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *reverseMap = [NSMutableDictionary dictionary];
+      [mutualExclusions enumerateKeysAndObjectsUsingBlock:^(NSString *sourceKey, NSArray *targetIdentifiers, BOOL *stop) {
+        if (![targetIdentifiers isKindOfClass:[NSArray class]]) {
+            return;
+        }
+        for (NSString *identifier in targetIdentifiers) {
+            if (identifier.length == 0) {
+                continue;
+            }
+            NSMutableArray<NSString *> *sources = reverseMap[identifier];
+            if (!sources) {
+                sources = [NSMutableArray array];
+                reverseMap[identifier] = sources;
+            }
+            [sources addObject:sourceKey];
+        }
+      }];
+      lookup = [reverseMap copy];
+    });
+    return lookup;
+}
+
+static NSDictionary<NSString *, NSArray<NSDictionary *> *> *DYYYValueDependencyTargetsLookup(void) {
+    static NSDictionary<NSString *, NSArray<NSDictionary *> *> *lookup = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      NSDictionary *valueDependencies = [DYYYSettingsHelper settingsDependencyConfig][@"valueDependencies"];
+      NSMutableDictionary<NSString *, NSMutableArray<NSDictionary *> *> *targetMap = [NSMutableDictionary dictionary];
+      [valueDependencies enumerateKeysAndObjectsUsingBlock:^(NSString *sourceKey, NSDictionary *config, BOOL *stop) {
+        NSArray *dependents = config[@"dependents"];
+        if (dependents.count == 0)
+            return;
+
+        for (NSString *identifier in dependents) {
+            if (identifier.length == 0) {
+                continue;
+            }
+            NSMutableArray<NSDictionary *> *entries = targetMap[identifier];
+            if (!entries) {
+                entries = [NSMutableArray array];
+                targetMap[identifier] = entries;
+            }
+            NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+            entry[@"sourceKey"] = sourceKey;
+            if (config[@"valueType"])
+                entry[@"valueType"] = config[@"valueType"];
+            if (config[@"condition"])
+                entry[@"condition"] = config[@"condition"];
+            [entries addObject:[entry copy]];
+        }
+      }];
+      lookup = [targetMap copy];
+    });
+    return lookup;
+}
+
+static NSDictionary<NSString *, NSArray<NSString *> *> *DYYYConditionalSourceTargetsLookup(void) {
+    static NSDictionary<NSString *, NSArray<NSString *> *> *lookup = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      NSDictionary *conditionalDependencies = [DYYYSettingsHelper settingsDependencyConfig][@"conditionalDependencies"];
+      NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *sourceToTargets = [NSMutableDictionary dictionary];
+      [conditionalDependencies enumerateKeysAndObjectsUsingBlock:^(NSString *targetIdentifier, NSDictionary *conditionConfig, BOOL *stop) {
+        NSArray *settingsList = conditionConfig[@"settings"];
+        if (settingsList.count == 0)
+            return;
+        for (NSString *sourceIdentifier in settingsList) {
+            if (sourceIdentifier.length == 0) {
+                continue;
+            }
+            NSMutableArray<NSString *> *targets = sourceToTargets[sourceIdentifier];
+            if (!targets) {
+                targets = [NSMutableArray array];
+                sourceToTargets[sourceIdentifier] = targets;
+            }
+            [targets addObject:targetIdentifier];
+        }
+      }];
+      lookup = [sourceToTargets copy];
+    });
+    return lookup;
 }
 
 static BOOL settingActive(NSString *identifier) {
@@ -146,7 +261,7 @@ static void collectSettingsVCs(UIViewController *vc, NSMutableArray *array) {
 static NSArray *allSettingsViewControllers(void) {
     UIWindow *window = [DYYYUtils getActiveWindow];
     if (!window) {
-        window = [UIApplication sharedApplication].keyWindow;
+        window = [UIApplication sharedApplication].windows.firstObject;
     }
     NSMutableArray *result = [NSMutableArray array];
     if (window.rootViewController) {
@@ -156,25 +271,23 @@ static NSArray *allSettingsViewControllers(void) {
 }
 
 + (void)applyDependencyRulesForItem:(AWESettingItemModel *)item {
-    NSDictionary *dependencies = [self settingsDependencyConfig][@"dependencies"];
+    NSString *itemIdentifier = item.identifier;
+    if (itemIdentifier.length == 0) {
+        item.isEnable = YES;
+        return;
+    }
     NSDictionary *conditionalDependencies = [self settingsDependencyConfig][@"conditionalDependencies"];
-    NSDictionary *mutualExclusions = [self settingsDependencyConfig][@"mutualExclusions"];
-    NSDictionary *valueDependencies = [self settingsDependencyConfig][@"valueDependencies"];
 
     BOOL enableState = YES;
 
-    for (NSString *sourceKey in dependencies) {
-        NSArray *dependentItems = dependencies[sourceKey];
-        if ([dependentItems containsObject:item.identifier]) {
-            enableState = settingActive(sourceKey);
-            break;
-        }
+    NSArray<NSString *> *directSources = DYYYDependencyTargetSourcesLookup()[itemIdentifier];
+    if (directSources.count > 0) {
+        NSString *primarySource = directSources.firstObject;
+        enableState = settingActive(primarySource);
     }
 
-    for (NSString *targetKey in conditionalDependencies) {
-        if (![targetKey isEqualToString:item.identifier])
-            continue;
-        NSDictionary *conditionConfig = conditionalDependencies[targetKey];
+    NSDictionary *conditionConfig = conditionalDependencies[itemIdentifier];
+    if (conditionConfig) {
         NSString *conditionType = conditionConfig[@"condition"];
         NSArray *settingList = conditionConfig[@"settings"];
 
@@ -197,28 +310,24 @@ static NSArray *allSettingsViewControllers(void) {
             }
             enableState = shouldEnable;
         }
-        break;
     }
 
-    for (NSString *sourceKey in valueDependencies) {
-        NSDictionary *valueConfig = valueDependencies[sourceKey];
-        NSArray *dependentItems = valueConfig[@"dependents"];
+    NSArray<NSDictionary *> *valueRules = DYYYValueDependencyTargetsLookup()[itemIdentifier];
+    NSDictionary *valueRule = valueRules.firstObject;
+    if (valueRule) {
+        NSString *valueType = valueRule[@"valueType"];
+        NSString *condition = valueRule[@"condition"];
+        NSString *sourceKey = valueRule[@"sourceKey"];
 
-        if ([dependentItems containsObject:item.identifier]) {
-            NSString *valueType = valueConfig[@"valueType"];
-            NSString *condition = valueConfig[@"condition"];
-
-            if ([valueType isEqualToString:@"string"] && [condition isEqualToString:@"isNotEmpty"]) {
-                NSString *sourceValue = [[NSUserDefaults standardUserDefaults] objectForKey:sourceKey];
-                enableState = (sourceValue != nil && sourceValue.length > 0);
-            }
-            break;
+        if ([valueType isEqualToString:@"string"] && [condition isEqualToString:@"isNotEmpty"]) {
+            NSString *sourceValue = [[NSUserDefaults standardUserDefaults] objectForKey:sourceKey];
+            enableState = (sourceValue != nil && sourceValue.length > 0);
         }
     }
 
-    for (NSString *sourceKey in mutualExclusions) {
-        NSArray *exclusiveItems = mutualExclusions[sourceKey];
-        if ([exclusiveItems containsObject:item.identifier] && settingActive(sourceKey)) {
+    NSArray<NSString *> *exclusiveSources = DYYYMutualExclusionTargetsLookup()[itemIdentifier];
+    for (NSString *sourceKey in exclusiveSources) {
+        if (settingActive(sourceKey)) {
             enableState = NO;
             break;
         }
@@ -282,11 +391,11 @@ static NSArray *allSettingsViewControllers(void) {
 
 + (void)updateDependentItemsForSetting:(NSString *)identifier value:(id)value {
     NSDictionary *dependencies = [self settingsDependencyConfig][@"dependencies"];
-    NSDictionary *conditionalDependencies = [self settingsDependencyConfig][@"conditionalDependencies"];
     NSDictionary *mutualExclusions = [self settingsDependencyConfig][@"mutualExclusions"];
     NSDictionary *valueDependencies = [self settingsDependencyConfig][@"valueDependencies"];
     NSDictionary *conflicts = [self settingsDependencyConfig][@"conflicts"];
     NSDictionary *synchronizations = [self settingsDependencyConfig][@"synchronizations"];
+    NSDictionary *conditionalSourceTargets = DYYYConditionalSourceTargetsLookup();
 
     NSArray *allVCs = allSettingsViewControllers();
     for (AWESettingBaseViewController *settingsVC in allVCs) {
@@ -319,12 +428,9 @@ static NSArray *allSettingsViewControllers(void) {
             [itemsToUpdate addObjectsFromArray:itemsSynchronizedByMe];
         }
 
-        for (NSString *targetItem in conditionalDependencies) {
-            NSDictionary *conditionInfo = conditionalDependencies[targetItem];
-            NSArray *settingsList = conditionInfo[@"settings"];
-            if ([settingsList containsObject:identifier]) {
-                [itemsToUpdate addObject:targetItem];
-            }
+        NSArray *conditionalTargets = conditionalSourceTargets[identifier];
+        if (conditionalTargets.count > 0) {
+            [itemsToUpdate addObjectsFromArray:conditionalTargets];
         }
 
         NSDictionary *valueDepInfo = valueDependencies[identifier];
@@ -418,7 +524,6 @@ static NSArray *allSettingsViewControllers(void) {
 
 #pragma mark
 
-extern void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed);
 extern void *kViewModelKey;
 
 static void showIconOptionsDialog(NSString *title, UIImage *previewImage, NSString *saveFilename, void (^onClear)(void), void (^onSelect)(void)) {
@@ -483,27 +588,48 @@ static void showIconOptionsDialog(NSString *title, UIImage *previewImage, NSStri
               if (!originalImageURL) {
                   originalImageURL = info[UIImagePickerControllerReferenceURL];
               }
-              if (originalImageURL) {
-                  NSString *documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-                  NSString *dyyyFolderPath = [documentsPath stringByAppendingPathComponent:@"DYYY"];
-                  NSString *imagePath = [dyyyFolderPath stringByAppendingPathComponent:saveFilename];
-
-                  NSData *imageData = [NSData dataWithContentsOfURL:originalImageURL];
-                  const char *bytes = (const char *)imageData.bytes;
-                  BOOL isGIF = (imageData.length >= 6 && (memcmp(bytes, "GIF87a", 6) == 0 || memcmp(bytes, "GIF89a", 6) == 0));
-                  if (isGIF) {
-                      [imageData writeToFile:imagePath atomically:YES];
-                  } else {
-                      UIImage *selectedImage = [UIImage imageWithData:imageData];
-                      imageData = UIImagePNGRepresentation(selectedImage);
-                      [imageData writeToFile:imagePath atomically:YES];
-                  }
-
-                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    weakItem.detail = @"已设置";
-                    [weakItem refreshCell];
+              if (!originalImageURL) {
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                    [DYYYUtils showToast:@"无法获取选中的图片"];
                   });
+                  return;
               }
+
+              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                NSString *documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+                NSString *dyyyFolderPath = [documentsPath stringByAppendingPathComponent:@"DYYY"];
+                NSString *imagePath = [dyyyFolderPath stringByAppendingPathComponent:saveFilename];
+                NSData *imageData = [NSData dataWithContentsOfURL:originalImageURL];
+
+                if (!imageData) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                      [DYYYUtils showToast:@"读取图片数据失败"];
+                    });
+                    return;
+                }
+
+                NSFileManager *fileManager = [NSFileManager defaultManager];
+                if (![fileManager fileExistsAtPath:dyyyFolderPath]) {
+                    [fileManager createDirectoryAtPath:dyyyFolderPath withIntermediateDirectories:YES attributes:nil error:nil];
+                }
+
+                const char *bytes = (const char *)imageData.bytes;
+                BOOL isGIF = (imageData.length >= 6 && (memcmp(bytes, "GIF87a", 6) == 0 || memcmp(bytes, "GIF89a", 6) == 0));
+                if (!isGIF) {
+                    UIImage *selectedImage = [UIImage imageWithData:imageData];
+                    imageData = UIImagePNGRepresentation(selectedImage);
+                }
+
+                BOOL writeSuccess = [imageData writeToFile:imagePath atomically:YES];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                  if (writeSuccess) {
+                      weakItem.detail = @"已设置";
+                      [weakItem refreshCell];
+                  } else {
+                      [DYYYUtils showToast:@"保存图标失败"];
+                  }
+                });
+              });
             };
 
             static char kDYYYPickerDelegateKey;
@@ -588,7 +714,7 @@ static void showIconOptionsDialog(NSString *title, UIImage *previewImage, NSStri
 + (void)showUserAgreementAlert {
     [self showTextInputAlert:@"用户协议"
         defaultText:@""
-        placeholder:@""
+        placeholder:@"我已阅读并同意继续使用"
         onConfirm:^(NSString *text) {
           if ([text isEqualToString:@"我已阅读并同意继续使用"]) {
               [self setUserDefaults:@"YES" forKey:@"DYYYUserAgreementAccepted"];

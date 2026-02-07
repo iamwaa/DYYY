@@ -4,7 +4,7 @@
 #define DYYY_NAME @"DYYY"
 #define DYYY_SETTINGS_NAME @"DYYY设置"
 
-#define DYYY_VERSION @"2.2-8"
+#define DYYY_VERSION @"2.2-9"
 
 // 默认的远程 ABTest 配置地址
 #define DYYY_DEFAULT_ABTEST_URL @"https://github.com/Nathalie-Annis/AWEABTestDataPatch/releases/latest/download/ABTestDataPatch_A.json"
@@ -19,5 +19,9 @@
 #define DYYY_REMOTE_MODE_STRING @"远程模式：启动时自动检查更新"
 
 #define DYYYGeonamesErrorDomain @"com.dyyy.geonames.api.error"
+#define DYYYGeonamesStatusUserInfoKey @"com.dyyy.geonames.api.status"
+
+// 评论区语音保存开关
+#define DYYY_SAVE_COMMENT_AUDIO_KEY @"DYYYSaveCommentAudio"
 
 #endif

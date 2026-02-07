@@ -3,25 +3,6 @@
 #import "DYYYUtils.h"
 #import <objc/runtime.h>
 
-@interface AWEABTestManager : NSObject
-@property(retain, nonatomic) NSMutableDictionary *consistentABTestDic;
-@property(copy, nonatomic) NSDictionary *abTestData;
-@property(copy, nonatomic) NSDictionary *performanceReversalDic;
-@property(nonatomic) BOOL performanceReversalEnabled;
-@property(nonatomic) BOOL handledNetFirstBackNotification;
-@property(nonatomic) BOOL lastUpdateByIncrement;
-@property(nonatomic) BOOL shouldPrintLog;
-@property(nonatomic) BOOL localABSettingEnabled;
-- (void)fetchConfiguration:(id)arg1;
-- (void)fetchConfigurationWithRetry:(BOOL)arg1 completion:(id)arg2;
-- (void)incrementalUpdateData:(id)arg1 unchangedKeyList:(id)arg2;
-- (void)overrideABTestData:(id)arg1 needCleanCache:(BOOL)arg2;
-- (void)setAbTestData:(id)arg1;
-- (void)_saveABTestData:(id)arg1;
-- (id)getValueOfConsistentABTestWithKey:(id)arg1;
-+ (id)sharedManager;
-@end
-
 static BOOL s_abTestBlockEnabled = NO;
 static BOOL s_isApplyingFixedData = NO;
 static NSDictionary *s_localABTestData = nil;
@@ -262,11 +243,17 @@ static void DYYYQueueSync(dispatch_block_t block) {
       if (urlString.length == 0) {
           urlString = kDefaultRemoteConfigURL;
       }
-      NSURL *url = [NSURL URLWithString:urlString];
-      if (!url) {
+      NSURLComponents *components = [NSURLComponents componentsWithString:urlString];
+      NSString *scheme = components.scheme.lowercaseString;
+      BOOL invalidURL = NO;
+      if (!components || components.host.length == 0 || !scheme || ![scheme isEqualToString:@"https"]) {
+          invalidURL = YES;
+      }
+      NSURL *url = components.URL;
+      if (invalidURL || !url) {
           if (notify) {
               dispatch_async(dispatch_get_main_queue(), ^{
-                [DYYYUtils showToast:@"配置更新失败"];
+                [DYYYUtils showToast:@"配置地址无效"];
               });
           }
           return;
@@ -274,27 +261,38 @@ static void DYYYQueueSync(dispatch_block_t block) {
       NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:url
                                                                completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
                                                                  BOOL updated = NO;
+                                                                 NSError *validationError = nil;
                                                                  if (data && !error) {
-                                                                     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-                                                                     NSString *documentsDirectory = [paths firstObject];
-                                                                     NSString *dyyyFolderPath = [documentsDirectory stringByAppendingPathComponent:@"DYYY"];
-                                                                     NSString *jsonFilePath = [dyyyFolderPath stringByAppendingPathComponent:@"abtest_data_fixed.json"];
-                                                                     [[NSFileManager defaultManager] createDirectoryAtPath:dyyyFolderPath withIntermediateDirectories:YES attributes:nil error:nil];
-                                                                     NSData *existingData = [NSData dataWithContentsOfFile:jsonFilePath];
-                                                                     if (!existingData || ![existingData isEqualToData:data]) {
-                                                                         [data writeToFile:jsonFilePath atomically:YES];
-                                                                         updated = YES;
-                                                                     }
-                                                                     if ([DYYYABTestHook isRemoteMode]) {
-                                                                         [[NSUserDefaults standardUserDefaults] setBool:YES forKey:DYYY_REMOTE_CONFIG_FLAG_KEY];
-                                                                         [[NSUserDefaults standardUserDefaults] synchronize];
-                                                                         [[NSNotificationCenter defaultCenter] postNotificationName:DYYY_REMOTE_CONFIG_CHANGED_NOTIFICATION object:nil];
+                                                                     id jsonObject = [NSJSONSerialization JSONObjectWithData:data options:0 error:&validationError];
+                                                                     if (validationError || ![jsonObject isKindOfClass:[NSDictionary class]]) {
+                                                                         if (!validationError) {
+                                                                             validationError = [NSError errorWithDomain:@"com.dyyy.remoteconfig" code:-1 userInfo:@{NSLocalizedDescriptionKey : @"配置格式错误"}];
+                                                                         }
+                                                                     } else {
+                                                                         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+                                                                         NSString *documentsDirectory = [paths firstObject];
+                                                                         NSString *dyyyFolderPath = [documentsDirectory stringByAppendingPathComponent:@"DYYY"];
+                                                                         NSString *jsonFilePath = [dyyyFolderPath stringByAppendingPathComponent:@"abtest_data_fixed.json"];
+                                                                         [[NSFileManager defaultManager] createDirectoryAtPath:dyyyFolderPath withIntermediateDirectories:YES attributes:nil error:nil];
+                                                                         NSData *existingData = [NSData dataWithContentsOfFile:jsonFilePath];
+                                                                         if (!existingData || ![existingData isEqualToData:data]) {
+                                                                             [data writeToFile:jsonFilePath atomically:YES];
+                                                                             updated = YES;
+                                                                         }
+                                                                         if ([DYYYABTestHook isRemoteMode]) {
+                                                                             [[NSUserDefaults standardUserDefaults] setBool:YES forKey:DYYY_REMOTE_CONFIG_FLAG_KEY];
+                                                                             [[NSNotificationCenter defaultCenter] postNotificationName:DYYY_REMOTE_CONFIG_CHANGED_NOTIFICATION object:nil];
+                                                                         }
                                                                      }
                                                                  }
                                                                  dispatch_async(dispatch_get_main_queue(), ^{
                                                                    if (error || !data) {
                                                                        if (notify) {
                                                                            [DYYYUtils showToast:@"配置更新失败"];
+                                                                       }
+                                                                   } else if (validationError) {
+                                                                       if (notify) {
+                                                                           [DYYYUtils showToast:@"配置解析失败"];
                                                                        }
                                                                    } else if (updated) {
                                                                        if (notify) {
@@ -326,18 +324,29 @@ static void DYYYQueueSync(dispatch_block_t block) {
 - (void)setAbTestData:(id)data {
     __block BOOL shouldBlock = NO;
     DYYYQueueSync(^{
-      // 在队列上安全地检查禁止下发标志 和 正在应用本地数据的标志
-      // 如果禁止下发开启 并且 不是正在应用本地数据，则阻止
-      if (s_abTestBlockEnabled && !s_isApplyingFixedData) {
-          shouldBlock = YES;
-      }
+        // 在队列上安全地检查禁止下发标志 和 正在应用本地数据的标志
+        // 如果禁止下发开启 并且 不是正在应用本地数据，则阻止
+        if (s_abTestBlockEnabled && !s_isApplyingFixedData) {
+            shouldBlock = YES;
+        }
     });
 
     if (shouldBlock) {
         NSLog(@"[DYYY] 阻止ABTest数据更新 (启用了禁止下发配置且非本地应用)");
         return;
     }
-    %orig;
+
+    if ([data isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *mutableData = [data mutableCopy];
+        NSDictionary *config = data[@"hp_tab_bar_custom_height_config"];
+        if ([config isKindOfClass:[NSDictionary class]]) {
+            NSMutableDictionary *mutableConfig = [config mutableCopy];
+            mutableConfig[@"enabled"] = @(NO);
+            mutableData[@"hp_tab_bar_custom_height_config"] = [mutableConfig copy];
+            data = [mutableData copy];
+        }
+    }
+    %orig(data);
 }
 
 /**
@@ -348,14 +357,26 @@ static void DYYYQueueSync(dispatch_block_t block) {
 - (void)incrementalUpdateData:(id)data unchangedKeyList:(id)keyList {
     __block BOOL shouldBlock = NO;
     DYYYQueueSync(^{
-      shouldBlock = s_abTestBlockEnabled;
+        shouldBlock = s_abTestBlockEnabled;
     });
 
     if (shouldBlock) {
         NSLog(@"[DYYY] 阻止增量更新ABTest数据 (启用了禁止下发配置)");
         return;
     }
-    %orig;
+
+    if ([data isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *mutableData = [data mutableCopy];
+        NSDictionary *config = data[@"hp_tab_bar_custom_height_config"];
+        if ([config isKindOfClass:[NSDictionary class]]) {
+            NSMutableDictionary *mutableConfig = [config mutableCopy];
+            mutableConfig[@"enabled"] = @(NO);
+            mutableData[@"hp_tab_bar_custom_height_config"] = [mutableConfig copy];
+            data = [mutableData copy];
+        }
+    }
+
+    %orig(data, keyList);
 }
 
 /**
@@ -366,14 +387,14 @@ static void DYYYQueueSync(dispatch_block_t block) {
 - (void)fetchConfigurationWithRetry:(BOOL)retry completion:(id)completion {
     __block BOOL shouldBlock = NO;
     DYYYQueueSync(^{
-      shouldBlock = s_abTestBlockEnabled;
+        shouldBlock = s_abTestBlockEnabled;
     });
 
     if (shouldBlock) {
         NSLog(@"[DYYY] 阻止从网络获取ABTest配置 (启用了禁止下发配置)");
         if (completion && [completion isKindOfClass:%c(NSBlock)]) {
             dispatch_async(dispatch_get_main_queue(), ^{
-              ((void (^)(id))completion)(nil);
+                ((void (^)(id))completion)(nil);
             });
         }
         return;
@@ -389,7 +410,7 @@ static void DYYYQueueSync(dispatch_block_t block) {
 - (void)fetchConfiguration:(id)arg1 {
     __block BOOL shouldBlock = NO;
     DYYYQueueSync(^{
-      shouldBlock = s_abTestBlockEnabled;
+        shouldBlock = s_abTestBlockEnabled;
     });
 
     if (shouldBlock) {
@@ -402,19 +423,31 @@ static void DYYYQueueSync(dispatch_block_t block) {
 /**
  * Hook: 重写ABTest数据
  * 在禁止下发模式下阻止覆盖数据
- * 使用 dispatch_sync 在队列上同步检查状态
+ * 特殊处理：强制把 "hp_tab_bar_custom_height_config.enabled" 设为 false
  */
 - (void)overrideABTestData:(id)data needCleanCache:(BOOL)cleanCache {
     __block BOOL shouldBlock = NO;
     DYYYQueueSync(^{
-      shouldBlock = s_abTestBlockEnabled;
+        shouldBlock = s_abTestBlockEnabled;
     });
 
     if (shouldBlock) {
         NSLog(@"[DYYY] 阻止重写ABTest数据 (启用了禁止下发配置)");
         return;
     }
-    %orig;
+
+    if ([data isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *mutableData = [data mutableCopy];
+        NSDictionary *config = data[@"hp_tab_bar_custom_height_config"];
+        if ([config isKindOfClass:[NSDictionary class]]) {
+            NSMutableDictionary *mutableConfig = [config mutableCopy];
+            mutableConfig[@"enabled"] = @(NO);
+            mutableData[@"hp_tab_bar_custom_height_config"] = [mutableConfig copy];
+            data = [mutableData copy];
+        }
+    }
+
+    %orig(data, cleanCache);
 }
 
 /**
@@ -425,14 +458,26 @@ static void DYYYQueueSync(dispatch_block_t block) {
 - (void)_saveABTestData:(id)data {
     __block BOOL shouldBlock = NO;
     DYYYQueueSync(^{
-      shouldBlock = s_abTestBlockEnabled;
+        shouldBlock = s_abTestBlockEnabled;
     });
 
     if (shouldBlock) {
         NSLog(@"[DYYY] 阻止保存ABTest数据 (启用了禁止下发配置)");
         return;
     }
-    %orig;
+
+    if ([data isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *mutableData = [data mutableCopy];
+        NSDictionary *config = data[@"hp_tab_bar_custom_height_config"];
+        if ([config isKindOfClass:[NSDictionary class]]) {
+            NSMutableDictionary *mutableConfig = [config mutableCopy];
+            mutableConfig[@"enabled"] = @(NO);
+            mutableData[@"hp_tab_bar_custom_height_config"] = [mutableConfig copy];
+            data = [mutableData copy];
+        }
+    }
+
+    %orig(data);
 }
 
 %end

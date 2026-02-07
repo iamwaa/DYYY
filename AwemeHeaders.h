@@ -124,6 +124,7 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @property(nonatomic, assign) BOOL isAds;
 @property(nonatomic, assign) BOOL isLive;
 @property(nonatomic, assign) BOOL isLivePhoto;
+@property(nonatomic, assign) BOOL isNewTextMode;  // 文字图文专有属性
 @property(nonatomic, strong) NSString *shareURL;
 @property(nonatomic, strong) id hotSpotLynxCardModel;
 @property(nonatomic, strong) AWELiveFollowFeedCellModel *cellRoom;
@@ -138,6 +139,7 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @property(nonatomic, strong) AWEAwemeStatisticsModel *statistics;
 @property(nonatomic, strong) AWEPropGuideV2Model *propGuideV2;
 @property(nonatomic, strong) AWEECommerceLabel *ecommerceBelowLabel;
+@property(nonatomic, assign) BOOL isShowLandscapeEntryView;
 - (BOOL)isLive;
 - (BOOL)contentFilter;
 - (AWESearchAwemeExtraModel *)searchExtraModel;
@@ -148,6 +150,26 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 @interface AWEAwemeStatusModel : NSObject
 - (void)setListenVideoStatus:(NSInteger)status;
+@end
+
+@interface AWEABTestManager : NSObject
++ (id)sharedManager;
+@property(retain, nonatomic) NSMutableDictionary *consistentABTestDic;
+@property(copy, nonatomic) NSDictionary *abTestData;
+@property(copy, nonatomic) NSDictionary *performanceReversalDic;
+@property(nonatomic) BOOL performanceReversalEnabled;
+@property(nonatomic) BOOL handledNetFirstBackNotification;
+@property(nonatomic) BOOL lastUpdateByIncrement;
+@property(nonatomic) BOOL shouldPrintLog;
+@property(nonatomic) BOOL localABSettingEnabled;
+- (void)fetchConfiguration:(id)arg1;
+- (void)fetchConfigurationWithRetry:(BOOL)arg1 completion:(id)arg2;
+- (void)incrementalUpdateData:(id)arg1 unchangedKeyList:(id)arg2;
+- (void)overrideABTestData:(id)arg1 needCleanCache:(BOOL)arg2;
+- (void)setAbTestData:(id)arg1;
+- (void)_saveABTestData:(id)arg1;
+- (id)getValueOfConsistentABTestWithKey:(id)arg1;
++ (id)sharedManager;
 @end
 
 @interface AWELongPressPanelBaseViewModel : NSObject
@@ -162,6 +184,10 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 - (void)setDuxIconName:(NSString *)iconName;
 - (void)setDescribeString:(NSString *)descString;
 - (void)setAction:(void (^)(void))action;
+@end
+
+@interface AWEPlayVideoViewController : UIViewController
+@property(nonatomic, strong) AWEAwemeModel *model;
 @end
 
 @interface AWELongPressPanelViewGroupModel : NSObject
@@ -205,6 +231,9 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface AWEFeedContainerContentView : UIView
+@end
+
+@interface TTMetalView : UIView
 @end
 
 @interface AWELeftSideBarEntranceView : UIView
@@ -348,6 +377,9 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface AWETabBarSkinContainerView : UIView
+@end
+
+@interface AWETabBarElementContainerView : UIView
 @end
 
 @interface AWENormalModeTabBar : UIView
@@ -497,8 +529,15 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @property(nonatomic, copy) NSString *accessibilityLabel;
 @end
 
+// 评论区实况照片模型
+@interface AWECommentLivePhotoModel : NSObject
+@property(nonatomic, copy) NSArray *videoUrl;
+@end
+
 @interface AWECommentImageModel : NSObject
-@property(nonatomic, copy) NSString *originUrl;
+@property(nonatomic, strong) AWEURLModel *originUrl;
+@property(nonatomic, strong) AWEURLModel *mediumUrl;
+@property(nonatomic, strong) AWECommentLivePhotoModel *livePhotoModel;
 @end
 
 @class AWECommentModel;
@@ -513,11 +552,20 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 
 @interface AWECommentLongPressPanelParam : NSObject
 - (AWECommentModel *)selectdComment;
+- (NSDictionary *)extraParams;
+@end
+
+@interface AWECommentAudioModel : NSObject
+@property (nonatomic, copy, readwrite) NSString *content;
 @end
 
 @interface AWECommentModel : NSObject
+@property (nonatomic, strong, readwrite) AWECommentAudioModel *audioModel;
+@property (nonatomic, strong, readwrite) AWEUserModel *author;
+@property (nonatomic, strong, readwrite) NSNumber *createTime;
 - (AWEIMStickerModel *)sticker;
 - (NSString *)content;
+- (NSArray<AWECommentImageModel *> *)imageList;
 @end
 
 @interface AWEIMStickerModel : NSObject
@@ -530,6 +578,13 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 
 @interface _TtC33AWECommentLongPressPanelSwiftImpl32CommentLongPressPanelCopyElement : NSObject
 - (AWECommentLongPressPanelContext *)commentPageContext;
+@end
+
+@interface AWECommentLongPressPanelSwiftImpl_CommentLongPressPanelReportElement : NSObject
+- (AWECommentLongPressPanelContext *)commentPageContext;
+- (BOOL)elementShouldShow;
+- (id)elementContent;
+- (id)elementImage;
 @end
 
 @interface AWEFeedProgressSlider : UIView
@@ -573,6 +628,10 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @interface AWEIMMessageTabOptPushBannerView : UIView
 @property(nonatomic, strong, readonly) UIView *superview;
 @property(nonatomic, assign, getter=isHidden) BOOL hidden;
+@end
+
+@interface AWEIMMessageTabSideBarView : UIView
+@property(nonatomic, strong, readonly) UIView *superview;
 @end
 
 @interface AWEECommerceEntryView : UIView
@@ -1136,6 +1195,11 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 - (void)setVideoControllerPlaybackRate:(double)arg0;
 @end
 
+@interface AWEDPlayerViewController_Merge : UIViewController
+@property(nonatomic) UIView *contentView;
+- (void)setVideoControllerPlaybackRate:(double)arg0;
+@end
+
 @interface AWEPlayInteractionElementMaskView : UIView
 @end
 @interface AWEGradientView : UIView
@@ -1336,6 +1400,10 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 - (void)adjustPlaybackSpeed:(float)speed;
 @end
 
+@interface AWEDPlayerViewController_Merge (SpeedControl)
+- (void)adjustPlaybackSpeed:(float)speed;
+@end
+
 @interface AWELeftSideBarModel : NSObject
 @property(nonatomic, copy) NSArray *moduleModels;
 @property(nonatomic, retain) NSArray *bottomModuleModels;
@@ -1366,4 +1434,37 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface TTPlayerView : UIView
+@end
+
+// 开屏广告
+@interface BDASplashManager : NSObject
+- (void)showSplashControllerViewOnKeyWindow:(id)keyWindow model:(id)model;
+- (void)splashViewShowFinished;
+@end
+
+// 投屏 VPN 检测
+@interface BDByteCastUtils : NSObject
++ (BOOL)netVPNStatus;
+@end
+
+@interface BDByteCastNetUtilities : NSObject
+- (BOOL)getVPNStatus;
+@end
+
+@interface BDByteCastMonitorManager : NSObject
+- (BOOL)netVPNStatus;
+- (void)setNetVPNStatus:(BOOL)netVPNStatus;
+@end
+
+@interface BDByteCastEnvInfo : NSObject
+- (BOOL)isVPNActive;
+- (void)setIsVPNActive:(BOOL)isVPNActive;
+@end
+
+@interface BDByteScreenCastContext : NSObject
+- (BOOL)isVPNActive;
+- (void)setIsVPNActive:(BOOL)isVPNActive;
+@end
+
+@interface AWEDPlayerProgressContainerView : UIView
 @end

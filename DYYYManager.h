@@ -86,6 +86,26 @@
                                completion:(void (^)(NSInteger successCount, NSInteger totalCount))completion;
 
 /**
+ * 保存评论区图片（支持普通图片和实况照片）
+ * @param imageModels 评论图片模型数组（AWECommentImageModel）
+ * @param currentIndex 当前图片索引（-1 表示保存全部）
+ * @param completion 完成回调
+ */
++ (void)saveCommentImages:(NSArray *)imageModels
+             currentIndex:(NSInteger)currentIndex
+               completion:(void (^)(NSInteger successCount, NSInteger livePhotoCount, NSInteger failedCount))completion;
+
+/**
+ * 下载并分享评论区语音
+ * @param audioContent 语音内容 JSON 字符串
+ * @param userName 评论者用户名
+ * @param createTime 评论创建时间（NSNumber，秒级时间戳）
+ */
++ (void)downloadAndShareCommentAudio:(NSString *)audioContent
+                            userName:(NSString *)userName
+                          createTime:(NSNumber *)createTime;
+
+/**
  * 批量下载图片
  * @param imageURLs 图片URL数组
  */
@@ -148,6 +168,18 @@
  * @param completion 完成回调，返回GIF文件URL和是否成功
  */
 + (void)convertWebpToGifSafely:(NSURL *)webpURL completion:(void (^)(NSURL *gifURL, BOOL success))completion;
+
+/**
+ * 使用 YYImage 解码动图数据，返回帧图像和总时长
+ * @param data 动图数据
+ * @param scale 目标缩放
+ * @param images 输出帧数组
+ * @param totalDuration 输出总时长
+ */
++ (BOOL)framesFromAnimatedData:(NSData *)data
+                          scale:(CGFloat)scale
+                         images:(NSArray<UIImage *> *_Nullable *)images
+                  totalDuration:(CGFloat *_Nullable)totalDuration;
 
 // 动画贴纸和GIF相关方法
 + (void)saveAnimatedSticker:(YYAnimatedImageView *)targetStickerView;

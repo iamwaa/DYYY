@@ -1,6 +1,7 @@
 #import "DYYYUtils.h"
 #import <MobileCoreServices/UTCoreTypes.h>
 #import <UIKit/UIKit.h>
+#import <math.h>
 #import <os/lock.h>
 #import <stdatomic.h>
 #import <objc/runtime.h>
@@ -9,9 +10,104 @@
 #import "DYYYToast.h"
 #import "DYYYConstants.h"
 
+static const void *kLabelColorStateKey = &kLabelColorStateKey;
+
+@interface DYYYLabelColorState : NSObject
+@property(nonatomic, copy) NSString *textSignature;
+@property(nonatomic, copy) NSString *colorKey;
+@property(nonatomic, copy) NSString *fontName;
+@property(nonatomic, assign) CGFloat fontSize;
+@end
+
+@implementation DYYYLabelColorState
+@end
+
+static inline BOOL DYYYStringsEqual(NSString *lhs, NSString *rhs) {
+    if (lhs == rhs) {
+        return YES;
+    }
+    return [lhs isEqualToString:rhs];
+}
+
+static NSString *DYYYNormalizedColorKey(NSString *colorHexString) {
+    if (colorHexString.length == 0) {
+        return nil;
+    }
+    NSCharacterSet *whitespace = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    NSString *trimmed = [colorHexString stringByTrimmingCharactersInSet:whitespace];
+    if (trimmed.length == 0) {
+        return nil;
+    }
+    return trimmed.lowercaseString;
+}
+
+static BOOL DYYYColorKeyIsDynamic(NSString *normalizedKey) {
+    if (normalizedKey.length == 0) {
+        return NO;
+    }
+    NSString *key = [normalizedKey hasPrefix:@"#"] ? [normalizedKey substringFromIndex:1] : normalizedKey;
+    return [key isEqualToString:@"random"] || [key isEqualToString:@"random_gradient"] || [key isEqualToString:@"rainbow_rotating"];
+}
+
+@interface DYYYUtils ()
++ (NSString *)fallbackLocationFromIPAttribution:(AWEAwemeModel *)model;
++ (NSString *)displayLocationForGeoNamesError:(NSError *)error model:(AWEAwemeModel *)model;
+@end
+
 @implementation DYYYUtils
 
 static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
+
+static NSString *DYYYJSONStringFromObject(id object) {
+    if (!object) {
+        return nil;
+    }
+    if (![NSJSONSerialization isValidJSONObject:object]) {
+        return nil;
+    }
+
+    NSError *error = nil;
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:object options:0 error:&error];
+    if (error || jsonData.length == 0) {
+        return nil;
+    }
+
+    return [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+}
+
+static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLocation, NSString *colorHexString) {
+    if (!label) {
+        return;
+    }
+
+    NSString *resolvedLocation = displayLocation ?: @"";
+    resolvedLocation = [resolvedLocation stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (resolvedLocation.length == 0) {
+        resolvedLocation = @"未知";
+    }
+
+    NSString *currentLabelText = label.text ?: @"";
+    NSString *newText = nil;
+    NSRange ipRange = [currentLabelText rangeOfString:@"IP属地："];
+    if (ipRange.location != NSNotFound) {
+        NSString *baseText = [currentLabelText substringToIndex:ipRange.location];
+        newText = [NSString stringWithFormat:@"%@IP属地：%@", baseText, resolvedLocation];
+    } else {
+        if (currentLabelText.length > 0) {
+            newText = [NSString stringWithFormat:@"%@  IP属地：%@", currentLabelText, resolvedLocation];
+        } else {
+            newText = [NSString stringWithFormat:@"IP属地：%@", resolvedLocation];
+        }
+    }
+
+    if (newText.length > 0 && ![label.text isEqualToString:newText]) {
+        label.text = newText;
+    } else if (label.text.length == 0) {
+        label.text = newText;
+    }
+
+    [DYYYUtils applyColorSettingsToLabel:label colorHexString:colorHexString];
+}
 
 + (void)processAndApplyIPLocationToLabel:(UILabel *)label forModel:(AWEAwemeModel *)model withLabelColor:(NSString *)colorHexString {
     NSString *originalText = label.text ?: @"";
@@ -73,29 +169,20 @@ static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
                 displayLocation = localName;
             }
 
+            if (displayLocation.length == 0 || [displayLocation isEqualToString:@"未知"]) {
+                NSString *fallbackLocation = [DYYYUtils fallbackLocationFromIPAttribution:model];
+                if (fallbackLocation.length > 0) {
+                    displayLocation = fallbackLocation;
+                }
+            }
+
             dispatch_async(dispatch_get_main_queue(), ^{
               NSString *currentRequestCode = objc_getAssociatedObject(label, kCurrentIPRequestCityCodeKey);
               if (![currentRequestCode isEqualToString:cityCode]) {
                   return;
               }
 
-              NSString *currentLabelText = label.text ?: @"";
-              if ([currentLabelText containsString:@"IP属地："]) {
-                  NSRange range = [currentLabelText rangeOfString:@"IP属地："];
-                  if (range.location != NSNotFound) {
-                      NSString *baseText = [currentLabelText substringToIndex:range.location];
-                      if (![currentLabelText containsString:displayLocation]) {
-                          label.text = [NSString stringWithFormat:@"%@IP属地：%@", baseText, displayLocation];
-                      }
-                  }
-              } else {
-                  if (currentLabelText.length > 0 && ![displayLocation isEqualToString:@"未知"]) {
-                      label.text = [NSString stringWithFormat:@"%@  IP属地：%@", currentLabelText, displayLocation];
-                  } else if (![displayLocation isEqualToString:@"未知"]) {
-                      label.text = [NSString stringWithFormat:@"IP属地：%@", displayLocation];
-                  }
-              }
-              [DYYYUtils applyColorSettingsToLabel:label colorHexString:colorHexString];
+              DYYYApplyDisplayLocationToLabel(label, displayLocation, colorHexString);
             });
         } else {
             [CityManager fetchLocationWithGeonameId:cityCode
@@ -103,13 +190,17 @@ static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
                                     __block NSString *displayLocation = @"未知";
 
                                     if (error) {
-                                        if ([error.domain isEqualToString:DYYYGeonamesErrorDomain] && error.code == 11) {
-                                            displayLocation = error.localizedDescription;
+                                        if ([error.domain isEqualToString:DYYYGeonamesErrorDomain]) {
+                                            displayLocation = [DYYYUtils displayLocationForGeoNamesError:error model:model];
                                         } else {
                                             NSLog(@"[DYYY] GeoNames fetch failed: %@", error.localizedDescription);
-                                            return;
+                                            NSString *fallbackLocation = [DYYYUtils fallbackLocationFromIPAttribution:model];
+                                            if (fallbackLocation.length > 0) {
+                                                displayLocation = fallbackLocation;
+                                            }
                                         }
                                     } else if (locationInfo) {
+                                        BOOL shouldCacheLocation = NO;
                                         NSString *countryName = locationInfo[@"countryName"];
                                         NSString *adminName1 = locationInfo[@"adminName1"];
                                         NSString *localName = locationInfo[@"name"];
@@ -122,11 +213,21 @@ static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
                                             } else {
                                                 displayLocation = countryName;
                                             }
+                                            shouldCacheLocation = YES;
                                         } else if (localName.length > 0) {
                                             displayLocation = localName;
+                                            shouldCacheLocation = YES;
                                         }
 
-                                        if (![displayLocation isEqualToString:@"未知"]) {
+                                        if (displayLocation.length == 0 || [displayLocation isEqualToString:@"未知"]) {
+                                            NSString *fallbackLocation = [DYYYUtils fallbackLocationFromIPAttribution:model];
+                                            if (fallbackLocation.length > 0) {
+                                                displayLocation = fallbackLocation;
+                                            }
+                                            shouldCacheLocation = NO;
+                                        }
+
+                                        if (shouldCacheLocation && ![displayLocation isEqualToString:@"未知"]) {
                                             [geoNamesCache setObject:locationInfo forKey:cacheKey];
                                             NSString *cachesDir = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject];
                                             NSString *geoNamesCacheDir = [cachesDir stringByAppendingPathComponent:@"DYYYGeoNamesCache"];
@@ -141,23 +242,7 @@ static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
                                           return;
                                       }
 
-                                      NSString *currentLabelText = label.text ?: @"";
-                                      if ([currentLabelText containsString:@"IP属地："]) {
-                                          NSRange range = [currentLabelText rangeOfString:@"IP属地："];
-                                          if (range.location != NSNotFound) {
-                                              NSString *baseText = [currentLabelText substringToIndex:range.location];
-                                              if (![currentLabelText containsString:displayLocation]) {
-                                                  label.text = [NSString stringWithFormat:@"%@IP属地：%@", baseText, displayLocation];
-                                              }
-                                          }
-                                      } else {
-                                          if (currentLabelText.length > 0 && ![displayLocation isEqualToString:@"未知"]) {
-                                              label.text = [NSString stringWithFormat:@"%@  IP属地：%@", currentLabelText, displayLocation];
-                                          } else if (![displayLocation isEqualToString:@"未知"]) {
-                                              label.text = [NSString stringWithFormat:@"IP属地：%@", displayLocation];
-                                          }
-                                      }
-                                      [DYYYUtils applyColorSettingsToLabel:label colorHexString:colorHexString];
+                                      DYYYApplyDisplayLocationToLabel(label, displayLocation, colorHexString);
                                     });
                                   }];
         }
@@ -183,6 +268,64 @@ static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
         [DYYYUtils applyColorSettingsToLabel:label colorHexString:colorHexString];
     }
 }
+
++ (NSString *)fallbackLocationFromIPAttribution:(AWEAwemeModel *)model {
+    if (!model) {
+        return nil;
+    }
+
+    NSString *rawAttribution = nil;
+    @try {
+        rawAttribution = model.ipAttribution;
+    } @catch (NSException *exception) {
+        return nil;
+    }
+
+    if (![rawAttribution isKindOfClass:[NSString class]]) {
+        return nil;
+    }
+
+    NSString *trimmedValue = [rawAttribution stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmedValue.length == 0) {
+        return nil;
+    }
+
+    NSArray<NSString *> *prefixes = @[ @"IP属地：", @"IP属地:", @"IP 属地：", @"IP 属地:" ];
+    for (NSString *prefix in prefixes) {
+        if ([trimmedValue hasPrefix:prefix]) {
+            trimmedValue = [trimmedValue substringFromIndex:prefix.length];
+            break;
+        }
+    }
+
+    trimmedValue = [trimmedValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+
+    return trimmedValue.length > 0 ? trimmedValue : nil;
+}
+
++ (NSString *)displayLocationForGeoNamesError:(NSError *)error model:(AWEAwemeModel *)model {
+    NSString *fallbackLocation = [DYYYUtils fallbackLocationFromIPAttribution:model];
+    if (fallbackLocation.length > 0) {
+        return fallbackLocation;
+    }
+
+    NSDictionary *status = error.userInfo[DYYYGeonamesStatusUserInfoKey];
+    if ([status isKindOfClass:[NSDictionary class]]) {
+        NSString *statusJSON = DYYYJSONStringFromObject(@{ @"status" : status });
+        if (statusJSON.length > 0) {
+            return [NSString stringWithFormat:@"未知 %@", statusJSON];
+        }
+    }
+
+    NSString *message = error.localizedDescription ?: @"";
+    message = [message stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (message.length > 0) {
+        return [NSString stringWithFormat:@"未知 %@", message];
+    }
+
+    return @"未知";
+}
+
 #pragma mark - Public UI Utilities (公共 UI/窗口/控制器 工具)
 
 + (UIWindow *)getActiveWindow {
@@ -611,16 +754,43 @@ static os_unfair_lock _staticColorCreationLock = OS_UNFAIR_LOCK_INIT;
 }
 
 + (void)applyColorSettingsToLabel:(UILabel *)label colorHexString:(NSString *)colorHexString {
-    NSMutableAttributedString *attributedText;
-    if ([label.attributedText isKindOfClass:[NSAttributedString class]]) {
-        attributedText = [[NSMutableAttributedString alloc] initWithAttributedString:label.attributedText];
-    } else {
-        attributedText = [[NSMutableAttributedString alloc] initWithString:label.text ?: @""];
+    if (!label)
+        return;
+
+    NSAttributedString *existingAttributed = nil;
+    if ([label.attributedText isKindOfClass:[NSAttributedString class]] && label.attributedText.length > 0) {
+        existingAttributed = label.attributedText;
     }
 
-    if (attributedText.length == 0) {
-        label.attributedText = attributedText;
+    NSString *textSignature = existingAttributed.string;
+    if (textSignature.length == 0) {
+        NSString *fallbackText = label.text ?: @"";
+        textSignature = fallbackText;
+    }
+
+    if (textSignature.length == 0) {
+        label.attributedText = [[NSAttributedString alloc] initWithString:@""];
         return;
+    }
+
+    UIFont *font = label.font ?: [UIFont systemFontOfSize:[UIFont systemFontSize]];
+    NSString *fontName = font.fontName ?: @"";
+    CGFloat fontSize = font.pointSize;
+
+    NSString *normalizedKey = DYYYNormalizedColorKey(colorHexString);
+    BOOL allowCache = normalizedKey.length == 0 ? YES : !DYYYColorKeyIsDynamic(normalizedKey);
+
+    DYYYLabelColorState *state = objc_getAssociatedObject(label, &kLabelColorStateKey);
+    if (allowCache && state && DYYYStringsEqual(state.textSignature, textSignature) && DYYYStringsEqual(state.colorKey, normalizedKey ?: @"") &&
+        DYYYStringsEqual(state.fontName, fontName) && fabs(state.fontSize - fontSize) <= 0.01) {
+        return;
+    }
+
+    NSMutableAttributedString *attributedText = nil;
+    if (existingAttributed) {
+        attributedText = [[NSMutableAttributedString alloc] initWithAttributedString:existingAttributed];
+    } else {
+        attributedText = [[NSMutableAttributedString alloc] initWithString:textSignature];
     }
 
     NSRange fullRange = NSMakeRange(0, attributedText.length);
@@ -629,30 +799,37 @@ static os_unfair_lock _staticColorCreationLock = OS_UNFAIR_LOCK_INIT;
     [attributedText removeAttribute:NSStrokeWidthAttributeName range:fullRange];
     [attributedText removeAttribute:NSShadowAttributeName range:fullRange];
 
-    if (!colorHexString || colorHexString.length == 0) {
-        [attributedText addAttribute:NSForegroundColorAttributeName value:[UIColor whiteColor] range:fullRange];
-        label.attributedText = attributedText;
-        return;
+    if (![attributedText attribute:NSFontAttributeName atIndex:0 effectiveRange:nil] && font) {
+        [attributedText addAttribute:NSFontAttributeName value:font range:fullRange];
     }
 
-    if (![attributedText attribute:NSFontAttributeName atIndex:0 effectiveRange:nil]) {
-        if (label.font) {
-            [attributedText addAttribute:NSFontAttributeName value:label.font range:fullRange];
+    if (!colorHexString || colorHexString.length == 0) {
+        [attributedText addAttribute:NSForegroundColorAttributeName value:[UIColor whiteColor] range:fullRange];
+    } else {
+        CGSize maxTextSize = CGSizeMake(CGFLOAT_MAX, label.bounds.size.height);
+        CGRect textRect =
+            [attributedText boundingRectWithSize:maxTextSize options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading context:nil];
+        CGFloat actualTextWidth = MAX(1.0, ceil(textRect.size.width));
+
+        UIColor *finalTextColor = [self colorFromSchemeHexString:colorHexString targetWidth:actualTextWidth];
+
+        if (finalTextColor) {
+            [attributedText addAttribute:NSForegroundColorAttributeName value:finalTextColor range:fullRange];
+        } else {
+            [attributedText addAttribute:NSForegroundColorAttributeName value:[UIColor whiteColor] range:fullRange];
         }
     }
 
-    CGSize maxTextSize = CGSizeMake(CGFLOAT_MAX, label.bounds.size.height);
-    CGRect textRect = [attributedText boundingRectWithSize:maxTextSize options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading context:nil];
-    CGFloat actualTextWidth = MAX(1.0, ceil(textRect.size.width));
-
-    UIColor *finalTextColor = [self colorFromSchemeHexString:colorHexString targetWidth:actualTextWidth];
-
-    if (finalTextColor) {
-        [attributedText addAttribute:NSForegroundColorAttributeName value:finalTextColor range:fullRange];
-    } else {
-        [attributedText addAttribute:NSForegroundColorAttributeName value:[UIColor whiteColor] range:fullRange];
-    }
     label.attributedText = attributedText;
+
+    if (!state) {
+        state = [[DYYYLabelColorState alloc] init];
+        objc_setAssociatedObject(label, &kLabelColorStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    state.textSignature = [textSignature copy];
+    state.colorKey = normalizedKey ?: @"";
+    state.fontName = fontName;
+    state.fontSize = fontSize;
 }
 
 + (void)applyStrokeToLabel:(UILabel *)label strokeColor:(UIColor *)strokeColor strokeWidth:(CGFloat)strokeWidth {

@@ -5,6 +5,8 @@
 #  Channel: @huamidev
 #  Created on: 2024/10/04
 #
+# 本地配置文件（可选）
+-include Makefile.local
 
 TARGET = iphone:clang:latest:14.0
 ARCHS = arm64 arm64e
@@ -34,12 +36,9 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = DYYY
 
-DYYY_LIBRARY_SEARCH_PATHS = $(THEOS_PROJECT_DIR)/libs
-DYYY_HEADER_SEARCH_PATHS = $(THEOS_PROJECT_DIR)/libs/include
-
 DYYY_FILES = Waa.xm DYYY.xm DYYYFloatClearButton.xm DYYYFloatSpeedButton.m DYYYSettings.xm DYYYABTestHook.xm DYYYLongPressPanel.xm DYYYSettingsHelper.m DYYYImagePickerDelegate.m DYYYBackupPickerDelegate.m DYYYSettingViewController.m DYYYBottomAlertView.m DYYYCustomInputView.m DYYYOptionsSelectionView.m DYYYIconOptionsDialogView.m DYYYAboutDialogView.m DYYYKeywordListView.m DYYYFilterSettingsView.m DYYYConfirmCloseView.m DYYYToast.m DYYYManager.m DYYYUtils.m CityManager.m AWMSafeDispatchTimer.m
-DYYY_CFLAGS = -fobjc-arc -w -I$(DYYY_HEADER_SEARCH_PATHS)
-DYYY_LDFLAGS = -L$(DYYY_LIBRARY_SEARCH_PATHS) -lwebp -weak_framework AVFAudio
+DYYY_CFLAGS = -fobjc-arc -w
+DYYY_LDFLAGS = -weak_framework AVFAudio
 DYYY_FRAMEWORKS = CoreAudio
 CXXFLAGS += -std=c++11
 CCFLAGS += -std=c++11
@@ -52,9 +51,9 @@ export LOGOS_DEFAULT_GENERATOR=internal
 include $(THEOS_MAKE_PATH)/tweak.mk
 
 ifeq ($(shell whoami),huami)
-    THEOS_DEVICE_IP = 192.168.31.222
+    THEOS_DEVICE_IP = 192.168.31.227
 else
-    THEOS_DEVICE_IP = 192.168.15.106
+    THEOS_DEVICE_IP = 192.168.1.202
 endif
 THEOS_DEVICE_PORT = 22
 

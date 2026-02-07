@@ -8,7 +8,7 @@
  * @param key 设置键名
  * @return 布尔值设置
  */
-+ (bool)getUserDefaults:(NSString *)key;
++ (BOOL)getUserDefaults:(NSString *)key;
 
 /**
  * 设置用户默认值
@@ -145,3 +145,5 @@
 + (void)showUserAgreementAlert;
 
 @end
+
+FOUNDATION_EXPORT void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed);
