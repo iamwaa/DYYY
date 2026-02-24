@@ -2941,12 +2941,8 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 - (void)layoutSubviews {
     %orig;
     if (DYYYGetBool(@"DYYYHideShareContentView")) {
-        UIView *parentView = self.superview;
-        if (parentView) {
-            parentView.hidden = YES;
-        } else {
-            self.hidden = YES;
-        }
+        [self removeFromSuperview];
+        return;
     }
 }
 
@@ -8076,17 +8072,3 @@ static void findTargetViewInView(UIView *view) {
                                                     }];
     }
 }
-
-// 隐藏底部分享给好友
-
-%hook AWEPlayInteractionStrongifyShareContentView
-
-- (void)layoutSubviews {
-    %orig;
-    if (DYYYGetBool(@"DYYYHideShareFriends")) {
-        [self removeFromSuperview];
-        return;
-    }
-}
-
-%end
