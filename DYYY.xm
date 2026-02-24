@@ -8076,3 +8076,17 @@ static void findTargetViewInView(UIView *view) {
                                                     }];
     }
 }
+
+// 隐藏底部分享给好友
+
+%hook AWEPlayInteractionStrongifyShareContentView
+
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideShareFriends")) {
+        [self removeFromSuperview];
+        return;
+    }
+}
+
+%end
