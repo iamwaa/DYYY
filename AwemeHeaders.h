@@ -130,6 +130,7 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @property(nonatomic, strong) AWELiveFollowFeedCellModel *cellRoom;
 @property(nonatomic, strong) NSString *videoFeedTag;
 @property(nonatomic, strong) id shareRecExtra;  // 推荐视频专有属性
+@property (nonatomic, copy) NSString *referString; // 推荐页为 homepage_hot
 @property(nonatomic, strong) NSArray<AWEAwemeTextExtraModel *> *textExtras;
 @property(nonatomic, copy) NSString *itemTitle;
 @property(nonatomic, copy) NSString *descriptionSimpleString;
@@ -1467,4 +1468,17 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface AWEDPlayerProgressContainerView : UIView
+@end
+
+// 精选标签
+@interface AWETemplateStaticLabelInfoModel : NSObject
+@property (nonatomic, copy) NSArray *containers;
+@end
+
+// 好友推荐
+@interface AFDFriendRecommendTagView : UIView
+@end
+
+// 顶栏选中指示线
+@interface AWEFeedMultiTabSelectedContainerView : UIView
 @end
