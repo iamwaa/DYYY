@@ -496,6 +496,19 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"detail" : @"自动",
             @"cellType" : @26,
             @"imageName" : @"ic_video_outlined_20"},
+          @{@"identifier" : @"DYYYEnableLiveRealCount",
+            @"title" : @"直播真实人数",
+            @"subTitle" : @"直播显示具体的在线人数",
+            @"detail" : @"",
+            @"cellType" : @37, 
+            @"imageName" : @"ic_video_outlined_20"},
+            
+          @{@"identifier" : @"DYYYCommentExactTime",
+            @"title" : @"评论具体时间",
+            @"subTitle" : @"开启后评论区将显示具体的发布时间而非相对时间",
+            @"detail" : @"",
+            @"cellType" : @37,
+            @"imageName" : @"ic_clock_outlined_20"},
           @{@"identifier" : @"DYYYEnableVideoHighestQuality",
             @"title" : @"提高视频画质",
             @"detail" : @"",
@@ -576,6 +589,16 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"subTitle" : @"开启后会过滤带有文字标签的图文",
             @"detail" : @"",
             @"cellType" : @37,
+            @"imageName" : @"ic_video_outlined_20"},
+          @{@"identifier" : @"DYYYSkipMusic",
+            @"title" : @"推荐过滤音乐",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_video_outlined_20"},
+          @{@"identifier" : @"DYYYSkipAIInteraction",
+            @"title" : @"推荐过滤AI互动",
+            @"detail" : @"",
+            @"cellType" : @6,
             @"imageName" : @"ic_video_outlined_20"},
           @{@"identifier" : @"DYYYFilterLowLikes",
             @"title" : @"推荐过滤低赞",
@@ -2012,20 +2035,20 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"imageName" : @"ic_image_outlined"
         },
         @{
+            @"identifier" : @"DYYYForceDownloadCommentAudio",
+            @"title" : @"保存评论区语音",
+            @"subTitle" : @"长按语音评论可下载并分享",
+            @"detail" : @"",
+            @"cellType" : @37,
+            @"imageName" : @"ic_playbackquaver_outlined"
+        },
+        @{
             @"identifier" : @"DYYYForceDownloadEmotion",
             @"title" : @"保存评论区表情包",
             @"subTitle" : @"长按评论或者长按表情包",
             @"detail" : @"",
             @"cellType" : @37,
             @"imageName" : @"ic_emoji_outlined"
-        },
-        @{
-            @"identifier" : DYYY_SAVE_COMMENT_AUDIO_KEY,
-            @"title" : @"保存评论区语音",
-            @"subTitle" : @"长按语音评论可下载并分享",
-            @"detail" : @"",
-            @"cellType" : @37,
-            @"imageName" : @"ic_audio_outlined"
         },
           @{@"identifier" : @"DYYYForceDownloadPreviewEmotion",
             @"title" : @"保存预览页表情包",
@@ -2250,7 +2273,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
                 BOOL newValue = !item.isSwitchOn;
 
                 if (newValue) {
-                    [DYYYBottomAlertView showAlertWithTitle:@"禁止ABTest下发配置"
+                    [DYYYBottomAlertView showAlertWithTitle:@"禁止 ABTest 下发配置"
                         message:@"这将暂停接收测试新功能的推送。确定要继续吗？"
                         avatarURL:nil
                         cancelButtonText:@"取消"
@@ -2269,7 +2292,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
                 } else {
                     item.isSwitchOn = newValue;
                     [DYYYSettingsHelper setUserDefaults:@(newValue) forKey:@"DYYYABTestBlockEnabled"];
-                    [DYYYUtils showToast:@"已允许ABTest下发配置，重启后生效。"];
+                    [DYYYUtils showToast:@"已允许 ABTest 下发配置，重启后生效。"];
                 }
               };
           } else if ([item.identifier isEqualToString:@"DYYYABTestModeString"]) {
@@ -2392,7 +2415,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
                 NSDictionary *currentData = [DYYYABTestHook getCurrentABTestData];
 
                 if (!currentData) {
-                    [DYYYUtils showToast:@"ABTest配置获取失败"];
+                    [DYYYUtils showToast:@"ABTest 配置获取失败"];
                     return;
                 }
 
@@ -2400,7 +2423,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
                 NSData *sortedJsonData = [NSJSONSerialization dataWithJSONObject:currentData options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:&error];
 
                 if (error) {
-                    [DYYYUtils showToast:@"ABTest配置序列化失败"];
+                    [DYYYUtils showToast:@"ABTest 配置序列化失败"];
                     return;
                 }
 
@@ -2423,7 +2446,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
                 DYYYBackupPickerDelegate *pickerDelegate = [[DYYYBackupPickerDelegate alloc] init];
                 pickerDelegate.tempFilePath = tempFilePath;
                 pickerDelegate.completionBlock = ^(NSURL *url) {
-                  [DYYYUtils showToast:@"ABTest配置已保存"];
+                  [DYYYUtils showToast:@"ABTest 配置已保存"];
                 };
 
                 static char kABTestPickerDelegateKey;
@@ -2889,7 +2912,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
       [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"媒体保存" items:downloadItems]];
       [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"交互增强" items:interactionItems]];
       [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"ABTest"
-                                                         footerTitle:@"允许用户导出或导入抖音的ABTest配置。远程配置由 Nathalie 维护，在应用启动时自动更新远程配置。"
+                                                         footerTitle:@"允许用户导出或导入抖音的 ABTest 配置。远程配置由 Nathalie 维护，在应用启动时自动更新远程配置。"
                                                                items:hotUpdateItems]];
       // 创建并推入二级设置页面
       AWESettingBaseViewController *subVC = [DYYYSettingsHelper createSubSettingsViewController:@"增强设置" sections:sections];

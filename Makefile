@@ -51,9 +51,9 @@ export LOGOS_DEFAULT_GENERATOR=internal
 include $(THEOS_MAKE_PATH)/tweak.mk
 
 ifeq ($(shell whoami),huami)
-    THEOS_DEVICE_IP = 192.168.31.227
+    THEOS_DEVICE_IP = 192.168.31.222
 else
-    THEOS_DEVICE_IP = 192.168.1.202
+    THEOS_DEVICE_IP = 192.168.15.201
 endif
 THEOS_DEVICE_PORT = 22
 

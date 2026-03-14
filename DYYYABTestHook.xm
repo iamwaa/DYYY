@@ -10,6 +10,8 @@ static NSString *s_fileMode = nil;
 
 // 默认远程配置地址常量
 static NSString *const kDefaultRemoteConfigURL = DYYY_DEFAULT_ABTEST_URL;
+static NSString *const kDYYYTabBarHeightKey = @"DYYYTabBarHeight";
+static NSString *const kDYYYABTestTabBarHeightConfigKey = @"hp_tab_bar_custom_height_config";
 
 static dispatch_once_t s_loadOnceToken;
 static dispatch_queue_t s_abTestHookQueue;
@@ -34,6 +36,89 @@ static void DYYYQueueSync(dispatch_block_t block) {
     } else {
         dispatch_sync(queue, block);
     }
+}
+
+static NSNumber *DYYYResolveTabBarHeightFromSettings(void) {
+    NSString *heightString = [[NSUserDefaults standardUserDefaults] stringForKey:kDYYYTabBarHeightKey];
+    if (heightString.length == 0) {
+        return nil;
+    }
+
+    float parsedValue = 0.0f;
+    NSScanner *scanner = [NSScanner scannerWithString:heightString];
+    if (![scanner scanFloat:&parsedValue] || !scanner.isAtEnd || parsedValue <= 0.0f) {
+        return nil;
+    }
+    return @(parsedValue);
+}
+
+static NSDictionary *DYYYBuildTabBarHeightConfig(NSDictionary *existingConfig, NSNumber *contentHeight) {
+    NSMutableDictionary *config = [NSMutableDictionary dictionary];
+    if ([existingConfig isKindOfClass:[NSDictionary class]]) {
+        [config addEntriesFromDictionary:existingConfig];
+    }
+
+    config[@"content_height"] = contentHeight;
+    if (!config[@"custom_safe_area_bottom_offet"]) {
+        config[@"custom_safe_area_bottom_offet"] = @0;
+    }
+    if (!config[@"custom_safe_area_bottom_offset_black_set"]) {
+        config[@"custom_safe_area_bottom_offset_black_set"] = @[];
+    }
+    if (!config[@"custom_tab_bar_height_black_set"]) {
+        config[@"custom_tab_bar_height_black_set"] = @[];
+    }
+    if (!config[@"enabled"]) {
+        config[@"enabled"] = @YES;
+    }
+    if (!config[@"overlap_height"]) {
+        config[@"overlap_height"] = @14;
+    }
+
+    return [config copy];
+}
+
+static NSDictionary *DYYYInjectTabBarHeightConfig(NSDictionary *sourceData, NSNumber *contentHeight) {
+    if (!contentHeight) {
+        return sourceData;
+    }
+
+    NSMutableDictionary *patchedData = [NSMutableDictionary dictionaryWithDictionary:sourceData ?: @{}];
+    NSDictionary *existingConfig = nil;
+    id existingConfigValue = patchedData[kDYYYABTestTabBarHeightConfigKey];
+    if ([existingConfigValue isKindOfClass:[NSDictionary class]]) {
+        existingConfig = (NSDictionary *)existingConfigValue;
+    }
+    patchedData[kDYYYABTestTabBarHeightConfigKey] = DYYYBuildTabBarHeightConfig(existingConfig, contentHeight);
+
+    return [patchedData copy];
+}
+
+static void DYYYApplyTabBarHeightToCurrentABTestDataIfNeeded(void) {
+    NSNumber *contentHeight = DYYYResolveTabBarHeightFromSettings();
+    if (!contentHeight) {
+        return;
+    }
+
+    AWEABTestManager *manager = [%c(AWEABTestManager) sharedManager];
+    if (!manager) {
+        return;
+    }
+
+    NSDictionary *currentData = [manager abTestData];
+    if (currentData && ![currentData isKindOfClass:[NSDictionary class]]) {
+        return;
+    }
+
+    NSDictionary *patchedData = DYYYInjectTabBarHeightConfig(currentData ?: @{}, contentHeight);
+    if (currentData && [currentData isEqualToDictionary:patchedData]) {
+        return;
+    }
+
+    s_isApplyingFixedData = YES;
+    [manager setAbTestData:patchedData];
+    s_isApplyingFixedData = NO;
+    NSLog(@"[DYYY] 已通过 ABTest 注入底栏高度: %@", contentHeight);
 }
 
 @implementation DYYYABTestHook
@@ -212,6 +297,11 @@ static void DYYYQueueSync(dispatch_block_t block) {
           dataToApply = [s_localABTestData copy];
       }
 
+      NSNumber *contentHeight = DYYYResolveTabBarHeightFromSettings();
+      if (contentHeight) {
+          dataToApply = DYYYInjectTabBarHeightConfig(dataToApply ?: @{}, contentHeight);
+      }
+
       // 设置状态标志，表明接下来对 setAbTestData: 的调用是来自我们 Hook 的应用逻辑
       s_isApplyingFixedData = YES;
 
@@ -324,11 +414,11 @@ static void DYYYQueueSync(dispatch_block_t block) {
 - (void)setAbTestData:(id)data {
     __block BOOL shouldBlock = NO;
     DYYYQueueSync(^{
-        // 在队列上安全地检查禁止下发标志 和 正在应用本地数据的标志
-        // 如果禁止下发开启 并且 不是正在应用本地数据，则阻止
-        if (s_abTestBlockEnabled && !s_isApplyingFixedData) {
-            shouldBlock = YES;
-        }
+      // 在队列上安全地检查禁止下发标志 和 正在应用本地数据的标志
+      // 如果禁止下发开启 并且 不是正在应用本地数据，则阻止
+      if (s_abTestBlockEnabled && !s_isApplyingFixedData) {
+          shouldBlock = YES;
+      }
     });
 
     if (shouldBlock) {
@@ -336,17 +426,15 @@ static void DYYYQueueSync(dispatch_block_t block) {
         return;
     }
 
-    if ([data isKindOfClass:[NSDictionary class]]) {
-        NSMutableDictionary *mutableData = [data mutableCopy];
-        NSDictionary *config = data[@"hp_tab_bar_custom_height_config"];
-        if ([config isKindOfClass:[NSDictionary class]]) {
-            NSMutableDictionary *mutableConfig = [config mutableCopy];
-            mutableConfig[@"enabled"] = @(NO);
-            mutableData[@"hp_tab_bar_custom_height_config"] = [mutableConfig copy];
-            data = [mutableData copy];
+    id finalData = data;
+    NSNumber *contentHeight = DYYYResolveTabBarHeightFromSettings();
+    if (contentHeight) {
+        if (!data || [data isKindOfClass:[NSDictionary class]]) {
+            finalData = DYYYInjectTabBarHeightConfig(data ?: @{}, contentHeight);
         }
     }
-    %orig(data);
+
+    %orig(finalData);
 }
 
 /**
@@ -357,26 +445,14 @@ static void DYYYQueueSync(dispatch_block_t block) {
 - (void)incrementalUpdateData:(id)data unchangedKeyList:(id)keyList {
     __block BOOL shouldBlock = NO;
     DYYYQueueSync(^{
-        shouldBlock = s_abTestBlockEnabled;
+      shouldBlock = s_abTestBlockEnabled;
     });
 
     if (shouldBlock) {
         NSLog(@"[DYYY] 阻止增量更新ABTest数据 (启用了禁止下发配置)");
         return;
     }
-
-    if ([data isKindOfClass:[NSDictionary class]]) {
-        NSMutableDictionary *mutableData = [data mutableCopy];
-        NSDictionary *config = data[@"hp_tab_bar_custom_height_config"];
-        if ([config isKindOfClass:[NSDictionary class]]) {
-            NSMutableDictionary *mutableConfig = [config mutableCopy];
-            mutableConfig[@"enabled"] = @(NO);
-            mutableData[@"hp_tab_bar_custom_height_config"] = [mutableConfig copy];
-            data = [mutableData copy];
-        }
-    }
-
-    %orig(data, keyList);
+    %orig;
 }
 
 /**
@@ -387,14 +463,14 @@ static void DYYYQueueSync(dispatch_block_t block) {
 - (void)fetchConfigurationWithRetry:(BOOL)retry completion:(id)completion {
     __block BOOL shouldBlock = NO;
     DYYYQueueSync(^{
-        shouldBlock = s_abTestBlockEnabled;
+      shouldBlock = s_abTestBlockEnabled;
     });
 
     if (shouldBlock) {
         NSLog(@"[DYYY] 阻止从网络获取ABTest配置 (启用了禁止下发配置)");
         if (completion && [completion isKindOfClass:%c(NSBlock)]) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                ((void (^)(id))completion)(nil);
+              ((void (^)(id))completion)(nil);
             });
         }
         return;
@@ -410,7 +486,7 @@ static void DYYYQueueSync(dispatch_block_t block) {
 - (void)fetchConfiguration:(id)arg1 {
     __block BOOL shouldBlock = NO;
     DYYYQueueSync(^{
-        shouldBlock = s_abTestBlockEnabled;
+      shouldBlock = s_abTestBlockEnabled;
     });
 
     if (shouldBlock) {
@@ -423,31 +499,19 @@ static void DYYYQueueSync(dispatch_block_t block) {
 /**
  * Hook: 重写ABTest数据
  * 在禁止下发模式下阻止覆盖数据
- * 特殊处理：强制把 "hp_tab_bar_custom_height_config.enabled" 设为 false
+ * 使用 dispatch_sync 在队列上同步检查状态
  */
 - (void)overrideABTestData:(id)data needCleanCache:(BOOL)cleanCache {
     __block BOOL shouldBlock = NO;
     DYYYQueueSync(^{
-        shouldBlock = s_abTestBlockEnabled;
+      shouldBlock = s_abTestBlockEnabled;
     });
 
     if (shouldBlock) {
         NSLog(@"[DYYY] 阻止重写ABTest数据 (启用了禁止下发配置)");
         return;
     }
-
-    if ([data isKindOfClass:[NSDictionary class]]) {
-        NSMutableDictionary *mutableData = [data mutableCopy];
-        NSDictionary *config = data[@"hp_tab_bar_custom_height_config"];
-        if ([config isKindOfClass:[NSDictionary class]]) {
-            NSMutableDictionary *mutableConfig = [config mutableCopy];
-            mutableConfig[@"enabled"] = @(NO);
-            mutableData[@"hp_tab_bar_custom_height_config"] = [mutableConfig copy];
-            data = [mutableData copy];
-        }
-    }
-
-    %orig(data, cleanCache);
+    %orig;
 }
 
 /**
@@ -458,26 +522,14 @@ static void DYYYQueueSync(dispatch_block_t block) {
 - (void)_saveABTestData:(id)data {
     __block BOOL shouldBlock = NO;
     DYYYQueueSync(^{
-        shouldBlock = s_abTestBlockEnabled;
+      shouldBlock = s_abTestBlockEnabled;
     });
 
     if (shouldBlock) {
         NSLog(@"[DYYY] 阻止保存ABTest数据 (启用了禁止下发配置)");
         return;
     }
-
-    if ([data isKindOfClass:[NSDictionary class]]) {
-        NSMutableDictionary *mutableData = [data mutableCopy];
-        NSDictionary *config = data[@"hp_tab_bar_custom_height_config"];
-        if ([config isKindOfClass:[NSDictionary class]]) {
-            NSMutableDictionary *mutableConfig = [config mutableCopy];
-            mutableConfig[@"enabled"] = @(NO);
-            mutableData[@"hp_tab_bar_custom_height_config"] = [mutableConfig copy];
-            data = [mutableData copy];
-        }
-    }
-
-    %orig(data);
+    %orig;
 }
 
 %end
@@ -503,6 +555,7 @@ static void DYYYQueueSync(dispatch_block_t block) {
 
       [DYYYABTestHook loadLocalABTestConfig];
       [DYYYABTestHook applyFixedABTestData];
+      DYYYApplyTabBarHeightToCurrentABTestDataIfNeeded();
       if ([DYYYABTestHook isRemoteMode]) {
           [DYYYABTestHook checkForRemoteConfigUpdate:NO];
       }
