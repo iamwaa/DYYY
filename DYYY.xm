@@ -3462,6 +3462,19 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
 %end
 
+// 隐藏转发到日常
+%hook AFDShareToDailyBottomButton
+
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideShareContentView")) {
+        [self removeFromSuperview];
+        return;
+    }
+}
+
+%end
+
 
 %hook AWELeftSideBarEntranceView
 

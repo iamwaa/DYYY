@@ -95,7 +95,7 @@
           @"mutualExclusions" : @{
               @"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ],
               @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor" ],
-              @"DYYYisEnableCommentBlur" : @[ @"WaaCommentTransparency", @"WaaInputBoxTransparency" ],
+              @"DYYYEnableCommentBlur" : @[ @"WaaCommentTransparency", @"WaaInputBoxTransparency" ],
               @"DYYYSkipPhoto": @[@"DYYYSkipPhotoText"]
           },
 

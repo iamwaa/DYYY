@@ -40,17 +40,22 @@
     UIResponder *responder = self.nextResponder;
     BOOL isInCommentPanel = [responder isKindOfClass:NSClassFromString(@"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController")];
 
-    if (isFirstChildOfMiddleContainer) {
-        transparencyKey = @"WaaInputBoxTransparency";
-        shouldModify = YES;
-    } 
-    else if (isFirstChildOfCommentContainer || isInCommentPanel) {
-        transparencyKey = @"WaaCommentTransparency";
-        shouldModify = YES;
-    }
+    if (isFirstChildOfCommentContainer && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+        NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:@"WaaInputBoxTransparency"];
+        if (transparencyStr.length > 0) {
+            transparency = [transparencyStr floatValue];
+            transparency = MAX(0.0, MIN(1.0, transparency));
+        }
 
-    if (shouldModify && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
-        NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:transparencyKey];
+        CGFloat r, g, b, a;
+        if ([backgroundColor getRed:&r green:&g blue:&b alpha:&a]) {
+            backgroundColor = [UIColor colorWithRed:r green:g blue:b alpha:transparency];
+        } else {
+            backgroundColor = [backgroundColor colorWithAlphaComponent:transparency];
+        }
+    } 
+    else if ((isFirstChildOfMiddleContainer || isInCommentPanel) && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+        NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:@"WaaCommentTransparency"];
         if (transparencyStr.length > 0) {
             transparency = [transparencyStr floatValue];
             transparency = MAX(0.0, MIN(1.0, transparency));
@@ -272,16 +277,14 @@ BOOL isTargetCommentSubview(UIView *view) {
 static void removeTargetSubviews(UIView *view) {
     if (!view) return;
 
-    Class roundViewClass = objc_getClass("AFDRoundRectangleBoxView");
-    if (roundViewClass && [view isKindOfClass:roundViewClass]) {
-        UIColor *bgColor = view.backgroundColor;
-        CGFloat r, g, b, a;
-        [bgColor getRed:&r green:&g blue:&b alpha:&a];
-        if (fabs(r - 1.0) < 0.01 && fabs(g - 1.0) < 0.01 && fabs(b - 1.0) < 0.01 && fabs(a - 0.117647) < 0.01) {
-            [view removeFromSuperview];
-            return;
-        }
+    // 查找 AFDRoundRectangleButton 的父视图并移除整个父视图
+    Class buttonClass = objc_getClass("AFDRoundRectangleButton");
+    if (buttonClass && [view isKindOfClass:buttonClass]) {
+        [view.superview removeFromSuperview];
+        return;
     }
+
+    // 移除 AWEStoryProgressContainerView
     Class storyViewClass = objc_getClass("AWEStoryProgressContainerView");
     if (storyViewClass && [view isKindOfClass:storyViewClass]) {
         [view removeFromSuperview];
@@ -309,12 +312,18 @@ static void removeTargetSubviews(UIView *view) {
         return;
     }
 
-    UIView *mainView = self.view;
-    if ([mainView isKindOfClass:[UIView class]]) {
-        UIColor *bgColor = mainView.backgroundColor;
-        CGFloat r, g, b, a;
-        [bgColor getRed:&r green:&g blue:&b alpha:&a];
-        if (fabs(r - 0.0) < 0.01 && fabs(g - 0.0) < 0.01 && fabs(b - 0.0) < 0.01 && fabs(a - 1.0) < 0.01) {
+    // 检查是否为净化模式（假设控制器有 isPureMode 属性）
+    BOOL isPureMode = NO;
+    if ([self respondsToSelector:@selector(isPureMode)]) {
+        isPureMode = ((NSNumber *)[self valueForKey:@"isPureMode"]).boolValue;
+    } else {
+        // 如果没有属性，假设控制器本身表示净化模式
+        isPureMode = YES;
+    }
+
+    if (isPureMode) {
+        UIView *mainView = self.view;
+        if ([mainView isKindOfClass:[UIView class]]) {
             removeTargetSubviews(mainView);
         }
     }
