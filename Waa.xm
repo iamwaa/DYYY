@@ -54,7 +54,21 @@
             backgroundColor = [backgroundColor colorWithAlphaComponent:transparency];
         }
     } 
-    else if ((isFirstChildOfMiddleContainer || isInCommentPanel) && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+    else if (isFirstChildOfMiddleContainer && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+        NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:@"WaaInputBoxTransparency"];
+        if (transparencyStr.length > 0) {
+            transparency = [transparencyStr floatValue];
+            transparency = MAX(0.0, MIN(1.0, transparency));
+        }
+
+        CGFloat r, g, b, a;
+        if ([backgroundColor getRed:&r green:&g blue:&b alpha:&a]) {
+            backgroundColor = [UIColor colorWithRed:r green:g blue:b alpha:transparency];
+        } else {
+            backgroundColor = [backgroundColor colorWithAlphaComponent:transparency];
+        }
+    }
+    else if (isInCommentPanel && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
         NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:@"WaaCommentTransparency"];
         if (transparencyStr.length > 0) {
             transparency = [transparencyStr floatValue];
@@ -271,9 +285,6 @@ BOOL isTargetCommentSubview(UIView *view) {
 #pragma mark - 隐藏功能
 
 // 双指清屏增强
-@interface AFDRoundRectangleBoxView : UIView
-@end
-
 static void removeTargetSubviews(UIView *view) {
     if (!view) return;
 
@@ -318,6 +329,36 @@ static void removeTargetSubviews(UIView *view) {
         isPureMode = ((NSNumber *)[self valueForKey:@"isPureMode"]).boolValue;
     } else {
         // 如果没有属性，假设控制器本身表示净化模式
+        isPureMode = YES;
+    }
+
+    if (isPureMode) {
+        UIView *mainView = self.view;
+        if ([mainView isKindOfClass:[UIView class]]) {
+            removeTargetSubviews(mainView);
+        }
+    }
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+
+    Class targetClass = objc_getClass("AFDPureModePageContainerViewController");
+    BOOL isPureModeEnabled = NO;
+    @try {
+        isPureModeEnabled = DYYYGetBool(@"WaaEnablePureModePlus");
+    } @catch (NSException *e) {
+        return;
+    }
+    if (!isPureModeEnabled || !targetClass || ![self isKindOfClass:targetClass]) {
+        return;
+    }
+
+    // 检查是否为净化模式
+    BOOL isPureMode = NO;
+    if ([self respondsToSelector:@selector(isPureMode)]) {
+        isPureMode = ((NSNumber *)[self valueForKey:@"isPureMode"]).boolValue;
+    } else {
         isPureMode = YES;
     }
 
