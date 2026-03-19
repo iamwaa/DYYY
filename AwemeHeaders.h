@@ -631,8 +631,9 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface AWEPlayInteractionStrongifyShareContentView : UIView
-@property(nonatomic, strong, readonly) UIView *superview;
-@property(nonatomic, assign, getter=isHidden) BOOL hidden;
+@end
+
+@interface AFDShareToDailyBottomButton : UIView
 @end
 
 @interface AWEAntiAddictedNoticeBarView : UIView
