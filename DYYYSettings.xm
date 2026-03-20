@@ -3313,7 +3313,7 @@ speedSettingsItem.detail = trimmedText;
       NSMutableDictionary *dyyySettings = [NSMutableDictionary dictionary];
 
       for (NSString *key in allDefaults.allKeys) {
-          if ([key hasPrefix:@"DYYY"]) {
+          if ([key hasPrefix:@"DYYY"] || [key hasPrefix:@"Waa"]) {
               dyyySettings[key] = [defaults objectForKey:key];
           }
       }
