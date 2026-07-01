@@ -4077,6 +4077,11 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
 	  [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"隐藏设置" items:HideItems]];
 	  [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"增强设置" items:EnhancedItems]];	  
 
+	  DYYYRegisterSearchSections(@"WaaHook", sections);
+	  if (DYYYBuildingSettingsSearchIndex) {
+	      return;
+	  }
+
 	  // 创建并推入二级设置页面
 	  AWESettingBaseViewController *subVC = [DYYYSettingsHelper createSubSettingsViewController:@"WaaHook" sections:sections];
 	  [rootVC.navigationController pushViewController:(UIViewController *)subVC animated:YES];
