@@ -283,6 +283,11 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @interface TTMetalView : UIView
 @end
 
+@interface UIView (DYYYIMVideoFullscreen)
+- (BOOL)dyyy_isInIMVideoBrowserFullscreenContext;
+- (CGRect)dyyy_imVideoAspectFillFrameForFrame:(CGRect)frame;
+@end
+
 @interface AWELeftSideBarEntranceView : UIView
 - (void)setNumericalRedDot:(id)numericalRedDot;
 - (void)setRedDot:(id)redDot;
@@ -1792,6 +1797,12 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 
 @interface AWEIMVideoBrowserCollectionViewCell : UICollectionViewCell
 - (void)setEnablePlayHDR:(BOOL)enable;
+@end
+
+@interface AWEIMVideoBrowserCollectionViewCell (DYYYFullscreen)
+- (void)dyyy_applyIMVideoFullscreenLayout;
+- (BOOL)dyyy_isIMVideoRenderView:(UIView *)view;
+- (void)dyyy_applyResizeAspectFillToLayer:(CALayer *)layer;
 @end
 
 @interface AWEECOMIMAppSettingsService : NSObject

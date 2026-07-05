@@ -2177,6 +2177,8 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 %end
 
+static char kDYYYIMVideoRenderAspectRatioKey;
+
 %hook IESIMVideoPlayerWrapper
 
 - (void)setupHDREnable:(BOOL)enable {
@@ -2187,8 +2189,124 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 %hook AWEIMVideoBrowserCollectionViewCell
 
+- (void)setFrame:(CGRect)frame {
+    if (DYYYGetBool(@"DYYYEnableFullScreen") && self.superview) {
+        CGRect containerBounds = self.superview.bounds;
+        if (CGRectGetWidth(containerBounds) > 0 && CGRectGetHeight(containerBounds) > CGRectGetHeight(frame) + 0.5) {
+            frame.size.width = CGRectGetWidth(containerBounds);
+            frame.size.height = CGRectGetHeight(containerBounds);
+        }
+    }
+    %orig(frame);
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    if (self.window) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [self dyyy_applyIMVideoFullscreenLayout];
+        });
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    [self dyyy_applyIMVideoFullscreenLayout];
+}
+
 - (void)setEnablePlayHDR:(BOOL)enable {
     %orig(DYYYShouldDisableAllHDR() ? NO : enable);
+}
+
+%new
+- (void)dyyy_applyIMVideoFullscreenLayout {
+    if (!DYYYGetBool(@"DYYYEnableFullScreen")) {
+        return;
+    }
+
+    UIView *rootView = self.contentView ?: (UIView *)self;
+    UIView *containerView = self.superview;
+    CGRect targetBounds = containerView ? containerView.bounds : self.bounds;
+    if (CGRectIsEmpty(targetBounds)) {
+        targetBounds = self.bounds;
+    }
+    if (CGRectIsEmpty(targetBounds)) {
+        return;
+    }
+
+    self.contentView.frame = CGRectMake(0, 0, CGRectGetWidth(targetBounds), CGRectGetHeight(targetBounds));
+    self.contentView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.contentView.clipsToBounds = YES;
+    rootView.clipsToBounds = YES;
+
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:rootView];
+    while (stack.count > 0) {
+        UIView *view = stack.lastObject;
+        [stack removeLastObject];
+
+        for (UIView *subview in view.subviews) {
+            [stack addObject:subview];
+        }
+
+        if (![self dyyy_isIMVideoRenderView:view]) {
+            continue;
+        }
+
+        view.frame = [view dyyy_imVideoAspectFillFrameForFrame:view.frame];
+        view.contentMode = UIViewContentModeScaleAspectFill;
+        view.clipsToBounds = YES;
+        [self dyyy_applyResizeAspectFillToLayer:view.layer];
+
+        UIView *viewToFit = view.superview;
+        while (viewToFit && viewToFit != rootView) {
+            UIView *superview = viewToFit.superview;
+            if (!superview) {
+                break;
+            }
+
+            viewToFit.frame = superview.bounds;
+            viewToFit.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            viewToFit.contentMode = UIViewContentModeScaleAspectFill;
+            viewToFit.clipsToBounds = YES;
+            [self dyyy_applyResizeAspectFillToLayer:viewToFit.layer];
+            viewToFit = superview;
+        }
+    }
+}
+
+%new
+- (BOOL)dyyy_isIMVideoRenderView:(UIView *)view {
+    if (!view) {
+        return NO;
+    }
+
+    Class playerClass = NSClassFromString(@"TTPlayerView");
+    Class metalClass = NSClassFromString(@"TTMetalView");
+    Class metalNewClass = NSClassFromString(@"TTMetalViewNew");
+    Class metalVPClass = NSClassFromString(@"TTMetalViewVP");
+
+    return (playerClass && [view isKindOfClass:playerClass]) ||
+           (metalClass && [view isKindOfClass:metalClass]) ||
+           (metalNewClass && [view isKindOfClass:metalNewClass]) ||
+           (metalVPClass && [view isKindOfClass:metalVPClass]);
+}
+
+%new
+- (void)dyyy_applyResizeAspectFillToLayer:(CALayer *)layer {
+    if (!layer) {
+        return;
+    }
+
+    layer.contentsGravity = kCAGravityResizeAspectFill;
+
+    SEL setVideoGravitySelector = NSSelectorFromString(@"setVideoGravity:");
+    if ([layer respondsToSelector:setVideoGravitySelector]) {
+        ((void (*)(id, SEL, NSString *))objc_msgSend)(layer, setVideoGravitySelector, AVLayerVideoGravityResizeAspectFill);
+    }
+
+    for (CALayer *sublayer in layer.sublayers) {
+        [self dyyy_applyResizeAspectFillToLayer:sublayer];
+    }
 }
 
 %end
@@ -11437,6 +11555,72 @@ static Class tabBarButtonClass = nil;
 }
 
 %new
+- (BOOL)dyyy_isInIMVideoBrowserFullscreenContext {
+    if (!DYYYGetBool(@"DYYYEnableFullScreen")) {
+        return NO;
+    }
+
+    UIView *view = self;
+    while (view) {
+        NSString *className = NSStringFromClass([view class]);
+        if ([className isEqualToString:@"AWEIMVideoBrowserCollectionViewCell"] ||
+            [className containsString:@"IMVideoBrowser"] ||
+            [className containsString:@"IMFeedVideo"]) {
+            return YES;
+        }
+
+        UIResponder *nextResponder = view.nextResponder;
+        NSString *responderClassName = NSStringFromClass([nextResponder class]);
+        if ([responderClassName containsString:@"IMVideoBrowser"] ||
+            [responderClassName containsString:@"IMFeedVideo"]) {
+            return YES;
+        }
+
+        view = view.superview;
+    }
+
+    UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
+    NSString *viewControllerClassName = NSStringFromClass([viewController class]);
+    return [viewControllerClassName containsString:@"IMVideoBrowser"] ||
+           [viewControllerClassName containsString:@"IMFeedVideo"];
+}
+
+%new
+- (CGRect)dyyy_imVideoAspectFillFrameForFrame:(CGRect)frame {
+    if (![self dyyy_isInIMVideoBrowserFullscreenContext] || !self.superview) {
+        return frame;
+    }
+
+    CGSize targetSize = self.superview.bounds.size;
+    if (targetSize.width <= 0 || targetSize.height <= 0) {
+        return frame;
+    }
+
+    NSNumber *storedAspectRatio = objc_getAssociatedObject(self, &kDYYYIMVideoRenderAspectRatioKey);
+    CGFloat aspectRatio = storedAspectRatio.doubleValue;
+    if (aspectRatio <= 0 && frame.size.width > 0 && frame.size.height > 0) {
+        aspectRatio = frame.size.width / frame.size.height;
+    }
+    if (aspectRatio <= 0) {
+        return self.superview.bounds;
+    }
+
+    CGFloat targetRatio = targetSize.width / targetSize.height;
+    CGFloat width = targetSize.width;
+    CGFloat height = targetSize.height;
+    if (targetRatio > aspectRatio) {
+        height = width / aspectRatio;
+    } else {
+        width = height * aspectRatio;
+    }
+
+    return CGRectMake((targetSize.width - width) / 2.0,
+                      (targetSize.height - height) / 2.0,
+                      width,
+                      height);
+}
+
+%new
 - (void)dyyy_applyGlobalTransparency {
     if ([NSThread isMainThread]) {
         if (self.window && self.tag != DYYY_IGNORE_GLOBAL_ALPHA_TAG) {
@@ -12501,6 +12685,27 @@ static Class TagViewClass = nil;
 %end
 
 %hook TTMetalView
+
+- (void)setFrame:(CGRect)frame {
+    UIView *renderView = (UIView *)self;
+    if ([renderView dyyy_isInIMVideoBrowserFullscreenContext]) {
+        CGSize targetSize = renderView.superview.bounds.size;
+        CGFloat incomingAspectRatio = (frame.size.width > 0 && frame.size.height > 0) ? frame.size.width / frame.size.height : 0;
+        CGFloat targetAspectRatio = (targetSize.width > 0 && targetSize.height > 0) ? targetSize.width / targetSize.height : 0;
+        BOOL isContainerFrame = targetAspectRatio > 0 && fabs(incomingAspectRatio - targetAspectRatio) < 0.01;
+        if (incomingAspectRatio > 0 && !isContainerFrame) {
+            objc_setAssociatedObject(self, &kDYYYIMVideoRenderAspectRatioKey, @(incomingAspectRatio), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        frame = [renderView dyyy_imVideoAspectFillFrameForFrame:frame];
+        renderView.layer.contentsGravity = kCAGravityResizeAspectFill;
+        SEL setVideoGravitySelector = NSSelectorFromString(@"setVideoGravity:");
+        if ([renderView.layer respondsToSelector:setVideoGravitySelector]) {
+            ((void (*)(id, SEL, NSString *))objc_msgSend)(renderView.layer, setVideoGravitySelector, AVLayerVideoGravityResizeAspectFill);
+        }
+    }
+    %orig(frame);
+}
+
 - (void)setCenter:(CGPoint)center {
     BOOL shouldAdjust = NO;
     UIView *view = (UIView *)self;
@@ -12532,6 +12737,27 @@ static Class TagViewClass = nil;
 %end
 
 %hook TTMetalViewNew
+
+- (void)setFrame:(CGRect)frame {
+    UIView *renderView = (UIView *)self;
+    if ([renderView dyyy_isInIMVideoBrowserFullscreenContext]) {
+        CGSize targetSize = renderView.superview.bounds.size;
+        CGFloat incomingAspectRatio = (frame.size.width > 0 && frame.size.height > 0) ? frame.size.width / frame.size.height : 0;
+        CGFloat targetAspectRatio = (targetSize.width > 0 && targetSize.height > 0) ? targetSize.width / targetSize.height : 0;
+        BOOL isContainerFrame = targetAspectRatio > 0 && fabs(incomingAspectRatio - targetAspectRatio) < 0.01;
+        if (incomingAspectRatio > 0 && !isContainerFrame) {
+            objc_setAssociatedObject(self, &kDYYYIMVideoRenderAspectRatioKey, @(incomingAspectRatio), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        frame = [renderView dyyy_imVideoAspectFillFrameForFrame:frame];
+        renderView.layer.contentsGravity = kCAGravityResizeAspectFill;
+        SEL setVideoGravitySelector = NSSelectorFromString(@"setVideoGravity:");
+        if ([renderView.layer respondsToSelector:setVideoGravitySelector]) {
+            ((void (*)(id, SEL, NSString *))objc_msgSend)(renderView.layer, setVideoGravitySelector, AVLayerVideoGravityResizeAspectFill);
+        }
+    }
+    %orig(frame);
+}
+
 - (void)setCenter:(CGPoint)center {
     BOOL shouldAdjust = NO;
     UIView *view = (UIView *)self;
@@ -12563,6 +12789,27 @@ static Class TagViewClass = nil;
 %end
 
 %hook TTMetalViewVP
+
+- (void)setFrame:(CGRect)frame {
+    UIView *renderView = (UIView *)self;
+    if ([renderView dyyy_isInIMVideoBrowserFullscreenContext]) {
+        CGSize targetSize = renderView.superview.bounds.size;
+        CGFloat incomingAspectRatio = (frame.size.width > 0 && frame.size.height > 0) ? frame.size.width / frame.size.height : 0;
+        CGFloat targetAspectRatio = (targetSize.width > 0 && targetSize.height > 0) ? targetSize.width / targetSize.height : 0;
+        BOOL isContainerFrame = targetAspectRatio > 0 && fabs(incomingAspectRatio - targetAspectRatio) < 0.01;
+        if (incomingAspectRatio > 0 && !isContainerFrame) {
+            objc_setAssociatedObject(self, &kDYYYIMVideoRenderAspectRatioKey, @(incomingAspectRatio), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        frame = [renderView dyyy_imVideoAspectFillFrameForFrame:frame];
+        renderView.layer.contentsGravity = kCAGravityResizeAspectFill;
+        SEL setVideoGravitySelector = NSSelectorFromString(@"setVideoGravity:");
+        if ([renderView.layer respondsToSelector:setVideoGravitySelector]) {
+            ((void (*)(id, SEL, NSString *))objc_msgSend)(renderView.layer, setVideoGravitySelector, AVLayerVideoGravityResizeAspectFill);
+        }
+    }
+    %orig(frame);
+}
+
 - (void)setCenter:(CGPoint)center {
     BOOL shouldAdjust = NO;
     UIView *view = (UIView *)self;
