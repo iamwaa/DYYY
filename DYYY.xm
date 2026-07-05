@@ -11550,12 +11550,57 @@ static Class tabBarButtonClass = nil;
     CGRect frame = self.view.frame;
     CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
     CGFloat superviewHeight = self.view.superview.frame.size.height;
+    NSString *currentReferString = self.referString;
+
+    static char kDYYYIMFullScreenDebugLastLogTimeKey;
+    NSTimeInterval now = CACurrentMediaTime();
+    NSNumber *lastLogTime = objc_getAssociatedObject(self, &kDYYYIMFullScreenDebugLastLogTimeKey);
+    if (!lastLogTime || now - lastLogTime.doubleValue > 1.0) {
+        objc_setAssociatedObject(self, &kDYYYIMFullScreenDebugLastLogTimeKey, @(now), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        NSString *modelReferString = nil;
+        id model = self.model;
+        if ([model respondsToSelector:@selector(referString)]) {
+            modelReferString = [model valueForKey:@"referString"];
+        }
+
+        NSMutableArray<NSString *> *parentClassNames = [NSMutableArray array];
+        UIViewController *debugParentVC = self.parentViewController;
+        for (NSInteger i = 0; debugParentVC && i < 5; i++) {
+            [parentClassNames addObject:NSStringFromClass([debugParentVC class]) ?: @""];
+            debugParentVC = debugParentVC.parentViewController;
+        }
+
+        NSString *lowerReferString = [currentReferString lowercaseString] ?: @"";
+        NSString *lowerModelReferString = [modelReferString lowercaseString] ?: @"";
+        BOOL likelyIMScene = [lowerReferString isEqualToString:@"chat"] ||
+                             [lowerReferString containsString:@"chat"] ||
+                             [lowerReferString containsString:@"message"] ||
+                             [lowerReferString containsString:@"private"] ||
+                             [lowerReferString containsString:@"share"] ||
+                             [lowerReferString hasPrefix:@"im_"] ||
+                             [lowerModelReferString isEqualToString:@"chat"] ||
+                             [lowerModelReferString containsString:@"chat"] ||
+                             [lowerModelReferString containsString:@"message"] ||
+                             [lowerModelReferString containsString:@"private"] ||
+                             [lowerModelReferString containsString:@"share"] ||
+                             [lowerModelReferString hasPrefix:@"im_"];
+
+        NSLog(@"[DYYY][IMFullScreenDebug] vc=%@ refer=%@ modelRefer=%@ likelyIM=%@ frame=%@ superFrame=%@ screenWidth=%.1f superHeight=%.1f parents=%@",
+              NSStringFromClass([self class]),
+              currentReferString,
+              modelReferString,
+              likelyIMScene ? @"YES" : @"NO",
+              NSStringFromCGRect(frame),
+              NSStringFromCGRect(self.view.superview.frame),
+              screenWidth,
+              superviewHeight,
+              [parentClassNames componentsJoinedByString:@" -> "]);
+    }
 
     if (frame.size.width != screenWidth && frame.size.height < superviewHeight) {
         return;
     }
-
-    NSString *currentReferString = self.referString;
 
     BOOL useFullHeight = [currentReferString isEqualToString:@"general_search"] || [currentReferString isEqualToString:@"search_result"] || [currentReferString isEqualToString:@"search_ecommerce"] ||
                          [currentReferString isEqualToString:@"close_friends_moment"] || [currentReferString isEqualToString:@"offline_mode"] || [currentReferString isEqualToString:@"challenge"] ||
