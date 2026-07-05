@@ -44,6 +44,287 @@ static NSString *const kDYYYGlobalTransparencyDidChangeNotification = @"DYYYGlob
 static char kDYYYGlobalTransparencyBaseAlphaKey;
 static NSInteger dyyyGlobalTransparencyMutationDepth = 0;
 
+static BOOL DYYYIsIMFullScreenReferString(NSString *referString) {
+    NSString *lowerReferString = [referString lowercaseString];
+    if (lowerReferString.length == 0) {
+        return NO;
+    }
+
+    return [lowerReferString isEqualToString:@"chat"] ||
+           [lowerReferString containsString:@"chat_room"] ||
+           [lowerReferString containsString:@"message"] ||
+           [lowerReferString containsString:@"forward"] ||
+           [lowerReferString containsString:@"private"] ||
+           [lowerReferString containsString:@"share"] ||
+           [lowerReferString hasPrefix:@"im_"] ||
+           [lowerReferString containsString:@"_im_"];
+}
+
+static BOOL DYYYViewControllerHasIMDetailParent(UIViewController *viewController) {
+    UIViewController *parentVC = viewController;
+    for (NSInteger i = 0; parentVC && i < 6; i++) {
+        NSString *className = NSStringFromClass([parentVC class]);
+        if ([className isEqualToString:@"AWEAwemeIMDetailTableViewController"] ||
+            [className isEqualToString:@"AWEIMDetailTableViewController"] ||
+            [className containsString:@"IMDetail"]) {
+            return YES;
+        }
+        parentVC = parentVC.parentViewController;
+    }
+    return NO;
+}
+
+static BOOL DYYYViewControllerHasRichContentParent(UIViewController *viewController) {
+    UIViewController *parentVC = viewController;
+    for (NSInteger i = 0; parentVC && i < 8; i++) {
+        NSString *className = NSStringFromClass([parentVC class]);
+        if ([className containsString:@"RichContentContainerViewController"] ||
+            [className containsString:@"RichContentNewListViewController"] ||
+            [className containsString:@"AWEMultiContentImpl.RichContent"]) {
+            return YES;
+        }
+        parentVC = parentVC.parentViewController;
+    }
+    return NO;
+}
+
+static BOOL DYYYViewControllerHasIMDetailOrRichContentParent(UIViewController *viewController) {
+    return DYYYViewControllerHasIMDetailParent(viewController) || DYYYViewControllerHasRichContentParent(viewController);
+}
+
+static void DYYYDisableAncestorClippingForVideoView(UIView *view, CGFloat targetHeight);
+
+static BOOL DYYYIsVideoRenderRelatedView(UIView *view) {
+    if (!view) {
+        return NO;
+    }
+
+    NSString *viewClassName = NSStringFromClass([view class]);
+    return [viewClassName containsString:@"Player"] ||
+           [viewClassName containsString:@"Metal"] ||
+           [viewClassName containsString:@"Render"] ||
+           [viewClassName containsString:@"Video"];
+}
+
+static void DYYYRelaxRichContentAncestorClippingIfNeeded(UIView *view, UIViewController *viewController, CGFloat targetHeight) {
+    if (!view || targetHeight <= 0 || !DYYYIsVideoRenderRelatedView(view) || !DYYYViewControllerHasIMDetailOrRichContentParent(viewController)) {
+        return;
+    }
+
+    UIView *ancestor = view.superview;
+    for (NSInteger i = 0; ancestor && i < 8; i++) {
+        CGFloat ancestorHeight = CGRectGetHeight(ancestor.frame);
+        if (ancestorHeight > 0 && ancestorHeight + 0.5 < targetHeight) {
+            ancestor.clipsToBounds = NO;
+            ancestor.layer.masksToBounds = NO;
+        }
+        ancestor = ancestor.superview;
+    }
+}
+
+static NSString *DYYYReferStringFromObject(id object) {
+    if ([object respondsToSelector:@selector(referString)]) {
+        id referString = [object valueForKey:@"referString"];
+        if ([referString isKindOfClass:[NSString class]]) {
+            return (NSString *)referString;
+        }
+    }
+    return nil;
+}
+
+static BOOL DYYYIsIMDetailPlaybackController(UIViewController *viewController, NSString *referString, id model) {
+    BOOL isIMRefer = DYYYIsIMFullScreenReferString(referString) || DYYYIsIMFullScreenReferString(DYYYReferStringFromObject(model));
+    return isIMRefer && DYYYViewControllerHasIMDetailOrRichContentParent(viewController);
+}
+
+static CGFloat DYYYFullScreenAncestorHeightForView(UIView *view, CGFloat currentHeight) {
+    if (!view || !view.superview || gCurrentTabBarHeight <= 0 || currentHeight <= 0) {
+        return 0;
+    }
+
+    UIView *ancestor = view.superview;
+    for (NSInteger i = 0; ancestor && i < 4; i++) {
+        CGFloat ancestorHeight = CGRectGetHeight(ancestor.frame);
+        CGFloat diff = ancestorHeight - currentHeight;
+        if (ancestorHeight > currentHeight && fabs(diff - gCurrentTabBarHeight) < 1.0) {
+            return ancestorHeight;
+        }
+        ancestor = ancestor.superview;
+    }
+
+    return 0;
+}
+
+static void DYYYDisableAncestorClippingForVideoView(UIView *view, CGFloat targetHeight) {
+    if (!view || targetHeight <= 0) {
+        return;
+    }
+
+    UIView *ancestor = view.superview;
+    for (NSInteger i = 0; ancestor && i < 6; i++) {
+        CGFloat ancestorHeight = CGRectGetHeight(ancestor.frame);
+        if (ancestorHeight <= 0) {
+            ancestor = ancestor.superview;
+            continue;
+        }
+
+        if (ancestorHeight + 0.5 < targetHeight) {
+            ancestor.clipsToBounds = NO;
+            ancestor.layer.masksToBounds = NO;
+        } else {
+            break;
+        }
+
+        ancestor = ancestor.superview;
+    }
+}
+
+static BOOL DYYYExpandVideoViewToAncestorHeightIfNeeded(UIView *view) {
+    if (!view || !view.superview) {
+        return NO;
+    }
+
+    CGRect frame = view.frame;
+    CGFloat currentHeight = CGRectGetHeight(frame);
+    if (currentHeight <= 0) {
+        return NO;
+    }
+
+    CGFloat ancestorHeight = DYYYFullScreenAncestorHeightForView(view, currentHeight);
+    // 限制不超过屏幕高度，避免外层补高后某些祖先变 1015（932+底栏）被连带抩高
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    if (ancestorHeight > 0 && (screenHeight <= 0 || ancestorHeight <= screenHeight)) {
+        DYYYDisableAncestorClippingForVideoView(view, ancestorHeight);
+        frame.size.height = ancestorHeight;
+        view.frame = frame;
+        return YES;
+    }
+
+    CGFloat parentHeight = CGRectGetHeight(view.superview.frame);
+    if (parentHeight > 0 && currentHeight > parentHeight && fabs((currentHeight - parentHeight) - gCurrentTabBarHeight) < 1.0) {
+        DYYYDisableAncestorClippingForVideoView(view, currentHeight);
+        return YES;
+    }
+
+    return NO;
+}
+
+// 仅解除祖先裁剪，不写 frame，避免布局循环（私信图文场景视频层靠 autoresize 自适应）
+static void DYYYRelaxAncestorClippingBelowScreenHeight(UIView *view) {
+    if (!view) {
+        return;
+    }
+
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    if (screenHeight <= 0) {
+        return;
+    }
+
+    UIView *ancestor = view.superview;
+    for (NSInteger i = 0; ancestor && i < 8; i++) {
+        CGFloat ancestorHeight = CGRectGetHeight(ancestor.frame);
+        if (ancestorHeight > 0 && ancestorHeight + 0.5 < screenHeight) {
+            ancestor.clipsToBounds = NO;
+            ancestor.layer.masksToBounds = NO;
+        }
+        ancestor = ancestor.superview;
+    }
+}
+
+// 判断传入的视图是否为私信图文场景下承载视频的 RichContent 容器。
+// 只锁 RichContentContainerViewController 一层：扩到 932 后其下视频容器自适应铺满，
+// PlayInteraction 覆盖层由自身 hook 强制保持屏高减底栏（849）
+static BOOL DYYYIsRichContentFullScreenContainerView(UIView *view, UIViewController *viewController) {
+    if (!view || !viewController) {
+        return NO;
+    }
+
+    NSString *className = NSStringFromClass([viewController class]);
+    return [className containsString:@"RichContentContainerViewController"];
+}
+
+static BOOL DYYYIsRichContentResizableContainerView(UIView *view, UIViewController *viewController) {
+    if (!view || !viewController || viewController.view != view) {
+        return NO;
+    }
+
+    NSString *className = NSStringFromClass([viewController class]);
+    return [className containsString:@"RichContentContainerViewController"] ||
+           [className containsString:@"RichContentNewListViewController"] ||
+           [className containsString:@"AWEMultiContentImpl.RichContent"];
+}
+
+static void DYYYSyncRichContentPlayerViewToSuperview(UIView *view) {
+    if (!view || !view.superview) {
+        return;
+    }
+
+    CGFloat parentHeight = CGRectGetHeight(view.superview.frame);
+    CGFloat currentHeight = CGRectGetHeight(view.frame);
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    if (parentHeight <= 0 || currentHeight <= 0 || screenHeight <= 0 || parentHeight > screenHeight) {
+        return;
+    }
+
+    if (parentHeight > currentHeight && fabs((parentHeight - currentHeight) - gCurrentTabBarHeight) < 1.0) {
+        CGRect frame = view.frame;
+        frame.size.height = parentHeight;
+        view.frame = frame;
+    }
+}
+
+// 上溯视图层级，将承载视频的 RichContentContainer 从 849 补齐到屏幕高度
+// 仅作用于私信图文场景，不动承载文案/按钮/输入栏的 PlayInteraction 覆盖层
+static void DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, UIViewController *viewController) {
+    if (!view || !viewController) {
+        return;
+    }
+
+    BOOL hasIMParent = DYYYViewControllerHasIMDetailParent(viewController);
+    BOOL hasRichParent = DYYYViewControllerHasRichContentParent(viewController);
+
+    if (!hasIMParent && !hasRichParent) {
+        return;
+    }
+
+    static BOOL gIsExpandingContainer = NO;
+    if (gIsExpandingContainer) {
+        // 避免设 frame 时回调进入嵌套调用导致切换视频卡死
+        return;
+    }
+
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    if (gCurrentTabBarHeight <= 0 || screenHeight <= 0) {
+        return;
+    }
+
+    UIView *ancestor = view.superview;
+    for (NSInteger i = 0; ancestor && i < 6; i++) {
+        UIViewController *ancestorVC = [DYYYUtils firstAvailableViewControllerFromView:ancestor];
+        if (ancestorVC && DYYYIsRichContentResizableContainerView(ancestor, ancestorVC)) {
+            CGFloat ancestorHeight = CGRectGetHeight(ancestor.frame);
+            BOOL shouldExpand = ancestorHeight > 0 &&
+                                fabs((screenHeight - ancestorHeight) - gCurrentTabBarHeight) < 1.0 &&
+                                fabs(ancestorHeight - screenHeight) > 0.5;
+            if (shouldExpand) {
+                CGRect expandedFrame = ancestor.frame;
+                expandedFrame.size.height = screenHeight;
+                ancestor.clipsToBounds = NO;
+                ancestor.layer.masksToBounds = NO;
+                gIsExpandingContainer = YES;
+                ancestor.frame = expandedFrame;
+                gIsExpandingContainer = NO;
+            }
+
+            if (DYYYIsRichContentFullScreenContainerView(ancestor, ancestorVC)) {
+                // RichContentContainer 是本次上溯的边界，避免继续改到 CellVC 导致高度叠加
+                break;
+            }
+        }
+        ancestor = ancestor.superview;
+    }
+}
+
 static void updateGlobalTransparencyCache() {
     NSString *transparentValue = DYYYGetString(kDYYYGlobalTransparencyKey);
     if (transparentValue.length > 0) {
@@ -2103,6 +2384,13 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 - (void)setPlayerLutFilter:(id)lutFilter HDRLutImage:(id)HDRLutImage {
     %orig(lutFilter, DYYYShouldDisableAllHDR() ? nil : HDRLutImage);
+}
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYEnableFullScreen") && DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
+        DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+    }
 }
 
 %end
@@ -11366,6 +11654,11 @@ static Class tabBarButtonClass = nil;
     %orig;
 
     if (DYYYGetBool(@"DYYYEnableFullScreen")) {
+        if (DYYYIsVideoRenderRelatedView(self)) {
+            UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
+            DYYYRelaxRichContentAncestorClippingIfNeeded(self, vc, CGRectGetHeight(self.frame));
+        }
+
         if (self.frame.size.height == originalTabBarHeight && originalTabBarHeight > 0) {
             UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
             if ([vc isKindOfClass:NSClassFromString(@"AWEMixVideoPanelDetailTableViewController")] || [vc isKindOfClass:NSClassFromString(@"AWECommentInputViewController")] ||
@@ -11408,6 +11701,12 @@ static Class tabBarButtonClass = nil;
     BOOL isPlayVC = ((PlayVCClass1 && [vc isKindOfClass:PlayVCClass1]) ||
                      (PlayVCClass2 && [vc isKindOfClass:PlayVCClass2]) ||
                      (PlayVCClass3 && [vc isKindOfClass:PlayVCClass3]));
+    BOOL isIMDetailPlaybackView = NO;
+    BOOL hasRichContentParent = enableFS && DYYYViewControllerHasRichContentParent(vc);
+    if (enableFS && DYYYViewControllerHasIMDetailOrRichContentParent(vc)) {
+        // IMDetail 与 RichContent 统一识别：播放器 VC 的 view 与视频渲染层均视为播放视图
+        isIMDetailPlaybackView = (isPlayVC || DYYYIsVideoRenderRelatedView(self));
+    }
 
     if (isPlayVC) {
         NSString *transparencyValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"WaaCommentTransparency"];
@@ -11417,7 +11716,15 @@ static Class tabBarButtonClass = nil;
         }
     }
 
-    if (isPlayVC && enableFS) {
+    if (hasRichContentParent && isIMDetailPlaybackView && enableFS) {
+        // 图文场景：外层 RichContentContainer 容器由 viewDidLayoutSubviews 补高到 932，
+        // 视频层借助 autoresize 自适应铺满；此处仅解除祖先裁剪让视频可见，不写 frame 避免布局循环卡死
+        DYYYRelaxAncestorClippingBelowScreenHeight(self);
+        %orig(frame);
+        return;
+    }
+
+    if (((isPlayVC && !hasRichContentParent) || isIMDetailPlaybackView) && enableFS) {
         if (frame.origin.x != 0 && frame.origin.y != 0) {
             %orig(frame);
             return;
@@ -11427,6 +11734,19 @@ static Class tabBarButtonClass = nil;
             CGFloat diff = CGRectGetHeight(superF) - CGRectGetHeight(frame);
             if (fabs(diff - gCurrentTabBarHeight) < 1.0) {
                 frame.size.height = CGRectGetHeight(superF);
+            }
+        }
+        if (isIMDetailPlaybackView) {
+            CGFloat ancestorHeight = DYYYFullScreenAncestorHeightForView(self, CGRectGetHeight(frame));
+            if (ancestorHeight > 0) {
+                DYYYDisableAncestorClippingForVideoView(self, ancestorHeight);
+                frame.size.height = ancestorHeight;
+            } else {
+                CGFloat parentHeight = CGRectGetHeight(self.superview.frame);
+                CGFloat frameHeight = CGRectGetHeight(frame);
+                if (parentHeight > 0 && frameHeight > parentHeight && fabs((frameHeight - parentHeight) - gCurrentTabBarHeight) < 1.0) {
+                    DYYYDisableAncestorClippingForVideoView(self, frameHeight);
+                }
             }
         }
 
@@ -11550,12 +11870,11 @@ static Class tabBarButtonClass = nil;
     CGRect frame = self.view.frame;
     CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
     CGFloat superviewHeight = self.view.superview.frame.size.height;
+    NSString *currentReferString = self.referString;
 
     if (frame.size.width != screenWidth && frame.size.height < superviewHeight) {
         return;
     }
-
-    NSString *currentReferString = self.referString;
 
     BOOL useFullHeight = [currentReferString isEqualToString:@"general_search"] || [currentReferString isEqualToString:@"search_result"] || [currentReferString isEqualToString:@"search_ecommerce"] ||
                          [currentReferString isEqualToString:@"close_friends_moment"] || [currentReferString isEqualToString:@"offline_mode"] || [currentReferString isEqualToString:@"challenge"] ||
@@ -11566,6 +11885,10 @@ static Class tabBarButtonClass = nil;
         if (richContentVCClass && [directParentVC isKindOfClass:richContentVCClass]) {
             useFullHeight = YES;
         }
+    }
+
+    if (!useFullHeight && DYYYIsIMDetailPlaybackController(self, currentReferString, self.model)) {
+        useFullHeight = YES;
     }
 
     if (!useFullHeight && [currentReferString isEqualToString:@"chat"]) {
@@ -11584,6 +11907,13 @@ static Class tabBarButtonClass = nil;
         if (currentVersion.length > 0 && [DYYYUtils compareVersion:currentVersion toVersion:@"39.2.0"] != NSOrderedDescending) {
             useFullHeight = YES;
         }
+    }
+
+    // 私信图文（RichContent 链路）：无论是否同时带 IMDetail 父链，
+    // 都强制覆盖层保持屏高减底栏（849），让文案/按钮留在原位不上移；
+    // 视频由外层 RichContentContainerVC 补高到 932 + autoresize 铺满，二者互不干扰
+    if (DYYYViewControllerHasRichContentParent(self)) {
+        useFullHeight = NO;
     }
 
     if (useFullHeight) {
@@ -11679,6 +12009,24 @@ static Class tabBarButtonClass = nil;
 
 %hook AWEAwemePlayVideoViewController
 
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
+        BOOL hasIMParent = DYYYViewControllerHasIMDetailParent(self);
+        BOOL hasRichParent = DYYYViewControllerHasRichContentParent(self);
+        if (hasIMParent || hasRichParent) {
+            if (hasRichParent) {
+                // 图文 RichContent 优先：即使父链同时带 IMDetail，也只扩 RichContentContainer 容器
+                DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
+                DYYYSyncRichContentPlayerViewToSuperview(self.view);
+            } else {
+                // 普通私信 IMDetail：沿用扩视频层逻辑
+                DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+            }
+        }
+    }
+}
+
 - (void)setIsAutoPlay:(BOOL)arg0 {
     %orig(arg0);
     DYYYApplyPreparedPlaybackSpeedToPlayer(self);
@@ -11714,7 +12062,9 @@ static Class tabBarButtonClass = nil;
     %orig;
     if (DYYYGetBool(@"DYYYEnableFullScreen")) {
         UIView *contentView = self.contentView;
-        if (contentView && contentView.superview) {
+        BOOL hasIMParent = DYYYViewControllerHasIMDetailParent(self);
+        BOOL hasRichParent = DYYYViewControllerHasRichContentParent(self);
+        if (!hasRichParent && contentView && contentView.superview) {
             CGRect frame = contentView.frame;
             CGFloat parentHeight = contentView.superview.frame.size.height;
 
@@ -11724,6 +12074,19 @@ static Class tabBarButtonClass = nil;
             } else if (frame.size.height == parentHeight - (gCurrentTabBarHeight * 2)) {
                 frame.size.height = parentHeight - gCurrentTabBarHeight;
                 contentView.frame = frame;
+            }
+        }
+
+        if (hasIMParent || hasRichParent) {
+            if (hasRichParent) {
+                // 图文 RichContent 优先：即使父链同时带 IMDetail，也只扩 RichContentContainer 容器
+                DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
+                DYYYSyncRichContentPlayerViewToSuperview(self.view);
+                DYYYSyncRichContentPlayerViewToSuperview(contentView);
+            } else {
+                // 普通私信 IMDetail：沿用扩视频层逻辑
+                DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+                DYYYExpandVideoViewToAncestorHeightIfNeeded(contentView);
             }
         }
     }
@@ -11763,7 +12126,9 @@ static Class tabBarButtonClass = nil;
     %orig;
     if (DYYYGetBool(@"DYYYEnableFullScreen")) {
         UIView *contentView = self.contentView;
-        if (contentView && contentView.superview) {
+        BOOL hasIMParent = DYYYViewControllerHasIMDetailParent(self);
+        BOOL hasRichParent = DYYYViewControllerHasRichContentParent(self);
+        if (!hasRichParent && contentView && contentView.superview) {
             CGRect frame = contentView.frame;
             CGFloat parentHeight = contentView.superview.frame.size.height;
 
@@ -11773,6 +12138,19 @@ static Class tabBarButtonClass = nil;
             } else if (frame.size.height == parentHeight - (gCurrentTabBarHeight * 2)) {
                 frame.size.height = parentHeight - gCurrentTabBarHeight;
                 contentView.frame = frame;
+            }
+        }
+
+        if (hasIMParent || hasRichParent) {
+            if (hasRichParent) {
+                // 图文 RichContent 优先：即使父链同时带 IMDetail，也只扩 RichContentContainer 容器
+                DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
+                DYYYSyncRichContentPlayerViewToSuperview(self.view);
+                DYYYSyncRichContentPlayerViewToSuperview(contentView);
+            } else {
+                // 普通私信 IMDetail：沿用扩视频层逻辑
+                DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+                DYYYExpandVideoViewToAncestorHeightIfNeeded(contentView);
             }
         }
     }

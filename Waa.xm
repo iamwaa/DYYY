@@ -8,6 +8,43 @@
 #pragma mark - 外观功能
 
 // 调整评论区透明度
+static BOOL WaaViewContainsVisibleSendDUXButton(UIView *view) {
+    if (!view || view.hidden || view.alpha <= 0.01) {
+        return NO;
+    }
+
+    NSString *className = NSStringFromClass([view class]);
+    if ([className containsString:@"DUXButton"] && CGRectGetWidth(view.frame) > 0 && CGRectGetHeight(view.frame) > 0) {
+        UIButton *button = [view isKindOfClass:[UIButton class]] ? (UIButton *)view : nil;
+        NSString *title = [button titleForState:UIControlStateNormal];
+        return title.length == 0 || [title containsString:@"发送"];
+    }
+
+    for (UIView *subview in view.subviews) {
+        if (WaaViewContainsVisibleSendDUXButton(subview)) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL WaaCommentInputContainerIsCompactBottomBar(UIView *view) {
+    if (!view) {
+        return NO;
+    }
+
+    CGRect windowFrame = view.window ? [view convertRect:view.bounds toView:view.window] : view.frame;
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    if (screenHeight <= 0 || CGRectGetWidth(windowFrame) <= 0 || CGRectGetHeight(windowFrame) <= 0) {
+        return NO;
+    }
+
+    // 只在键盘展开后的底部紧凑输入栏跳过透明度；键盘收起后的大容器继续走透明度修改
+    CGFloat height = CGRectGetHeight(windowFrame);
+    CGFloat minY = CGRectGetMinY(windowFrame);
+    return minY > screenHeight * 0.7 && height <= 140.0;
+}
+
 @interface UIView(Comment)
 - (void)setBackgroundColor:(UIColor *)backgroundColor;
 @end
@@ -15,8 +52,6 @@
 %hook UIView
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
     CGFloat transparency = 1.0;
-    BOOL shouldModify = NO;
-    NSString *transparencyKey = nil;
 
     UIView *superview = self.superview;
     while (superview) {
@@ -24,15 +59,47 @@
     }
 
     superview = self.superview;
+    BOOL isTargetMiddleContainer = [self isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer")];
+    BOOL isTargetCommentContainer = [self isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")];
     BOOL isFirstChildOfMiddleContainer = NO;
     BOOL isFirstChildOfCommentContainer = NO;
+    BOOL inputContainerHasSendButton = NO;
+    BOOL inputContainerIsCompactBar = NO;
+
+    if (isTargetCommentContainer) {
+        inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(self);
+        inputContainerIsCompactBar = WaaCommentInputContainerIsCompactBottomBar(self);
+    } else if (isTargetMiddleContainer) {
+        inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(self);
+        UIView *parentView = self.superview;
+        while (parentView) {
+            if ([parentView isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
+                inputContainerHasSendButton = inputContainerHasSendButton || WaaViewContainsVisibleSendDUXButton(parentView);
+                inputContainerIsCompactBar = WaaCommentInputContainerIsCompactBottomBar(parentView);
+                break;
+            }
+            parentView = parentView.superview;
+        }
+    }
     
-    while (superview && !(isFirstChildOfMiddleContainer || isFirstChildOfCommentContainer)) {
+    while (!isTargetMiddleContainer && !isTargetCommentContainer && superview && !(isFirstChildOfMiddleContainer || isFirstChildOfCommentContainer)) {
         if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer")]) {
             isFirstChildOfMiddleContainer = (superview.subviews.firstObject == self);
+            inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(superview);
+            UIView *parentView = superview.superview;
+            while (parentView) {
+                if ([parentView isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
+                    inputContainerHasSendButton = inputContainerHasSendButton || WaaViewContainsVisibleSendDUXButton(parentView);
+                    inputContainerIsCompactBar = WaaCommentInputContainerIsCompactBottomBar(parentView);
+                    break;
+                }
+                parentView = parentView.superview;
+            }
         }
         else if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
             isFirstChildOfCommentContainer = (superview.subviews.firstObject == self);
+            inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(superview);
+            inputContainerIsCompactBar = WaaCommentInputContainerIsCompactBottomBar(superview);
         }
         superview = superview.superview;
     }
@@ -40,7 +107,13 @@
     UIResponder *responder = self.nextResponder;
     BOOL isInCommentPanel = [responder isKindOfClass:NSClassFromString(@"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController")];
 
-    if (isFirstChildOfCommentContainer && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+    BOOL shouldSkipInputTransparency = (isTargetCommentContainer || isTargetMiddleContainer || isFirstChildOfCommentContainer || isFirstChildOfMiddleContainer) && inputContainerHasSendButton && inputContainerIsCompactBar;
+    if (shouldSkipInputTransparency) {
+        %orig(backgroundColor);
+        return;
+    }
+
+    if ((isTargetCommentContainer || isFirstChildOfCommentContainer) && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
         NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:@"WaaInputBoxTransparency"];
         if (transparencyStr.length > 0) {
             transparency = [transparencyStr floatValue];
@@ -54,7 +127,7 @@
             backgroundColor = [backgroundColor colorWithAlphaComponent:transparency];
         }
     } 
-    else if (isFirstChildOfMiddleContainer && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+    else if ((isTargetMiddleContainer || isFirstChildOfMiddleContainer) && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
         NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:@"WaaInputBoxTransparency"];
         if (transparencyStr.length > 0) {
             transparency = [transparencyStr floatValue];
