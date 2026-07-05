@@ -11550,40 +11550,33 @@ static Class tabBarButtonClass = nil;
     CGRect frame = self.view.frame;
     CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
     CGFloat superviewHeight = self.view.superview.frame.size.height;
+    NSString *currentReferString = self.referString;
+    NSString *lowercaseReferString = [currentReferString lowercaseString];
+    BOOL isPrivateMessageRefer = [lowercaseReferString isEqualToString:@"chat"] ||
+                                 [lowercaseReferString containsString:@"chat_room"] ||
+                                 [lowercaseReferString containsString:@"message"] ||
+                                 [lowercaseReferString containsString:@"forward"] ||
+                                 [lowercaseReferString containsString:@"private"] ||
+                                 [lowercaseReferString hasPrefix:@"im_"] ||
+                                 [lowercaseReferString containsString:@"_im_"];
 
-    if (frame.size.width != screenWidth && frame.size.height < superviewHeight) {
+    if (!isPrivateMessageRefer && fabs(frame.size.width - screenWidth) > 0.5 && frame.size.height < superviewHeight) {
         return;
     }
 
-    NSString *currentReferString = self.referString;
+    BOOL useFullHeight = [lowercaseReferString isEqualToString:@"general_search"] || [lowercaseReferString isEqualToString:@"search_result"] || [lowercaseReferString isEqualToString:@"search_ecommerce"] ||
+                         [lowercaseReferString isEqualToString:@"close_friends_moment"] || [lowercaseReferString isEqualToString:@"offline_mode"] || [lowercaseReferString isEqualToString:@"challenge"] ||
+                         [lowercaseReferString isEqualToString:@"general_search_scan"] || currentReferString == nil;
 
-    BOOL useFullHeight = [currentReferString isEqualToString:@"general_search"] || [currentReferString isEqualToString:@"search_result"] || [currentReferString isEqualToString:@"search_ecommerce"] ||
-                         [currentReferString isEqualToString:@"close_friends_moment"] || [currentReferString isEqualToString:@"offline_mode"] || [currentReferString isEqualToString:@"challenge"] ||
-                         [currentReferString isEqualToString:@"general_search_scan"] || currentReferString == nil;
-
-    if (!useFullHeight && [currentReferString isEqualToString:@"co_play_watch"]) {
+    if (!useFullHeight && [lowercaseReferString isEqualToString:@"co_play_watch"]) {
         Class richContentVCClass = NSClassFromString(@"AWEFriendsImpl.RichContentNewListViewController");
         if (richContentVCClass && [directParentVC isKindOfClass:richContentVCClass]) {
             useFullHeight = YES;
         }
     }
 
-    if (!useFullHeight && [currentReferString isEqualToString:@"chat"]) {
-        NSString *currentVersion = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
-        if (currentVersion.length == 0) {
-            Class managerClass = %c(AWEVersionUpdateManager);
-            if (managerClass && [managerClass respondsToSelector:@selector(sharedInstance)]) {
-                AWEVersionUpdateManager *manager = [managerClass sharedInstance];
-                if ([manager respondsToSelector:@selector(currentVersion)]) {
-                    currentVersion = manager.currentVersion;
-                }
-            }
-        }
-
-        // 39.2.0 及更早版本的私信播放页以完整高度布局信息区，否则底部约束会整体上移。 （靠版本号判断不靠谱，这个是 abtest 的）
-        if (currentVersion.length > 0 && [DYYYUtils compareVersion:currentVersion toVersion:@"39.2.0"] != NSOrderedDescending) {
-            useFullHeight = YES;
-        }
+    if (!useFullHeight && isPrivateMessageRefer) {
+        useFullHeight = YES;
     }
 
     if (useFullHeight) {
