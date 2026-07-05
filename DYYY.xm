@@ -89,27 +89,6 @@ static BOOL DYYYIsIMDetailPlaybackController(UIViewController *viewController, N
     return isIMRefer && DYYYViewControllerHasIMDetailParent(viewController);
 }
 
-static BOOL DYYYExpandViewToSuperviewHeightIfNeeded(UIView *view) {
-    if (!view || !view.superview || gCurrentTabBarHeight <= 0) {
-        return NO;
-    }
-
-    CGRect frame = view.frame;
-    CGFloat parentHeight = CGRectGetHeight(view.superview.frame);
-    if (parentHeight <= 0 || CGRectGetHeight(frame) <= 0) {
-        return NO;
-    }
-
-    CGFloat diff = parentHeight - CGRectGetHeight(frame);
-    if (fabs(diff - gCurrentTabBarHeight) < 1.0) {
-        frame.size.height = parentHeight;
-        view.frame = frame;
-        return YES;
-    }
-
-    return NO;
-}
-
 static CGFloat DYYYFullScreenAncestorHeightForView(UIView *view, CGFloat currentHeight) {
     if (!view || !view.superview || gCurrentTabBarHeight <= 0 || currentHeight <= 0) {
         return 0;
@@ -128,6 +107,30 @@ static CGFloat DYYYFullScreenAncestorHeightForView(UIView *view, CGFloat current
     return 0;
 }
 
+static void DYYYDisableAncestorClippingForVideoView(UIView *view, CGFloat targetHeight) {
+    if (!view || targetHeight <= 0) {
+        return;
+    }
+
+    UIView *ancestor = view.superview;
+    for (NSInteger i = 0; ancestor && i < 6; i++) {
+        CGFloat ancestorHeight = CGRectGetHeight(ancestor.frame);
+        if (ancestorHeight <= 0) {
+            ancestor = ancestor.superview;
+            continue;
+        }
+
+        if (ancestorHeight + 0.5 < targetHeight) {
+            ancestor.clipsToBounds = NO;
+            ancestor.layer.masksToBounds = NO;
+        } else {
+            break;
+        }
+
+        ancestor = ancestor.superview;
+    }
+}
+
 static BOOL DYYYExpandVideoViewToAncestorHeightIfNeeded(UIView *view) {
     if (!view || !view.superview) {
         return NO;
@@ -141,9 +144,15 @@ static BOOL DYYYExpandVideoViewToAncestorHeightIfNeeded(UIView *view) {
 
     CGFloat ancestorHeight = DYYYFullScreenAncestorHeightForView(view, currentHeight);
     if (ancestorHeight > 0) {
-        view.superview.clipsToBounds = NO;
+        DYYYDisableAncestorClippingForVideoView(view, ancestorHeight);
         frame.size.height = ancestorHeight;
         view.frame = frame;
+        return YES;
+    }
+
+    CGFloat parentHeight = CGRectGetHeight(view.superview.frame);
+    if (parentHeight > 0 && currentHeight > parentHeight && fabs((currentHeight - parentHeight) - gCurrentTabBarHeight) < 1.0) {
+        DYYYDisableAncestorClippingForVideoView(view, currentHeight);
         return YES;
     }
 
@@ -11554,8 +11563,14 @@ static Class tabBarButtonClass = nil;
         if (isIMDetailPlaybackView) {
             CGFloat ancestorHeight = DYYYFullScreenAncestorHeightForView(self, CGRectGetHeight(frame));
             if (ancestorHeight > 0) {
-                self.superview.clipsToBounds = NO;
+                DYYYDisableAncestorClippingForVideoView(self, ancestorHeight);
                 frame.size.height = ancestorHeight;
+            } else {
+                CGFloat parentHeight = CGRectGetHeight(self.superview.frame);
+                CGFloat frameHeight = CGRectGetHeight(frame);
+                if (parentHeight > 0 && frameHeight > parentHeight && fabs((frameHeight - parentHeight) - gCurrentTabBarHeight) < 1.0) {
+                    DYYYDisableAncestorClippingForVideoView(self, frameHeight);
+                }
             }
         }
 
