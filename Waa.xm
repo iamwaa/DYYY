@@ -5,6 +5,10 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
+static BOOL WaaKeyboardVisible = NO;
+static id WaaKeyboardWillShowObserver = nil;
+static id WaaKeyboardWillHideObserver = nil;
+
 #pragma mark - 外观功能
 
 // 调整评论区透明度
@@ -26,21 +30,24 @@
     superview = self.superview;
     BOOL isFirstChildOfMiddleContainer = NO;
     BOOL isFirstChildOfCommentContainer = NO;
+    BOOL isInsideCommentInputContainer = NO;
     
-    while (superview && !(isFirstChildOfMiddleContainer || isFirstChildOfCommentContainer)) {
+    while (superview) {
         if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer")]) {
-            isFirstChildOfMiddleContainer = (superview.subviews.firstObject == self);
+            isFirstChildOfMiddleContainer = isFirstChildOfMiddleContainer || (superview.subviews.firstObject == self);
         }
         else if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
-            isFirstChildOfCommentContainer = (superview.subviews.firstObject == self);
+            isInsideCommentInputContainer = YES;
+            isFirstChildOfCommentContainer = isFirstChildOfCommentContainer || (superview.subviews.firstObject == self);
         }
         superview = superview.superview;
     }
 
     UIResponder *responder = self.nextResponder;
     BOOL isInCommentPanel = [responder isKindOfClass:NSClassFromString(@"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController")];
+    BOOL shouldSkipInputTransparency = WaaKeyboardVisible && isInsideCommentInputContainer;
 
-    if (isFirstChildOfCommentContainer && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+    if (isFirstChildOfCommentContainer && !shouldSkipInputTransparency && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
         NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:@"WaaInputBoxTransparency"];
         if (transparencyStr.length > 0) {
             transparency = [transparencyStr floatValue];
@@ -54,7 +61,7 @@
             backgroundColor = [backgroundColor colorWithAlphaComponent:transparency];
         }
     } 
-    else if (isFirstChildOfMiddleContainer && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+    else if (isFirstChildOfMiddleContainer && !shouldSkipInputTransparency && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
         NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:@"WaaInputBoxTransparency"];
         if (transparencyStr.length > 0) {
             transparency = [transparencyStr floatValue];
@@ -408,6 +415,19 @@ static void removeTargetSubviews(UIView *view) {
 %end
 
 %ctor {
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    WaaKeyboardWillShowObserver = [center addObserverForName:UIKeyboardWillShowNotification
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification *notification) {
+                                                    WaaKeyboardVisible = YES;
+                                                  }];
+    WaaKeyboardWillHideObserver = [center addObserverForName:UIKeyboardWillHideNotification
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification *notification) {
+                                                    WaaKeyboardVisible = NO;
+                                                  }];
     %init;
 
     if (DYYYGetBool(@"WaaFollowfix")) {
