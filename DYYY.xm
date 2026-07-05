@@ -44,6 +44,112 @@ static NSString *const kDYYYGlobalTransparencyDidChangeNotification = @"DYYYGlob
 static char kDYYYGlobalTransparencyBaseAlphaKey;
 static NSInteger dyyyGlobalTransparencyMutationDepth = 0;
 
+static BOOL DYYYIsIMFullScreenReferString(NSString *referString) {
+    NSString *lowerReferString = [referString lowercaseString];
+    if (lowerReferString.length == 0) {
+        return NO;
+    }
+
+    return [lowerReferString isEqualToString:@"chat"] ||
+           [lowerReferString containsString:@"chat_room"] ||
+           [lowerReferString containsString:@"message"] ||
+           [lowerReferString containsString:@"forward"] ||
+           [lowerReferString containsString:@"private"] ||
+           [lowerReferString containsString:@"share"] ||
+           [lowerReferString hasPrefix:@"im_"] ||
+           [lowerReferString containsString:@"_im_"];
+}
+
+static BOOL DYYYViewControllerHasIMDetailParent(UIViewController *viewController) {
+    UIViewController *parentVC = viewController;
+    for (NSInteger i = 0; parentVC && i < 6; i++) {
+        NSString *className = NSStringFromClass([parentVC class]);
+        if ([className isEqualToString:@"AWEAwemeIMDetailTableViewController"] ||
+            [className isEqualToString:@"AWEIMDetailTableViewController"] ||
+            [className containsString:@"IMDetail"]) {
+            return YES;
+        }
+        parentVC = parentVC.parentViewController;
+    }
+    return NO;
+}
+
+static NSString *DYYYReferStringFromObject(id object) {
+    if ([object respondsToSelector:@selector(referString)]) {
+        id referString = [object valueForKey:@"referString"];
+        if ([referString isKindOfClass:[NSString class]]) {
+            return (NSString *)referString;
+        }
+    }
+    return nil;
+}
+
+static BOOL DYYYIsIMDetailPlaybackController(UIViewController *viewController, NSString *referString, id model) {
+    BOOL isIMRefer = DYYYIsIMFullScreenReferString(referString) || DYYYIsIMFullScreenReferString(DYYYReferStringFromObject(model));
+    return isIMRefer && DYYYViewControllerHasIMDetailParent(viewController);
+}
+
+static BOOL DYYYExpandViewToSuperviewHeightIfNeeded(UIView *view) {
+    if (!view || !view.superview || gCurrentTabBarHeight <= 0) {
+        return NO;
+    }
+
+    CGRect frame = view.frame;
+    CGFloat parentHeight = CGRectGetHeight(view.superview.frame);
+    if (parentHeight <= 0 || CGRectGetHeight(frame) <= 0) {
+        return NO;
+    }
+
+    CGFloat diff = parentHeight - CGRectGetHeight(frame);
+    if (fabs(diff - gCurrentTabBarHeight) < 1.0) {
+        frame.size.height = parentHeight;
+        view.frame = frame;
+        return YES;
+    }
+
+    return NO;
+}
+
+static CGFloat DYYYFullScreenAncestorHeightForView(UIView *view, CGFloat currentHeight) {
+    if (!view || !view.superview || gCurrentTabBarHeight <= 0 || currentHeight <= 0) {
+        return 0;
+    }
+
+    UIView *ancestor = view.superview;
+    for (NSInteger i = 0; ancestor && i < 4; i++) {
+        CGFloat ancestorHeight = CGRectGetHeight(ancestor.frame);
+        CGFloat diff = ancestorHeight - currentHeight;
+        if (ancestorHeight > currentHeight && fabs(diff - gCurrentTabBarHeight) < 1.0) {
+            return ancestorHeight;
+        }
+        ancestor = ancestor.superview;
+    }
+
+    return 0;
+}
+
+static BOOL DYYYExpandVideoViewToAncestorHeightIfNeeded(UIView *view) {
+    if (!view || !view.superview) {
+        return NO;
+    }
+
+    CGRect frame = view.frame;
+    CGFloat currentHeight = CGRectGetHeight(frame);
+    if (currentHeight <= 0) {
+        return NO;
+    }
+
+    CGFloat ancestorHeight = DYYYFullScreenAncestorHeightForView(view, currentHeight);
+    if (ancestorHeight > 0) {
+        view.superview.clipsToBounds = NO;
+        frame.size.height = ancestorHeight;
+        view.frame = frame;
+        return YES;
+    }
+
+    return NO;
+}
+
 static void updateGlobalTransparencyCache() {
     NSString *transparentValue = DYYYGetString(kDYYYGlobalTransparencyKey);
     if (transparentValue.length > 0) {
@@ -2103,6 +2209,13 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 - (void)setPlayerLutFilter:(id)lutFilter HDRLutImage:(id)HDRLutImage {
     %orig(lutFilter, DYYYShouldDisableAllHDR() ? nil : HDRLutImage);
+}
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYEnableFullScreen") && DYYYViewControllerHasIMDetailParent(self)) {
+        DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+    }
 }
 
 %end
@@ -11408,6 +11521,15 @@ static Class tabBarButtonClass = nil;
     BOOL isPlayVC = ((PlayVCClass1 && [vc isKindOfClass:PlayVCClass1]) ||
                      (PlayVCClass2 && [vc isKindOfClass:PlayVCClass2]) ||
                      (PlayVCClass3 && [vc isKindOfClass:PlayVCClass3]));
+    BOOL isIMDetailPlaybackView = NO;
+    if (enableFS && DYYYViewControllerHasIMDetailParent(vc)) {
+        NSString *viewClassName = NSStringFromClass([self class]);
+        isIMDetailPlaybackView = isPlayVC ||
+                                 [viewClassName containsString:@"Player"] ||
+                                 [viewClassName containsString:@"Metal"] ||
+                                 [viewClassName containsString:@"Render"] ||
+                                 [viewClassName containsString:@"Video"];
+    }
 
     if (isPlayVC) {
         NSString *transparencyValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"WaaCommentTransparency"];
@@ -11417,7 +11539,7 @@ static Class tabBarButtonClass = nil;
         }
     }
 
-    if (isPlayVC && enableFS) {
+    if ((isPlayVC || isIMDetailPlaybackView) && enableFS) {
         if (frame.origin.x != 0 && frame.origin.y != 0) {
             %orig(frame);
             return;
@@ -11427,6 +11549,13 @@ static Class tabBarButtonClass = nil;
             CGFloat diff = CGRectGetHeight(superF) - CGRectGetHeight(frame);
             if (fabs(diff - gCurrentTabBarHeight) < 1.0) {
                 frame.size.height = CGRectGetHeight(superF);
+            }
+        }
+        if (isIMDetailPlaybackView) {
+            CGFloat ancestorHeight = DYYYFullScreenAncestorHeightForView(self, CGRectGetHeight(frame));
+            if (ancestorHeight > 0) {
+                self.superview.clipsToBounds = NO;
+                frame.size.height = ancestorHeight;
             }
         }
 
@@ -11552,52 +11681,6 @@ static Class tabBarButtonClass = nil;
     CGFloat superviewHeight = self.view.superview.frame.size.height;
     NSString *currentReferString = self.referString;
 
-    static char kDYYYIMFullScreenDebugLastLogTimeKey;
-    NSTimeInterval now = CACurrentMediaTime();
-    NSNumber *lastLogTime = objc_getAssociatedObject(self, &kDYYYIMFullScreenDebugLastLogTimeKey);
-    if (!lastLogTime || now - lastLogTime.doubleValue > 1.0) {
-        objc_setAssociatedObject(self, &kDYYYIMFullScreenDebugLastLogTimeKey, @(now), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-        NSString *modelReferString = nil;
-        id model = self.model;
-        if ([model respondsToSelector:@selector(referString)]) {
-            modelReferString = [model valueForKey:@"referString"];
-        }
-
-        NSMutableArray<NSString *> *parentClassNames = [NSMutableArray array];
-        UIViewController *debugParentVC = self.parentViewController;
-        for (NSInteger i = 0; debugParentVC && i < 5; i++) {
-            [parentClassNames addObject:NSStringFromClass([debugParentVC class]) ?: @""];
-            debugParentVC = debugParentVC.parentViewController;
-        }
-
-        NSString *lowerReferString = [currentReferString lowercaseString] ?: @"";
-        NSString *lowerModelReferString = [modelReferString lowercaseString] ?: @"";
-        BOOL likelyIMScene = [lowerReferString isEqualToString:@"chat"] ||
-                             [lowerReferString containsString:@"chat"] ||
-                             [lowerReferString containsString:@"message"] ||
-                             [lowerReferString containsString:@"private"] ||
-                             [lowerReferString containsString:@"share"] ||
-                             [lowerReferString hasPrefix:@"im_"] ||
-                             [lowerModelReferString isEqualToString:@"chat"] ||
-                             [lowerModelReferString containsString:@"chat"] ||
-                             [lowerModelReferString containsString:@"message"] ||
-                             [lowerModelReferString containsString:@"private"] ||
-                             [lowerModelReferString containsString:@"share"] ||
-                             [lowerModelReferString hasPrefix:@"im_"];
-
-        NSLog(@"[DYYY][IMFullScreenDebug] vc=%@ refer=%@ modelRefer=%@ likelyIM=%@ frame=%@ superFrame=%@ screenWidth=%.1f superHeight=%.1f parents=%@",
-              NSStringFromClass([self class]),
-              currentReferString,
-              modelReferString,
-              likelyIMScene ? @"YES" : @"NO",
-              NSStringFromCGRect(frame),
-              NSStringFromCGRect(self.view.superview.frame),
-              screenWidth,
-              superviewHeight,
-              [parentClassNames componentsJoinedByString:@" -> "]);
-    }
-
     if (frame.size.width != screenWidth && frame.size.height < superviewHeight) {
         return;
     }
@@ -11611,6 +11694,10 @@ static Class tabBarButtonClass = nil;
         if (richContentVCClass && [directParentVC isKindOfClass:richContentVCClass]) {
             useFullHeight = YES;
         }
+    }
+
+    if (!useFullHeight && DYYYIsIMDetailPlaybackController(self, currentReferString, self.model)) {
+        useFullHeight = YES;
     }
 
     if (!useFullHeight && [currentReferString isEqualToString:@"chat"]) {
@@ -11724,6 +11811,13 @@ static Class tabBarButtonClass = nil;
 
 %hook AWEAwemePlayVideoViewController
 
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYEnableFullScreen") && DYYYViewControllerHasIMDetailParent(self)) {
+        DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+    }
+}
+
 - (void)setIsAutoPlay:(BOOL)arg0 {
     %orig(arg0);
     DYYYApplyPreparedPlaybackSpeedToPlayer(self);
@@ -11770,6 +11864,11 @@ static Class tabBarButtonClass = nil;
                 frame.size.height = parentHeight - gCurrentTabBarHeight;
                 contentView.frame = frame;
             }
+        }
+
+        if (DYYYViewControllerHasIMDetailParent(self)) {
+            DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+            DYYYExpandVideoViewToAncestorHeightIfNeeded(contentView);
         }
     }
 }
@@ -11819,6 +11918,11 @@ static Class tabBarButtonClass = nil;
                 frame.size.height = parentHeight - gCurrentTabBarHeight;
                 contentView.frame = frame;
             }
+        }
+
+        if (DYYYViewControllerHasIMDetailParent(self)) {
+            DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+            DYYYExpandVideoViewToAncestorHeightIfNeeded(contentView);
         }
     }
 }
