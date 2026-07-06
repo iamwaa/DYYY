@@ -13035,8 +13035,10 @@ static Class TagViewClass = nil;
     if (!DYYYGetBool(@"DYYYEnableFullScreen")) {
         return;
     }
+    // AWEAwemeDetailCellViewController 头文件为前向声明，需显式转 UIViewController 后调用属性与 helper
+    UIViewController *cellVC = (UIViewController *)self;
     // 仅私有图文（RichContent 链路、非 IMDetail）：普通私信走原有的扩视频层逻辑
-    if (!DYYYViewControllerHasRichContentParent(self) || DYYYViewControllerHasIMDetailParent(self)) {
+    if (!DYYYViewControllerHasRichContentParent(cellVC) || DYYYViewControllerHasIMDetailParent(cellVC)) {
         return;
     }
 
@@ -13046,14 +13048,15 @@ static Class TagViewClass = nil;
     }
 
     CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
-    CGRect cellFrame = self.view.frame;
+    UIView *cellView = cellVC.view;
+    CGRect cellFrame = cellView.frame;
     if (screenHeight > 0 && fabs(CGRectGetHeight(cellFrame) - screenHeight) > 0.5) {
         // 重入保护：设 frame 会触发新一轮 layout，避免循环导致切换视频卡死
         sExpandingCellVC = YES;
         cellFrame.size.height = screenHeight;
-        self.view.clipsToBounds = NO;
-        self.view.layer.masksToBounds = NO;
-        self.view.frame = cellFrame;
+        cellView.clipsToBounds = NO;
+        cellView.layer.masksToBounds = NO;
+        cellView.frame = cellFrame;
         sExpandingCellVC = NO;
     }
 }
