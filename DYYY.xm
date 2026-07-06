@@ -94,57 +94,32 @@ static BOOL DYYYViewControllerHasIMDetailOrRichContentParent(UIViewController *v
 
 static void DYYYDisableAncestorClippingForVideoView(UIView *view, CGFloat targetHeight);
 
-static BOOL DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, CGRect *frame) {
-    if (!view || !frame || gCurrentTabBarHeight <= 0) {
+static BOOL DYYYIsVideoRenderRelatedView(UIView *view) {
+    if (!view) {
         return NO;
     }
 
-    CGFloat frameHeight = CGRectGetHeight(*frame);
-    if (frameHeight <= 0) {
-        return NO;
-    }
-
-    CGFloat targetHeight = 0;
-    CGFloat parentHeight = CGRectGetHeight(view.superview.frame);
-    if (parentHeight > frameHeight && fabs((parentHeight - frameHeight) - gCurrentTabBarHeight) < 1.0) {
-        targetHeight = parentHeight;
-    }
-
-    if (targetHeight <= 0) {
-        CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
-        if (screenHeight > frameHeight && fabs((screenHeight - frameHeight) - gCurrentTabBarHeight) < 1.0) {
-            targetHeight = screenHeight;
-        }
-    }
-
-    if (targetHeight <= 0) {
-        return NO;
-    }
-
-    DYYYDisableAncestorClippingForVideoView(view, targetHeight);
-    frame->size.height = targetHeight;
-    return YES;
+    NSString *viewClassName = NSStringFromClass([view class]);
+    return [viewClassName containsString:@"Player"] ||
+           [viewClassName containsString:@"Metal"] ||
+           [viewClassName containsString:@"Render"] ||
+           [viewClassName containsString:@"Video"];
 }
 
-static BOOL DYYYIsRichContentFullScreenContainerView(UIView *view, UIViewController *viewController) {
-    if (!view || !viewController) {
-        return NO;
+static void DYYYRelaxRichContentAncestorClippingIfNeeded(UIView *view, UIViewController *viewController, CGFloat targetHeight) {
+    if (!view || targetHeight <= 0 || !DYYYIsVideoRenderRelatedView(view) || !DYYYViewControllerHasIMDetailOrRichContentParent(viewController)) {
+        return;
     }
 
-    NSString *vcClassName = NSStringFromClass([viewController class]);
-    NSString *viewClassName = NSStringFromClass([view class]);
-    BOOL isDetailCellViewController = [vcClassName containsString:@"AWEAwemeDetailCellViewController"];
-    BOOL hasRichContentParent = DYYYViewControllerHasRichContentParent(viewController);
-    if (!isDetailCellViewController && !DYYYViewControllerHasIMDetailOrRichContentParent(viewController)) {
-        return NO;
+    UIView *ancestor = view.superview;
+    for (NSInteger i = 0; ancestor && i < 8; i++) {
+        CGFloat ancestorHeight = CGRectGetHeight(ancestor.frame);
+        if (ancestorHeight > 0 && ancestorHeight + 0.5 < targetHeight) {
+            ancestor.clipsToBounds = NO;
+            ancestor.layer.masksToBounds = NO;
+        }
+        ancestor = ancestor.superview;
     }
-
-    return isDetailCellViewController ||
-           [vcClassName containsString:@"RichContentContainerViewController"] ||
-           [vcClassName containsString:@"RichContentNewListViewController"] ||
-           [vcClassName containsString:@"AWEMultiContentImpl.RichContent"] ||
-           [viewClassName containsString:@"RichContent"] ||
-           (hasRichContentParent && [viewClassName isEqualToString:@"UIView"]);
 }
 
 static NSString *DYYYReferStringFromObject(id object) {
@@ -11561,15 +11536,13 @@ static Class tabBarButtonClass = nil;
     %orig;
 
     if (DYYYGetBool(@"DYYYEnableFullScreen")) {
-        UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
-        if (DYYYIsRichContentFullScreenContainerView(self, vc)) {
-            CGRect frame = self.frame;
-            if (DYYYExpandFullScreenContainerFrameIfNeeded(self, &frame) && fabs(CGRectGetHeight(frame) - CGRectGetHeight(self.frame)) > 0.5) {
-                self.frame = frame;
-            }
+        if (DYYYIsVideoRenderRelatedView(self)) {
+            UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
+            DYYYRelaxRichContentAncestorClippingIfNeeded(self, vc, CGRectGetHeight(self.frame));
         }
 
         if (self.frame.size.height == originalTabBarHeight && originalTabBarHeight > 0) {
+            UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
             if ([vc isKindOfClass:NSClassFromString(@"AWEMixVideoPanelDetailTableViewController")] || [vc isKindOfClass:NSClassFromString(@"AWECommentInputViewController")] ||
                 [vc isKindOfClass:NSClassFromString(@"AWEAwemeDetailTableViewController")]) {
                 self.backgroundColor = [UIColor clearColor];
@@ -11611,17 +11584,9 @@ static Class tabBarButtonClass = nil;
                      (PlayVCClass2 && [vc isKindOfClass:PlayVCClass2]) ||
                      (PlayVCClass3 && [vc isKindOfClass:PlayVCClass3]));
     BOOL isIMDetailPlaybackView = NO;
-    BOOL isRichContentContainerView = NO;
-    if (enableFS) {
-        isRichContentContainerView = DYYYIsRichContentFullScreenContainerView(self, vc);
-        if (DYYYViewControllerHasIMDetailOrRichContentParent(vc)) {
-            NSString *viewClassName = NSStringFromClass([self class]);
-            isIMDetailPlaybackView = isPlayVC ||
-                                     [viewClassName containsString:@"Player"] ||
-                                     [viewClassName containsString:@"Metal"] ||
-                                     [viewClassName containsString:@"Render"] ||
-                                     [viewClassName containsString:@"Video"];
-        }
+    BOOL hasRichContentParent = enableFS && DYYYViewControllerHasRichContentParent(vc);
+    if (enableFS && DYYYViewControllerHasIMDetailOrRichContentParent(vc)) {
+        isIMDetailPlaybackView = hasRichContentParent ? DYYYIsVideoRenderRelatedView(self) : (isPlayVC || DYYYIsVideoRenderRelatedView(self));
     }
 
     if (isPlayVC) {
@@ -11632,7 +11597,13 @@ static Class tabBarButtonClass = nil;
         }
     }
 
-    if ((isPlayVC || isIMDetailPlaybackView || isRichContentContainerView) && enableFS) {
+    if (hasRichContentParent && isIMDetailPlaybackView && enableFS) {
+        DYYYRelaxRichContentAncestorClippingIfNeeded(self, vc, CGRectGetHeight(frame));
+        %orig(frame);
+        return;
+    }
+
+    if (((isPlayVC && !hasRichContentParent) || isIMDetailPlaybackView) && enableFS) {
         if (frame.origin.x != 0 && frame.origin.y != 0) {
             %orig(frame);
             return;
@@ -11644,10 +11615,6 @@ static Class tabBarButtonClass = nil;
                 frame.size.height = CGRectGetHeight(superF);
             }
         }
-        if (isRichContentContainerView) {
-            DYYYExpandFullScreenContainerFrameIfNeeded(self, &frame);
-        }
-
         if (isIMDetailPlaybackView) {
             CGFloat ancestorHeight = DYYYFullScreenAncestorHeightForView(self, CGRectGetHeight(frame));
             if (ancestorHeight > 0) {
