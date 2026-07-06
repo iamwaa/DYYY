@@ -28,6 +28,21 @@ static BOOL WaaViewContainsVisibleSendDUXButton(UIView *view) {
     return NO;
 }
 
+static BOOL WaaCommentInputContainerIsNearScreenMiddle(UIView *view) {
+    if (!view) {
+        return NO;
+    }
+
+    CGRect windowFrame = view.window ? [view convertRect:view.bounds toView:view.window] : view.frame;
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    if (screenHeight <= 0 || CGRectGetHeight(windowFrame) <= 0) {
+        return NO;
+    }
+
+    CGFloat midY = CGRectGetMidY(windowFrame);
+    return midY > screenHeight * 0.25 && midY < screenHeight * 0.75;
+}
+
 @interface UIView(Comment)
 - (void)setBackgroundColor:(UIColor *)backgroundColor;
 @end
@@ -44,15 +59,27 @@ static BOOL WaaViewContainsVisibleSendDUXButton(UIView *view) {
     superview = self.superview;
     BOOL isFirstChildOfMiddleContainer = NO;
     BOOL isFirstChildOfCommentContainer = NO;
-    BOOL commentContainerHasSendButton = NO;
+    BOOL inputContainerHasSendButton = NO;
+    BOOL inputContainerIsNearMiddle = NO;
     
     while (superview && !(isFirstChildOfMiddleContainer || isFirstChildOfCommentContainer)) {
         if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer")]) {
             isFirstChildOfMiddleContainer = (superview.subviews.firstObject == self);
+            inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(superview);
+            UIView *parentView = superview.superview;
+            while (parentView) {
+                if ([parentView isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
+                    inputContainerHasSendButton = inputContainerHasSendButton || WaaViewContainsVisibleSendDUXButton(parentView);
+                    inputContainerIsNearMiddle = WaaCommentInputContainerIsNearScreenMiddle(parentView);
+                    break;
+                }
+                parentView = parentView.superview;
+            }
         }
         else if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
             isFirstChildOfCommentContainer = (superview.subviews.firstObject == self);
-            commentContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(superview);
+            inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(superview);
+            inputContainerIsNearMiddle = WaaCommentInputContainerIsNearScreenMiddle(superview);
         }
         superview = superview.superview;
     }
@@ -60,7 +87,7 @@ static BOOL WaaViewContainsVisibleSendDUXButton(UIView *view) {
     UIResponder *responder = self.nextResponder;
     BOOL isInCommentPanel = [responder isKindOfClass:NSClassFromString(@"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController")];
 
-    if (isFirstChildOfCommentContainer && commentContainerHasSendButton) {
+    if ((isFirstChildOfCommentContainer || isFirstChildOfMiddleContainer) && inputContainerHasSendButton && inputContainerIsNearMiddle) {
         %orig(backgroundColor);
         return;
     }
