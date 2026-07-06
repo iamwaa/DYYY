@@ -11586,7 +11586,8 @@ static Class tabBarButtonClass = nil;
     BOOL isIMDetailPlaybackView = NO;
     BOOL hasRichContentParent = enableFS && DYYYViewControllerHasRichContentParent(vc);
     if (enableFS && DYYYViewControllerHasIMDetailOrRichContentParent(vc)) {
-        isIMDetailPlaybackView = hasRichContentParent ? DYYYIsVideoRenderRelatedView(self) : (isPlayVC || DYYYIsVideoRenderRelatedView(self));
+        // IMDetail 与 RichContent 统一识别：播放器 VC 的 view 与视频渲染层均视为播放视图
+        isIMDetailPlaybackView = (isPlayVC || DYYYIsVideoRenderRelatedView(self));
     }
 
     if (isPlayVC) {
@@ -11598,7 +11599,22 @@ static Class tabBarButtonClass = nil;
     }
 
     if (hasRichContentParent && isIMDetailPlaybackView && enableFS) {
-        DYYYRelaxRichContentAncestorClippingIfNeeded(self, vc, CGRectGetHeight(frame));
+        // 图文/私信图文场景：仅补齐视频层自身高度到屏幕高度并解除祖先裁剪，
+        // 不修改承载文案/按钮/输入栏的外层 RichContent 容器高度，避免布局错位与卡死
+        CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+        CGFloat frameHeight = CGRectGetHeight(frame);
+        if (screenHeight > 0 && frameHeight > 0 && fabs((screenHeight - frameHeight) - gCurrentTabBarHeight) < 1.0) {
+            // 视频层高度刚好差一个底栏：补齐到屏幕高度（如 849 -> 932）
+            frame.size.height = screenHeight;
+            DYYYDisableAncestorClippingForVideoView(self, screenHeight);
+        } else {
+            // 兜底：沿用祖先高度检测逻辑
+            CGFloat ancestorHeight = DYYYFullScreenAncestorHeightForView(self, frameHeight);
+            if (ancestorHeight > 0) {
+                DYYYDisableAncestorClippingForVideoView(self, ancestorHeight);
+                frame.size.height = ancestorHeight;
+            }
+        }
         %orig(frame);
         return;
     }
