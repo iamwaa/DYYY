@@ -74,6 +74,24 @@ static BOOL DYYYViewControllerHasIMDetailParent(UIViewController *viewController
     return NO;
 }
 
+static BOOL DYYYViewControllerHasRichContentParent(UIViewController *viewController) {
+    UIViewController *parentVC = viewController;
+    for (NSInteger i = 0; parentVC && i < 8; i++) {
+        NSString *className = NSStringFromClass([parentVC class]);
+        if ([className containsString:@"RichContentContainerViewController"] ||
+            [className containsString:@"RichContentNewListViewController"] ||
+            [className containsString:@"AWEMultiContentImpl.RichContent"]) {
+            return YES;
+        }
+        parentVC = parentVC.parentViewController;
+    }
+    return NO;
+}
+
+static BOOL DYYYViewControllerHasIMDetailOrRichContentParent(UIViewController *viewController) {
+    return DYYYViewControllerHasIMDetailParent(viewController) || DYYYViewControllerHasRichContentParent(viewController);
+}
+
 static NSString *DYYYReferStringFromObject(id object) {
     if ([object respondsToSelector:@selector(referString)]) {
         id referString = [object valueForKey:@"referString"];
@@ -86,7 +104,7 @@ static NSString *DYYYReferStringFromObject(id object) {
 
 static BOOL DYYYIsIMDetailPlaybackController(UIViewController *viewController, NSString *referString, id model) {
     BOOL isIMRefer = DYYYIsIMFullScreenReferString(referString) || DYYYIsIMFullScreenReferString(DYYYReferStringFromObject(model));
-    return isIMRefer && DYYYViewControllerHasIMDetailParent(viewController);
+    return isIMRefer && DYYYViewControllerHasIMDetailOrRichContentParent(viewController);
 }
 
 static CGFloat DYYYFullScreenAncestorHeightForView(UIView *view, CGFloat currentHeight) {
@@ -2222,7 +2240,7 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    if (DYYYGetBool(@"DYYYEnableFullScreen") && DYYYViewControllerHasIMDetailParent(self)) {
+    if (DYYYGetBool(@"DYYYEnableFullScreen") && DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
         DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
     }
 }
@@ -11531,7 +11549,7 @@ static Class tabBarButtonClass = nil;
                      (PlayVCClass2 && [vc isKindOfClass:PlayVCClass2]) ||
                      (PlayVCClass3 && [vc isKindOfClass:PlayVCClass3]));
     BOOL isIMDetailPlaybackView = NO;
-    if (enableFS && DYYYViewControllerHasIMDetailParent(vc)) {
+    if (enableFS && DYYYViewControllerHasIMDetailOrRichContentParent(vc)) {
         NSString *viewClassName = NSStringFromClass([self class]);
         isIMDetailPlaybackView = isPlayVC ||
                                  [viewClassName containsString:@"Player"] ||
@@ -11828,7 +11846,7 @@ static Class tabBarButtonClass = nil;
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    if (DYYYGetBool(@"DYYYEnableFullScreen") && DYYYViewControllerHasIMDetailParent(self)) {
+    if (DYYYGetBool(@"DYYYEnableFullScreen") && DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
         DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
     }
 }
@@ -11881,7 +11899,7 @@ static Class tabBarButtonClass = nil;
             }
         }
 
-        if (DYYYViewControllerHasIMDetailParent(self)) {
+        if (DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
             DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
             DYYYExpandVideoViewToAncestorHeightIfNeeded(contentView);
         }
@@ -11935,7 +11953,7 @@ static Class tabBarButtonClass = nil;
             }
         }
 
-        if (DYYYViewControllerHasIMDetailParent(self)) {
+        if (DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
             DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
             DYYYExpandVideoViewToAncestorHeightIfNeeded(contentView);
         }
