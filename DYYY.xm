@@ -13,6 +13,7 @@
 #import <math.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <stdarg.h>
 #import <substrate.h>
 #import <syslog.h>
 
@@ -93,6 +94,24 @@ static BOOL DYYYViewControllerHasIMDetailOrRichContentParent(UIViewController *v
 }
 
 static void DYYYDisableAncestorClippingForVideoView(UIView *view, CGFloat targetHeight);
+
+static void DYYYRichFullScreenLog(NSString *format, ...) {
+    if (!DYYYGetBool(@"DYYYEnableFullScreen")) {
+        return;
+    }
+
+    static NSInteger logCount = 0;
+    if (logCount >= 120) {
+        return;
+    }
+    logCount++;
+
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    NSLog(@"[DYYY][RichFS] %@", message);
+}
 
 static BOOL DYYYIsVideoRenderRelatedView(UIView *view) {
     if (!view) {
@@ -246,24 +265,42 @@ static BOOL DYYYIsRichContentFullScreenContainerView(UIView *view, UIViewControl
 // 上溯视图层级，将承载视频的 RichContentContainer 从 849 补齐到屏幕高度
 // 仅作用于私信图文场景，不动承载文案/按钮/输入栏的 PlayInteraction 覆盖层
 static void DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, UIViewController *viewController) {
-    if (!view || !viewController || !DYYYViewControllerHasIMDetailOrRichContentParent(viewController)) {
+    if (!view || !viewController) {
+        return;
+    }
+
+    BOOL hasIMParent = DYYYViewControllerHasIMDetailParent(viewController);
+    BOOL hasRichParent = DYYYViewControllerHasRichContentParent(viewController);
+    DYYYRichFullScreenLog(@"expand enter vc=%@ view=%@ frame=%@ hasIM=%d hasRich=%d tab=%.1f screen=%.1f",
+                          NSStringFromClass([viewController class]), NSStringFromClass([view class]), NSStringFromCGRect(view.frame), hasIMParent, hasRichParent,
+                          gCurrentTabBarHeight, [UIScreen mainScreen].bounds.size.height);
+
+    if (!hasIMParent && !hasRichParent) {
+        DYYYRichFullScreenLog(@"expand skip no IM/Rich parent vc=%@ parent=%@",
+                              NSStringFromClass([viewController class]), NSStringFromClass([viewController.parentViewController class]));
         return;
     }
 
     static BOOL gIsExpandingContainer = NO;
     if (gIsExpandingContainer) {
         // 避免设 frame 时回调进入嵌套调用导致切换视频卡死
+        DYYYRichFullScreenLog(@"expand skip reentry vc=%@", NSStringFromClass([viewController class]));
         return;
     }
 
     CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
     if (gCurrentTabBarHeight <= 0 || screenHeight <= 0) {
+        DYYYRichFullScreenLog(@"expand skip invalid height tab=%.1f screen=%.1f", gCurrentTabBarHeight, screenHeight);
         return;
     }
 
     UIView *ancestor = view.superview;
     for (NSInteger i = 0; ancestor && i < 6; i++) {
         UIViewController *ancestorVC = [DYYYUtils firstAvailableViewControllerFromView:ancestor];
+        DYYYRichFullScreenLog(@"ancestor[%ld] view=%@ frame=%@ vc=%@ vcView=%@",
+                              (long)i, NSStringFromClass([ancestor class]), NSStringFromCGRect(ancestor.frame),
+                              ancestorVC ? NSStringFromClass([ancestorVC class]) : @"nil",
+                              ancestorVC.view == ancestor ? @"YES" : @"NO");
         if (ancestorVC && DYYYIsRichContentFullScreenContainerView(ancestor, ancestorVC)) {
             CGFloat ancestorHeight = CGRectGetHeight(ancestor.frame);
             // 容器高度刚刚好比屏幕高度少一个底栏（如 849 = 932 - tabBar）
@@ -274,10 +311,15 @@ static void DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, UIViewContr
                 ancestor.clipsToBounds = NO;
                 ancestor.layer.masksToBounds = NO;
                 gIsExpandingContainer = YES;
+                DYYYRichFullScreenLog(@"expand hit vc=%@ old=%@ new=%@",
+                                      NSStringFromClass([ancestorVC class]), NSStringFromCGRect(ancestor.frame), NSStringFromCGRect(expandedFrame));
                 ancestor.frame = expandedFrame;
                 gIsExpandingContainer = NO;
                 // 只扩 RichContentContainerViewController 一层，避免 CellVC / NewList 多层连锁补高导致 1015
                 break;
+            } else {
+                DYYYRichFullScreenLog(@"expand skip hit height vc=%@ frame=%@ expected screen=%.1f tab=%.1f",
+                                      NSStringFromClass([ancestorVC class]), NSStringFromCGRect(ancestor.frame), screenHeight, gCurrentTabBarHeight);
             }
         }
         ancestor = ancestor.superview;
@@ -11970,13 +12012,21 @@ static Class tabBarButtonClass = nil;
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    if (DYYYGetBool(@"DYYYEnableFullScreen") && DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
-        if (DYYYViewControllerHasRichContentParent(self) && !DYYYViewControllerHasIMDetailParent(self)) {
-            // 图文：仅扩外层 DetailCellVC 容器到 932，视频层靠 autoresize 自适应铺满
-            DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
-        } else {
-            // 普通私信 IMDetail：沿用扩视频层逻辑
-            DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
+        BOOL hasIMParent = DYYYViewControllerHasIMDetailParent(self);
+        BOOL hasRichParent = DYYYViewControllerHasRichContentParent(self);
+        DYYYRichFullScreenLog(@"layout AWEAwemePlayVideoViewController view=%@ parent=%@ hasIM=%d hasRich=%d frame=%@ super=%@",
+                              NSStringFromClass([self.view class]), NSStringFromClass([self.parentViewController class]),
+                              hasIMParent, hasRichParent, NSStringFromCGRect(self.view.frame),
+                              self.view.superview ? NSStringFromCGRect(self.view.superview.frame) : @"nil");
+        if (hasIMParent || hasRichParent) {
+            if (hasRichParent && !hasIMParent) {
+                // 图文：仅扩外层 RichContentContainerVC 容器到 932，视频层靠 autoresize 自适应铺满
+                DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
+            } else {
+                // 普通私信 IMDetail：沿用扩视频层逻辑
+                DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+            }
         }
     }
 }
@@ -12029,9 +12079,16 @@ static Class tabBarButtonClass = nil;
             }
         }
 
-        if (DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
-            if (DYYYViewControllerHasRichContentParent(self) && !DYYYViewControllerHasIMDetailParent(self)) {
-                // 图文：仅扩外层 DetailCellVC 容器到 932，视频层靠 autoresize 自适应铺满
+        BOOL hasIMParent = DYYYViewControllerHasIMDetailParent(self);
+        BOOL hasRichParent = DYYYViewControllerHasRichContentParent(self);
+        DYYYRichFullScreenLog(@"layout AWEDPlayerFeedPlayerViewController view=%@ parent=%@ hasIM=%d hasRich=%d viewFrame=%@ contentFrame=%@ super=%@",
+                              NSStringFromClass([self.view class]), NSStringFromClass([self.parentViewController class]),
+                              hasIMParent, hasRichParent, NSStringFromCGRect(self.view.frame),
+                              contentView ? NSStringFromCGRect(contentView.frame) : @"nil",
+                              self.view.superview ? NSStringFromCGRect(self.view.superview.frame) : @"nil");
+        if (hasIMParent || hasRichParent) {
+            if (hasRichParent && !hasIMParent) {
+                // 图文：仅扩外层 RichContentContainerVC 容器到 932，视频层靠 autoresize 自适应铺满
                 DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
             } else {
                 // 普通私信 IMDetail：沿用扩视频层逻辑
@@ -12089,9 +12146,16 @@ static Class tabBarButtonClass = nil;
             }
         }
 
-        if (DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
-            if (DYYYViewControllerHasRichContentParent(self) && !DYYYViewControllerHasIMDetailParent(self)) {
-                // 图文：仅扩外层 DetailCellVC 容器到 932，视频层靠 autoresize 自适应铺满
+        BOOL hasIMParent = DYYYViewControllerHasIMDetailParent(self);
+        BOOL hasRichParent = DYYYViewControllerHasRichContentParent(self);
+        DYYYRichFullScreenLog(@"layout AWEDPlayerViewController_Merge view=%@ parent=%@ hasIM=%d hasRich=%d viewFrame=%@ contentFrame=%@ super=%@",
+                              NSStringFromClass([self.view class]), NSStringFromClass([self.parentViewController class]),
+                              hasIMParent, hasRichParent, NSStringFromCGRect(self.view.frame),
+                              contentView ? NSStringFromCGRect(contentView.frame) : @"nil",
+                              self.view.superview ? NSStringFromCGRect(self.view.superview.frame) : @"nil");
+        if (hasIMParent || hasRichParent) {
+            if (hasRichParent && !hasIMParent) {
+                // 图文：仅扩外层 RichContentContainerVC 容器到 932，视频层靠 autoresize 自适应铺满
                 DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
             } else {
                 // 普通私信 IMDetail：沿用扩视频层逻辑
