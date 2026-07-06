@@ -13025,6 +13025,41 @@ static Class TagViewClass = nil;
 
 %end
 
+// 私信图文场景：承载视频的 AWEAwemeDetailCellViewController 其 view 高度原为屏高减底栏（849），
+// 参考主页 AWEAwemeDetailTableView 的做法，直接补满到屏幕高度（932）让视频铺满底栏区域。
+// 下方 PlayInteraction 覆盖层由其自身 hook 保持 849，文案/按钮不上移。
+%hook AWEAwemeDetailCellViewController
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (!DYYYGetBool(@"DYYYEnableFullScreen")) {
+        return;
+    }
+    // 仅私有图文（RichContent 链路、非 IMDetail）：普通私信走原有的扩视频层逻辑
+    if (!DYYYViewControllerHasRichContentParent(self) || DYYYViewControllerHasIMDetailParent(self)) {
+        return;
+    }
+
+    static BOOL sExpandingCellVC = NO;
+    if (sExpandingCellVC) {
+        return;
+    }
+
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    CGRect cellFrame = self.view.frame;
+    if (screenHeight > 0 && fabs(CGRectGetHeight(cellFrame) - screenHeight) > 0.5) {
+        // 重入保护：设 frame 会触发新一轮 layout，避免循环导致切换视频卡死
+        sExpandingCellVC = YES;
+        cellFrame.size.height = screenHeight;
+        self.view.clipsToBounds = NO;
+        self.view.layer.masksToBounds = NO;
+        self.view.frame = cellFrame;
+        sExpandingCellVC = NO;
+    }
+}
+
+%end
+
 %hook AWEMixVideoPanelMoreView
 
 - (void)setFrame:(CGRect)frame {
