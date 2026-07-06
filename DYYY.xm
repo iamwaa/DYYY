@@ -191,7 +191,9 @@ static BOOL DYYYExpandVideoViewToAncestorHeightIfNeeded(UIView *view) {
     }
 
     CGFloat ancestorHeight = DYYYFullScreenAncestorHeightForView(view, currentHeight);
-    if (ancestorHeight > 0) {
+    // 限制不超过屏幕高度，避免外层补高后某些祖先变 1015（932+底栏）被连带抩高
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    if (ancestorHeight > 0 && (screenHeight <= 0 || ancestorHeight <= screenHeight)) {
         DYYYDisableAncestorClippingForVideoView(view, ancestorHeight);
         frame.size.height = ancestorHeight;
         view.frame = frame;
@@ -207,17 +209,16 @@ static BOOL DYYYExpandVideoViewToAncestorHeightIfNeeded(UIView *view) {
     return NO;
 }
 
-// 判断传入的视图是否为私信图文场景下承载视频的外层 RichContent 容器
-// 这些容器高度原为 849（屏幕高度减去底栏），需要被补齐到屏幕高度以让视频铺满
+// 判断传入的视图是否为私信图文场景下承载视频的外层容器。
+// 只锁 AWEAwemeDetailCellViewController 一层：扩到 932 后底下子视图会自适应继承 932，
+// 避免对 RichContentNewList/RichContentContainer 也补高造成叠加溢出（1015）
 static BOOL DYYYIsRichContentFullScreenContainerView(UIView *view, UIViewController *viewController) {
     if (!view || !viewController) {
         return NO;
     }
 
     NSString *className = NSStringFromClass([viewController class]);
-    return [className containsString:@"AWEAwemeDetailCellViewController"] ||
-           [className containsString:@"RichContentContainerViewController"] ||
-           [className containsString:@"RichContentNewListViewController"];
+    return [className isEqualToString:@"AWEAwemeDetailCellViewController"];
 }
 
 // 上溯视图层级，将承载视频的 RichContent 外层容器从 849 补齐到屏幕高度
@@ -245,6 +246,9 @@ static void DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, UIViewContr
                 ancestor.clipsToBounds = NO;
                 ancestor.layer.masksToBounds = NO;
                 ancestor.frame = expandedFrame;
+                // 只扩最近一层承载视频的 RichContent 容器（通常即 AWEAwemeDetailCellViewController），
+                // 避免多层连锁补高导致子视图溢出到 1015；其下子层自适应继承 932
+                break;
             }
         }
         ancestor = ancestor.superview;
@@ -11654,7 +11658,8 @@ static Class tabBarButtonClass = nil;
         } else {
             // 兜底：沿用祖先高度检测逻辑
             CGFloat ancestorHeight = DYYYFullScreenAncestorHeightForView(self, frameHeight);
-            if (ancestorHeight > 0) {
+            // 限制不超过屏幕高度，避免外层已补高后祖先超出 932（如 1015）而被连带抩高
+            if (ancestorHeight > 0 && ancestorHeight <= screenHeight) {
                 DYYYDisableAncestorClippingForVideoView(self, ancestorHeight);
                 frame.size.height = ancestorHeight;
             }
