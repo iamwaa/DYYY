@@ -207,6 +207,50 @@ static BOOL DYYYExpandVideoViewToAncestorHeightIfNeeded(UIView *view) {
     return NO;
 }
 
+// 判断传入的视图是否为私信图文场景下承载视频的外层 RichContent 容器
+// 这些容器高度原为 849（屏幕高度减去底栏），需要被补齐到屏幕高度以让视频铺满
+static BOOL DYYYIsRichContentFullScreenContainerView(UIView *view, UIViewController *viewController) {
+    if (!view || !viewController) {
+        return NO;
+    }
+
+    NSString *className = NSStringFromClass([viewController class]);
+    return [className containsString:@"AWEAwemeDetailCellViewController"] ||
+           [className containsString:@"RichContentContainerViewController"] ||
+           [className containsString:@"RichContentNewListViewController"];
+}
+
+// 上溯视图层级，将承载视频的 RichContent 外层容器从 849 补齐到屏幕高度
+// 仅作用于私信图文场景，不动承载文案/按钮/输入栏的内部 PlayInteraction 覆盖层
+static void DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, UIViewController *viewController) {
+    if (!view || !viewController || !DYYYViewControllerHasIMDetailOrRichContentParent(viewController)) {
+        return;
+    }
+
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    if (gCurrentTabBarHeight <= 0 || screenHeight <= 0) {
+        return;
+    }
+
+    UIView *ancestor = view.superview;
+    for (NSInteger i = 0; ancestor && i < 6; i++) {
+        UIViewController *ancestorVC = [DYYYUtils firstAvailableViewControllerFromView:ancestor];
+        if (ancestorVC && DYYYIsRichContentFullScreenContainerView(ancestor, ancestorVC)) {
+            CGFloat ancestorHeight = CGRectGetHeight(ancestor.frame);
+            // 容器高度刚刚好比屏幕高度少一个底栏（如 849 = 932 - tabBar）
+            if (ancestorHeight > 0 && fabs((screenHeight - ancestorHeight) - gCurrentTabBarHeight) < 1.0 &&
+                fabs(CGRectGetHeight(ancestor.frame) - screenHeight) > 0.5) {
+                CGRect expandedFrame = ancestor.frame;
+                expandedFrame.size.height = screenHeight;
+                ancestor.clipsToBounds = NO;
+                ancestor.layer.masksToBounds = NO;
+                ancestor.frame = expandedFrame;
+            }
+        }
+        ancestor = ancestor.superview;
+    }
+}
+
 static void updateGlobalTransparencyCache() {
     NSString *transparentValue = DYYYGetString(kDYYYGlobalTransparencyKey);
     if (transparentValue.length > 0) {
@@ -11783,7 +11827,15 @@ static Class tabBarButtonClass = nil;
     }
 
     if (!useFullHeight && DYYYIsIMDetailPlaybackController(self, currentReferString, self.model)) {
-        useFullHeight = YES;
+        // 私信图文（RichContent 链路）与普通私信（IMDetail 链路）有区别：
+        // 两者都能让视频铺到底栏，但 RichContent 文案/按钮层原本落在 849（屏高减底栏）位置，
+        // 如果像 IMDetail 那样让 PlayInteraction 自身顶到 932，文案/按钮会随之下移到底部，
+        // 用户提示：通过保持 PlayInteraction 高度为屏高减底栏（849）实现还原。
+        if (DYYYViewControllerHasRichContentParent(self) && !DYYYViewControllerHasIMDetailParent(self)) {
+            useFullHeight = NO;
+        } else {
+            useFullHeight = YES;
+        }
     }
 
     if (!useFullHeight && [currentReferString isEqualToString:@"chat"]) {
@@ -11900,6 +11952,7 @@ static Class tabBarButtonClass = nil;
 - (void)viewDidLayoutSubviews {
     %orig;
     if (DYYYGetBool(@"DYYYEnableFullScreen") && DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
+        DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
         DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
     }
 }
@@ -11953,6 +12006,7 @@ static Class tabBarButtonClass = nil;
         }
 
         if (DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
+            DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
             DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
             DYYYExpandVideoViewToAncestorHeightIfNeeded(contentView);
         }
@@ -12007,6 +12061,7 @@ static Class tabBarButtonClass = nil;
         }
 
         if (DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
+            DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
             DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
             DYYYExpandVideoViewToAncestorHeightIfNeeded(contentView);
         }
