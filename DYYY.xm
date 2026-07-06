@@ -92,6 +92,26 @@ static BOOL DYYYViewControllerHasIMDetailOrRichContentParent(UIViewController *v
     return DYYYViewControllerHasIMDetailParent(viewController) || DYYYViewControllerHasRichContentParent(viewController);
 }
 
+static BOOL DYYYViewControllerHasRichContentChild(UIViewController *viewController) {
+    if (!viewController) {
+        return NO;
+    }
+
+    NSMutableArray<UIViewController *> *pending = [NSMutableArray arrayWithArray:viewController.childViewControllers];
+    for (NSInteger i = 0; i < pending.count && i < 12; i++) {
+        UIViewController *childVC = pending[i];
+        NSString *className = NSStringFromClass([childVC class]);
+        if ([className containsString:@"RichContentContainerViewController"] ||
+            [className containsString:@"RichContentNewListViewController"] ||
+            [className containsString:@"AWEMultiContentImpl.RichContent"]) {
+            return YES;
+        }
+        [pending addObjectsFromArray:childVC.childViewControllers];
+    }
+
+    return NO;
+}
+
 static void DYYYDisableAncestorClippingForVideoView(UIView *view, CGFloat targetHeight);
 
 static BOOL DYYYIsVideoRenderRelatedView(UIView *view) {
@@ -13037,8 +13057,8 @@ static Class TagViewClass = nil;
     }
     // AWEAwemeDetailCellViewController 头文件为前向声明，需显式转 UIViewController 后调用属性与 helper
     UIViewController *cellVC = (UIViewController *)self;
-    // 仅私有图文（RichContent 链路、非 IMDetail）：普通私信走原有的扩视频层逻辑
-    if (!DYYYViewControllerHasRichContentParent(cellVC) || DYYYViewControllerHasIMDetailParent(cellVC)) {
+    // AWEAwemeDetailCellViewController 是 RichContent 的父级，需向下查子控制器；普通私信走原有扩视频层逻辑
+    if (!DYYYViewControllerHasRichContentChild(cellVC) || DYYYViewControllerHasIMDetailParent(cellVC)) {
         return;
     }
 
