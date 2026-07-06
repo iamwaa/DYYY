@@ -8,6 +8,26 @@
 #pragma mark - 外观功能
 
 // 调整评论区透明度
+static BOOL WaaViewContainsVisibleSendDUXButton(UIView *view) {
+    if (!view || view.hidden || view.alpha <= 0.01) {
+        return NO;
+    }
+
+    NSString *className = NSStringFromClass([view class]);
+    if ([className containsString:@"DUXButton"] && CGRectGetWidth(view.frame) > 0 && CGRectGetHeight(view.frame) > 0) {
+        UIButton *button = [view isKindOfClass:[UIButton class]] ? (UIButton *)view : nil;
+        NSString *title = [button titleForState:UIControlStateNormal];
+        return title.length == 0 || [title containsString:@"发送"];
+    }
+
+    for (UIView *subview in view.subviews) {
+        if (WaaViewContainsVisibleSendDUXButton(subview)) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
 @interface UIView(Comment)
 - (void)setBackgroundColor:(UIColor *)backgroundColor;
 @end
@@ -15,8 +35,6 @@
 %hook UIView
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
     CGFloat transparency = 1.0;
-    BOOL shouldModify = NO;
-    NSString *transparencyKey = nil;
 
     UIView *superview = self.superview;
     while (superview) {
@@ -26,6 +44,7 @@
     superview = self.superview;
     BOOL isFirstChildOfMiddleContainer = NO;
     BOOL isFirstChildOfCommentContainer = NO;
+    BOOL commentContainerHasSendButton = NO;
     
     while (superview && !(isFirstChildOfMiddleContainer || isFirstChildOfCommentContainer)) {
         if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer")]) {
@@ -33,12 +52,18 @@
         }
         else if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
             isFirstChildOfCommentContainer = (superview.subviews.firstObject == self);
+            commentContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(superview);
         }
         superview = superview.superview;
     }
 
     UIResponder *responder = self.nextResponder;
     BOOL isInCommentPanel = [responder isKindOfClass:NSClassFromString(@"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController")];
+
+    if (isFirstChildOfCommentContainer && commentContainerHasSendButton) {
+        %orig(backgroundColor);
+        return;
+    }
 
     if (isFirstChildOfCommentContainer && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
         NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:@"WaaInputBoxTransparency"];

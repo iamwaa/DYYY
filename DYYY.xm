@@ -13,7 +13,6 @@
 #import <math.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
-#import <stdarg.h>
 #import <substrate.h>
 #import <syslog.h>
 
@@ -94,24 +93,6 @@ static BOOL DYYYViewControllerHasIMDetailOrRichContentParent(UIViewController *v
 }
 
 static void DYYYDisableAncestorClippingForVideoView(UIView *view, CGFloat targetHeight);
-
-static void DYYYRichFullScreenLog(NSString *format, ...) {
-    if (!DYYYGetBool(@"DYYYEnableFullScreen")) {
-        return;
-    }
-
-    static NSInteger logCount = 0;
-    if (logCount >= 120) {
-        return;
-    }
-    logCount++;
-
-    va_list args;
-    va_start(args, format);
-    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
-    NSLog(@"[DYYY][RichFS] %@", message);
-}
 
 static BOOL DYYYIsVideoRenderRelatedView(UIView *view) {
     if (!view) {
@@ -288,8 +269,6 @@ static void DYYYSyncRichContentPlayerViewToSuperview(UIView *view) {
     if (parentHeight > currentHeight && fabs((parentHeight - currentHeight) - gCurrentTabBarHeight) < 1.0) {
         CGRect frame = view.frame;
         frame.size.height = parentHeight;
-        DYYYRichFullScreenLog(@"sync player view=%@ old=%@ new=%@ super=%@",
-                              NSStringFromClass([view class]), NSStringFromCGRect(view.frame), NSStringFromCGRect(frame), NSStringFromCGRect(view.superview.frame));
         view.frame = frame;
     }
 }
@@ -303,36 +282,25 @@ static void DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, UIViewContr
 
     BOOL hasIMParent = DYYYViewControllerHasIMDetailParent(viewController);
     BOOL hasRichParent = DYYYViewControllerHasRichContentParent(viewController);
-    DYYYRichFullScreenLog(@"expand enter vc=%@ view=%@ frame=%@ hasIM=%d hasRich=%d tab=%.1f screen=%.1f",
-                          NSStringFromClass([viewController class]), NSStringFromClass([view class]), NSStringFromCGRect(view.frame), hasIMParent, hasRichParent,
-                          gCurrentTabBarHeight, [UIScreen mainScreen].bounds.size.height);
 
     if (!hasIMParent && !hasRichParent) {
-        DYYYRichFullScreenLog(@"expand skip no IM/Rich parent vc=%@ parent=%@",
-                              NSStringFromClass([viewController class]), NSStringFromClass([viewController.parentViewController class]));
         return;
     }
 
     static BOOL gIsExpandingContainer = NO;
     if (gIsExpandingContainer) {
         // 避免设 frame 时回调进入嵌套调用导致切换视频卡死
-        DYYYRichFullScreenLog(@"expand skip reentry vc=%@", NSStringFromClass([viewController class]));
         return;
     }
 
     CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
     if (gCurrentTabBarHeight <= 0 || screenHeight <= 0) {
-        DYYYRichFullScreenLog(@"expand skip invalid height tab=%.1f screen=%.1f", gCurrentTabBarHeight, screenHeight);
         return;
     }
 
     UIView *ancestor = view.superview;
     for (NSInteger i = 0; ancestor && i < 6; i++) {
         UIViewController *ancestorVC = [DYYYUtils firstAvailableViewControllerFromView:ancestor];
-        DYYYRichFullScreenLog(@"ancestor[%ld] view=%@ frame=%@ vc=%@ vcView=%@",
-                              (long)i, NSStringFromClass([ancestor class]), NSStringFromCGRect(ancestor.frame),
-                              ancestorVC ? NSStringFromClass([ancestorVC class]) : @"nil",
-                              ancestorVC.view == ancestor ? @"YES" : @"NO");
         if (ancestorVC && DYYYIsRichContentResizableContainerView(ancestor, ancestorVC)) {
             CGFloat ancestorHeight = CGRectGetHeight(ancestor.frame);
             BOOL shouldExpand = ancestorHeight > 0 &&
@@ -344,13 +312,8 @@ static void DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, UIViewContr
                 ancestor.clipsToBounds = NO;
                 ancestor.layer.masksToBounds = NO;
                 gIsExpandingContainer = YES;
-                DYYYRichFullScreenLog(@"expand hit vc=%@ old=%@ new=%@",
-                                      NSStringFromClass([ancestorVC class]), NSStringFromCGRect(ancestor.frame), NSStringFromCGRect(expandedFrame));
                 ancestor.frame = expandedFrame;
                 gIsExpandingContainer = NO;
-            } else {
-                DYYYRichFullScreenLog(@"expand skip hit height vc=%@ frame=%@ expected screen=%.1f tab=%.1f",
-                                      NSStringFromClass([ancestorVC class]), NSStringFromCGRect(ancestor.frame), screenHeight, gCurrentTabBarHeight);
             }
 
             if (DYYYIsRichContentFullScreenContainerView(ancestor, ancestorVC)) {
@@ -12051,10 +12014,6 @@ static Class tabBarButtonClass = nil;
     if (DYYYGetBool(@"DYYYEnableFullScreen")) {
         BOOL hasIMParent = DYYYViewControllerHasIMDetailParent(self);
         BOOL hasRichParent = DYYYViewControllerHasRichContentParent(self);
-        DYYYRichFullScreenLog(@"layout AWEAwemePlayVideoViewController view=%@ parent=%@ hasIM=%d hasRich=%d frame=%@ super=%@",
-                              NSStringFromClass([self.view class]), NSStringFromClass([self.parentViewController class]),
-                              hasIMParent, hasRichParent, NSStringFromCGRect(self.view.frame),
-                              self.view.superview ? NSStringFromCGRect(self.view.superview.frame) : @"nil");
         if (hasIMParent || hasRichParent) {
             if (hasRichParent) {
                 // 图文 RichContent 优先：即使父链同时带 IMDetail，也只扩 RichContentContainer 容器
@@ -12118,11 +12077,6 @@ static Class tabBarButtonClass = nil;
             }
         }
 
-        DYYYRichFullScreenLog(@"layout AWEDPlayerFeedPlayerViewController view=%@ parent=%@ hasIM=%d hasRich=%d viewFrame=%@ contentFrame=%@ super=%@",
-                              NSStringFromClass([self.view class]), NSStringFromClass([self.parentViewController class]),
-                              hasIMParent, hasRichParent, NSStringFromCGRect(self.view.frame),
-                              contentView ? NSStringFromCGRect(contentView.frame) : @"nil",
-                              self.view.superview ? NSStringFromCGRect(self.view.superview.frame) : @"nil");
         if (hasIMParent || hasRichParent) {
             if (hasRichParent) {
                 // 图文 RichContent 优先：即使父链同时带 IMDetail，也只扩 RichContentContainer 容器
@@ -12187,11 +12141,6 @@ static Class tabBarButtonClass = nil;
             }
         }
 
-        DYYYRichFullScreenLog(@"layout AWEDPlayerViewController_Merge view=%@ parent=%@ hasIM=%d hasRich=%d viewFrame=%@ contentFrame=%@ super=%@",
-                              NSStringFromClass([self.view class]), NSStringFromClass([self.parentViewController class]),
-                              hasIMParent, hasRichParent, NSStringFromCGRect(self.view.frame),
-                              contentView ? NSStringFromCGRect(contentView.frame) : @"nil",
-                              self.view.superview ? NSStringFromCGRect(self.view.superview.frame) : @"nil");
         if (hasIMParent || hasRichParent) {
             if (hasRichParent) {
                 // 图文 RichContent 优先：即使父链同时带 IMDetail，也只扩 RichContentContainer 容器
