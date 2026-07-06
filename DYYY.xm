@@ -92,26 +92,6 @@ static BOOL DYYYViewControllerHasIMDetailOrRichContentParent(UIViewController *v
     return DYYYViewControllerHasIMDetailParent(viewController) || DYYYViewControllerHasRichContentParent(viewController);
 }
 
-static BOOL DYYYViewControllerHasRichContentChild(UIViewController *viewController) {
-    if (!viewController) {
-        return NO;
-    }
-
-    NSMutableArray<UIViewController *> *pending = [NSMutableArray arrayWithArray:viewController.childViewControllers];
-    for (NSInteger i = 0; i < pending.count && i < 12; i++) {
-        UIViewController *childVC = pending[i];
-        NSString *className = NSStringFromClass([childVC class]);
-        if ([className containsString:@"RichContentContainerViewController"] ||
-            [className containsString:@"RichContentNewListViewController"] ||
-            [className containsString:@"AWEMultiContentImpl.RichContent"]) {
-            return YES;
-        }
-        [pending addObjectsFromArray:childVC.childViewControllers];
-    }
-
-    return NO;
-}
-
 static void DYYYDisableAncestorClippingForVideoView(UIView *view, CGFloat targetHeight);
 
 static BOOL DYYYIsVideoRenderRelatedView(UIView *view) {
@@ -251,20 +231,20 @@ static void DYYYRelaxAncestorClippingBelowScreenHeight(UIView *view) {
     }
 }
 
-// 判断传入的视图是否为私信图文场景下承载视频的外层容器。
-// 只锁 AWEAwemeDetailCellViewController 一层：扩到 932 后底下子视图会自适应继承 932，
-// 避免对 RichContentNewList/RichContentContainer 也补高造成叠加溢出（1015）
+// 判断传入的视图是否为私信图文场景下承载视频的 RichContent 容器。
+// 只锁 RichContentContainerViewController 一层：扩到 932 后其下视频容器自适应铺满，
+// PlayInteraction 覆盖层由自身 hook 强制保持屏高减底栏（849）
 static BOOL DYYYIsRichContentFullScreenContainerView(UIView *view, UIViewController *viewController) {
     if (!view || !viewController) {
         return NO;
     }
 
     NSString *className = NSStringFromClass([viewController class]);
-    return [className isEqualToString:@"AWEAwemeDetailCellViewController"];
+    return [className containsString:@"RichContentContainerViewController"];
 }
 
-// 上溯视图层级，将承载视频的 RichContent 外层容器从 849 补齐到屏幕高度
-// 仅作用于私信图文场景，不动承载文案/按钮/输入栏的内部 PlayInteraction 覆盖层
+// 上溯视图层级，将承载视频的 RichContentContainer 从 849 补齐到屏幕高度
+// 仅作用于私信图文场景，不动承载文案/按钮/输入栏的 PlayInteraction 覆盖层
 static void DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, UIViewController *viewController) {
     if (!view || !viewController || !DYYYViewControllerHasIMDetailOrRichContentParent(viewController)) {
         return;
@@ -296,8 +276,7 @@ static void DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, UIViewContr
                 gIsExpandingContainer = YES;
                 ancestor.frame = expandedFrame;
                 gIsExpandingContainer = NO;
-                // 只扩最近一层承载视频的 RichContent 容器（通常即 AWEAwemeDetailCellViewController），
-                // 避免多层连锁补高导致子视图溢出到 1015；其下子层自适应继承 932
+                // 只扩 RichContentContainerViewController 一层，避免 CellVC / NewList 多层连锁补高导致 1015
                 break;
             }
         }
@@ -11697,7 +11676,7 @@ static Class tabBarButtonClass = nil;
     }
 
     if (hasRichContentParent && isIMDetailPlaybackView && enableFS) {
-        // 图文场景：外层 DetailCellVC 容器由 viewDidLayoutSubviews 补高到 932，
+        // 图文场景：外层 RichContentContainer 容器由 viewDidLayoutSubviews 补高到 932，
         // 视频层借助 autoresize 自适应铺满；此处仅解除祖先裁剪让视频可见，不写 frame 避免布局循环卡死
         DYYYRelaxAncestorClippingBelowScreenHeight(self);
         %orig(frame);
@@ -13041,44 +13020,6 @@ static Class TagViewClass = nil;
         }
     }
     %orig(frame);
-}
-
-%end
-
-// 私信图文场景：承载视频的 AWEAwemeDetailCellViewController 其 view 高度原为屏高减底栏（849），
-// 参考主页 AWEAwemeDetailTableView 的做法，直接补满到屏幕高度（932）让视频铺满底栏区域。
-// 下方 PlayInteraction 覆盖层由其自身 hook 保持 849，文案/按钮不上移。
-%hook AWEAwemeDetailCellViewController
-
-- (void)viewDidLayoutSubviews {
-    %orig;
-    if (!DYYYGetBool(@"DYYYEnableFullScreen")) {
-        return;
-    }
-    // AWEAwemeDetailCellViewController 头文件为前向声明，需显式转 UIViewController 后调用属性与 helper
-    UIViewController *cellVC = (UIViewController *)self;
-    // AWEAwemeDetailCellViewController 是 RichContent 的父级，需向下查子控制器；普通私信走原有扩视频层逻辑
-    if (!DYYYViewControllerHasRichContentChild(cellVC) || DYYYViewControllerHasIMDetailParent(cellVC)) {
-        return;
-    }
-
-    static BOOL sExpandingCellVC = NO;
-    if (sExpandingCellVC) {
-        return;
-    }
-
-    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
-    UIView *cellView = cellVC.view;
-    CGRect cellFrame = cellView.frame;
-    if (screenHeight > 0 && fabs(CGRectGetHeight(cellFrame) - screenHeight) > 0.5) {
-        // 重入保护：设 frame 会触发新一轮 layout，避免循环导致切换视频卡死
-        sExpandingCellVC = YES;
-        cellFrame.size.height = screenHeight;
-        cellView.clipsToBounds = NO;
-        cellView.layer.masksToBounds = NO;
-        cellView.frame = cellFrame;
-        sExpandingCellVC = NO;
-    }
 }
 
 %end
