@@ -57,12 +57,30 @@ static BOOL WaaCommentInputContainerIsNearScreenMiddle(UIView *view) {
     }
 
     superview = self.superview;
+    BOOL isTargetMiddleContainer = [self isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer")];
+    BOOL isTargetCommentContainer = [self isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")];
     BOOL isFirstChildOfMiddleContainer = NO;
     BOOL isFirstChildOfCommentContainer = NO;
     BOOL inputContainerHasSendButton = NO;
     BOOL inputContainerIsNearMiddle = NO;
+
+    if (isTargetCommentContainer) {
+        inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(self);
+        inputContainerIsNearMiddle = WaaCommentInputContainerIsNearScreenMiddle(self);
+    } else if (isTargetMiddleContainer) {
+        inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(self);
+        UIView *parentView = self.superview;
+        while (parentView) {
+            if ([parentView isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
+                inputContainerHasSendButton = inputContainerHasSendButton || WaaViewContainsVisibleSendDUXButton(parentView);
+                inputContainerIsNearMiddle = WaaCommentInputContainerIsNearScreenMiddle(parentView);
+                break;
+            }
+            parentView = parentView.superview;
+        }
+    }
     
-    while (superview && !(isFirstChildOfMiddleContainer || isFirstChildOfCommentContainer)) {
+    while (!isTargetMiddleContainer && !isTargetCommentContainer && superview && !(isFirstChildOfMiddleContainer || isFirstChildOfCommentContainer)) {
         if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer")]) {
             isFirstChildOfMiddleContainer = (superview.subviews.firstObject == self);
             inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(superview);
@@ -87,12 +105,12 @@ static BOOL WaaCommentInputContainerIsNearScreenMiddle(UIView *view) {
     UIResponder *responder = self.nextResponder;
     BOOL isInCommentPanel = [responder isKindOfClass:NSClassFromString(@"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController")];
 
-    if ((isFirstChildOfCommentContainer || isFirstChildOfMiddleContainer) && inputContainerHasSendButton && inputContainerIsNearMiddle) {
+    if ((isTargetCommentContainer || isTargetMiddleContainer || isFirstChildOfCommentContainer || isFirstChildOfMiddleContainer) && inputContainerHasSendButton && inputContainerIsNearMiddle) {
         %orig(backgroundColor);
         return;
     }
 
-    if (isFirstChildOfCommentContainer && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+    if ((isTargetCommentContainer || isFirstChildOfCommentContainer) && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
         NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:@"WaaInputBoxTransparency"];
         if (transparencyStr.length > 0) {
             transparency = [transparencyStr floatValue];
@@ -106,7 +124,7 @@ static BOOL WaaCommentInputContainerIsNearScreenMiddle(UIView *view) {
             backgroundColor = [backgroundColor colorWithAlphaComponent:transparency];
         }
     } 
-    else if (isFirstChildOfMiddleContainer && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+    else if ((isTargetMiddleContainer || isFirstChildOfMiddleContainer) && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
         NSString *transparencyStr = [[NSUserDefaults standardUserDefaults] stringForKey:@"WaaInputBoxTransparency"];
         if (transparencyStr.length > 0) {
             transparency = [transparencyStr floatValue];
