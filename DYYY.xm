@@ -209,6 +209,28 @@ static BOOL DYYYExpandVideoViewToAncestorHeightIfNeeded(UIView *view) {
     return NO;
 }
 
+// 仅解除祖先裁剪，不写 frame，避免布局循环（私信图文场景视频层靠 autoresize 自适应）
+static void DYYYRelaxAncestorClippingBelowScreenHeight(UIView *view) {
+    if (!view) {
+        return;
+    }
+
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    if (screenHeight <= 0) {
+        return;
+    }
+
+    UIView *ancestor = view.superview;
+    for (NSInteger i = 0; ancestor && i < 8; i++) {
+        CGFloat ancestorHeight = CGRectGetHeight(ancestor.frame);
+        if (ancestorHeight > 0 && ancestorHeight + 0.5 < screenHeight) {
+            ancestor.clipsToBounds = NO;
+            ancestor.layer.masksToBounds = NO;
+        }
+        ancestor = ancestor.superview;
+    }
+}
+
 // 判断传入的视图是否为私信图文场景下承载视频的外层容器。
 // 只锁 AWEAwemeDetailCellViewController 一层：扩到 932 后底下子视图会自适应继承 932，
 // 避免对 RichContentNewList/RichContentContainer 也补高造成叠加溢出（1015）
@@ -225,6 +247,12 @@ static BOOL DYYYIsRichContentFullScreenContainerView(UIView *view, UIViewControl
 // 仅作用于私信图文场景，不动承载文案/按钮/输入栏的内部 PlayInteraction 覆盖层
 static void DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, UIViewController *viewController) {
     if (!view || !viewController || !DYYYViewControllerHasIMDetailOrRichContentParent(viewController)) {
+        return;
+    }
+
+    static BOOL gIsExpandingContainer = NO;
+    if (gIsExpandingContainer) {
+        // 避免设 frame 时回调进入嵌套调用导致切换视频卡死
         return;
     }
 
@@ -245,7 +273,9 @@ static void DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, UIViewContr
                 expandedFrame.size.height = screenHeight;
                 ancestor.clipsToBounds = NO;
                 ancestor.layer.masksToBounds = NO;
+                gIsExpandingContainer = YES;
                 ancestor.frame = expandedFrame;
+                gIsExpandingContainer = NO;
                 // 只扩最近一层承载视频的 RichContent 容器（通常即 AWEAwemeDetailCellViewController），
                 // 避免多层连锁补高导致子视图溢出到 1015；其下子层自适应继承 932
                 break;
@@ -11647,23 +11677,9 @@ static Class tabBarButtonClass = nil;
     }
 
     if (hasRichContentParent && isIMDetailPlaybackView && enableFS) {
-        // 图文/私信图文场景：仅补齐视频层自身高度到屏幕高度并解除祖先裁剪，
-        // 不修改承载文案/按钮/输入栏的外层 RichContent 容器高度，避免布局错位与卡死
-        CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
-        CGFloat frameHeight = CGRectGetHeight(frame);
-        if (screenHeight > 0 && frameHeight > 0 && fabs((screenHeight - frameHeight) - gCurrentTabBarHeight) < 1.0) {
-            // 视频层高度刚好差一个底栏：补齐到屏幕高度（如 849 -> 932）
-            frame.size.height = screenHeight;
-            DYYYDisableAncestorClippingForVideoView(self, screenHeight);
-        } else {
-            // 兜底：沿用祖先高度检测逻辑
-            CGFloat ancestorHeight = DYYYFullScreenAncestorHeightForView(self, frameHeight);
-            // 限制不超过屏幕高度，避免外层已补高后祖先超出 932（如 1015）而被连带抩高
-            if (ancestorHeight > 0 && ancestorHeight <= screenHeight) {
-                DYYYDisableAncestorClippingForVideoView(self, ancestorHeight);
-                frame.size.height = ancestorHeight;
-            }
-        }
+        // 图文场景：外层 DetailCellVC 容器由 viewDidLayoutSubviews 补高到 932，
+        // 视频层借助 autoresize 自适应铺满；此处仅解除祖先裁剪让视频可见，不写 frame 避免布局循环卡死
+        DYYYRelaxAncestorClippingBelowScreenHeight(self);
         %orig(frame);
         return;
     }
@@ -11832,15 +11848,7 @@ static Class tabBarButtonClass = nil;
     }
 
     if (!useFullHeight && DYYYIsIMDetailPlaybackController(self, currentReferString, self.model)) {
-        // 私信图文（RichContent 链路）与普通私信（IMDetail 链路）有区别：
-        // 两者都能让视频铺到底栏，但 RichContent 文案/按钮层原本落在 849（屏高减底栏）位置，
-        // 如果像 IMDetail 那样让 PlayInteraction 自身顶到 932，文案/按钮会随之下移到底部，
-        // 用户提示：通过保持 PlayInteraction 高度为屏高减底栏（849）实现还原。
-        if (DYYYViewControllerHasRichContentParent(self) && !DYYYViewControllerHasIMDetailParent(self)) {
-            useFullHeight = NO;
-        } else {
-            useFullHeight = YES;
-        }
+        useFullHeight = YES;
     }
 
     if (!useFullHeight && [currentReferString isEqualToString:@"chat"]) {
@@ -11859,6 +11867,13 @@ static Class tabBarButtonClass = nil;
         if (currentVersion.length > 0 && [DYYYUtils compareVersion:currentVersion toVersion:@"39.2.0"] != NSOrderedDescending) {
             useFullHeight = YES;
         }
+    }
+
+    // 私信图文（RichContent 链路、非 IMDetail）：无论上方分支结果如何，
+    // 强制覆盖层保持屏高减底栏（849），让文案/按钮留在原位不上移；
+    // 视频由外层 DetailCellVC 补高到 932 + autoresize 铺满，二者互不干扰
+    if (DYYYViewControllerHasRichContentParent(self) && !DYYYViewControllerHasIMDetailParent(self)) {
+        useFullHeight = NO;
     }
 
     if (useFullHeight) {
@@ -11957,8 +11972,13 @@ static Class tabBarButtonClass = nil;
 - (void)viewDidLayoutSubviews {
     %orig;
     if (DYYYGetBool(@"DYYYEnableFullScreen") && DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
-        DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
-        DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+        if (DYYYViewControllerHasRichContentParent(self) && !DYYYViewControllerHasIMDetailParent(self)) {
+            // 图文：仅扩外层 DetailCellVC 容器到 932，视频层靠 autoresize 自适应铺满
+            DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
+        } else {
+            // 普通私信 IMDetail：沿用扩视频层逻辑
+            DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+        }
     }
 }
 
@@ -12011,9 +12031,14 @@ static Class tabBarButtonClass = nil;
         }
 
         if (DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
-            DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
-            DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
-            DYYYExpandVideoViewToAncestorHeightIfNeeded(contentView);
+            if (DYYYViewControllerHasRichContentParent(self) && !DYYYViewControllerHasIMDetailParent(self)) {
+                // 图文：仅扩外层 DetailCellVC 容器到 932，视频层靠 autoresize 自适应铺满
+                DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
+            } else {
+                // 普通私信 IMDetail：沿用扩视频层逻辑
+                DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+                DYYYExpandVideoViewToAncestorHeightIfNeeded(contentView);
+            }
         }
     }
 }
@@ -12066,9 +12091,14 @@ static Class tabBarButtonClass = nil;
         }
 
         if (DYYYViewControllerHasIMDetailOrRichContentParent(self)) {
-            DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
-            DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
-            DYYYExpandVideoViewToAncestorHeightIfNeeded(contentView);
+            if (DYYYViewControllerHasRichContentParent(self) && !DYYYViewControllerHasIMDetailParent(self)) {
+                // 图文：仅扩外层 DetailCellVC 容器到 932，视频层靠 autoresize 自适应铺满
+                DYYYExpandFullScreenContainerFrameIfNeeded(self.view, self);
+            } else {
+                // 普通私信 IMDetail：沿用扩视频层逻辑
+                DYYYExpandVideoViewToAncestorHeightIfNeeded(self.view);
+                DYYYExpandVideoViewToAncestorHeightIfNeeded(contentView);
+            }
         }
     }
 }
