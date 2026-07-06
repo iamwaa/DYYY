@@ -28,21 +28,24 @@ static BOOL WaaViewContainsVisibleSendDUXButton(UIView *view) {
     return NO;
 }
 
-static BOOL WaaCommentInputContainerHasValidDisplayPosition(UIView *view) {
+static BOOL WaaCommentInputContainerIsCompactBottomBar(UIView *view) {
     if (!view) {
         return NO;
     }
 
     CGRect windowFrame = view.window ? [view convertRect:view.bounds toView:view.window] : view.frame;
-    if (CGRectGetWidth(windowFrame) <= 0 || CGRectGetHeight(windowFrame) <= 0) {
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    if (screenHeight <= 0 || CGRectGetWidth(windowFrame) <= 0 || CGRectGetHeight(windowFrame) <= 0) {
         return NO;
     }
 
-    // 过滤初始化阶段的零坐标，实际显示出来的输入框 y 轴会落到有效位置
-    return CGRectGetMinY(windowFrame) > 0;
+    // 只在键盘展开后的底部紧凑输入栏跳过透明度；键盘收起后的大容器继续走透明度修改
+    CGFloat height = CGRectGetHeight(windowFrame);
+    CGFloat minY = CGRectGetMinY(windowFrame);
+    return minY > screenHeight * 0.7 && height <= 140.0;
 }
 
-static void WaaInputLog(UIView *targetView, UIView *containerView, BOOL hasSendButton, BOOL hasValidPosition, BOOL willSkip) {
+static void WaaInputLog(UIView *targetView, UIView *containerView, BOOL hasSendButton, BOOL isCompactBar, BOOL willSkip) {
     static NSInteger logCount = 0;
     if (logCount >= 120) {
         return;
@@ -53,10 +56,10 @@ static void WaaInputLog(UIView *targetView, UIView *containerView, BOOL hasSendB
     CGRect windowFrame = containerView ? (containerView.window ? [containerView convertRect:containerView.bounds toView:containerView.window] : containerView.frame) : CGRectZero;
     CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
     CGFloat midY = CGRectGetMidY(windowFrame);
-    NSLog(@"[DYYY][WaaInput] target=%@ targetFrame=%@ container=%@ containerFrame=%@ windowFrame=%@ midY=%.1f screen=%.1f hasSend=%d validPos=%d willSkip=%d",
+    NSLog(@"[DYYY][WaaInput] target=%@ targetFrame=%@ container=%@ containerFrame=%@ windowFrame=%@ midY=%.1f screen=%.1f hasSend=%d compactBar=%d willSkip=%d",
           NSStringFromClass([targetView class]), NSStringFromCGRect(targetView.frame),
           containerView ? NSStringFromClass([containerView class]) : @"nil", NSStringFromCGRect(containerFrame), NSStringFromCGRect(windowFrame),
-          midY, screenHeight, hasSendButton, hasValidPosition, willSkip);
+          midY, screenHeight, hasSendButton, isCompactBar, willSkip);
 }
 
 @interface UIView(Comment)
@@ -78,13 +81,13 @@ static void WaaInputLog(UIView *targetView, UIView *containerView, BOOL hasSendB
     BOOL isFirstChildOfMiddleContainer = NO;
     BOOL isFirstChildOfCommentContainer = NO;
     BOOL inputContainerHasSendButton = NO;
-    BOOL inputContainerHasValidPosition = NO;
+    BOOL inputContainerIsCompactBar = NO;
     UIView *inputContainerView = nil;
 
     if (isTargetCommentContainer) {
         inputContainerView = self;
         inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(self);
-        inputContainerHasValidPosition = WaaCommentInputContainerHasValidDisplayPosition(self);
+        inputContainerIsCompactBar = WaaCommentInputContainerIsCompactBottomBar(self);
     } else if (isTargetMiddleContainer) {
         inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(self);
         UIView *parentView = self.superview;
@@ -92,7 +95,7 @@ static void WaaInputLog(UIView *targetView, UIView *containerView, BOOL hasSendB
             if ([parentView isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
                 inputContainerView = parentView;
                 inputContainerHasSendButton = inputContainerHasSendButton || WaaViewContainsVisibleSendDUXButton(parentView);
-                inputContainerHasValidPosition = WaaCommentInputContainerHasValidDisplayPosition(parentView);
+                inputContainerIsCompactBar = WaaCommentInputContainerIsCompactBottomBar(parentView);
                 break;
             }
             parentView = parentView.superview;
@@ -108,7 +111,7 @@ static void WaaInputLog(UIView *targetView, UIView *containerView, BOOL hasSendB
                 if ([parentView isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
                     inputContainerView = parentView;
                     inputContainerHasSendButton = inputContainerHasSendButton || WaaViewContainsVisibleSendDUXButton(parentView);
-                    inputContainerHasValidPosition = WaaCommentInputContainerHasValidDisplayPosition(parentView);
+                    inputContainerIsCompactBar = WaaCommentInputContainerIsCompactBottomBar(parentView);
                     break;
                 }
                 parentView = parentView.superview;
@@ -118,7 +121,7 @@ static void WaaInputLog(UIView *targetView, UIView *containerView, BOOL hasSendB
             inputContainerView = superview;
             isFirstChildOfCommentContainer = (superview.subviews.firstObject == self);
             inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(superview);
-            inputContainerHasValidPosition = WaaCommentInputContainerHasValidDisplayPosition(superview);
+            inputContainerIsCompactBar = WaaCommentInputContainerIsCompactBottomBar(superview);
         }
         superview = superview.superview;
     }
@@ -126,9 +129,9 @@ static void WaaInputLog(UIView *targetView, UIView *containerView, BOOL hasSendB
     UIResponder *responder = self.nextResponder;
     BOOL isInCommentPanel = [responder isKindOfClass:NSClassFromString(@"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController")];
 
-    BOOL shouldSkipInputTransparency = (isTargetCommentContainer || isTargetMiddleContainer || isFirstChildOfCommentContainer || isFirstChildOfMiddleContainer) && inputContainerHasSendButton && inputContainerHasValidPosition;
+    BOOL shouldSkipInputTransparency = (isTargetCommentContainer || isTargetMiddleContainer || isFirstChildOfCommentContainer || isFirstChildOfMiddleContainer) && inputContainerHasSendButton && inputContainerIsCompactBar;
     if (isTargetCommentContainer || isTargetMiddleContainer || isFirstChildOfCommentContainer || isFirstChildOfMiddleContainer) {
-        WaaInputLog(self, inputContainerView, inputContainerHasSendButton, inputContainerHasValidPosition, shouldSkipInputTransparency);
+        WaaInputLog(self, inputContainerView, inputContainerHasSendButton, inputContainerIsCompactBar, shouldSkipInputTransparency);
     }
 
     if (shouldSkipInputTransparency) {
