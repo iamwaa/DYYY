@@ -580,6 +580,10 @@ static BOOL WaaDanmakuMethodHasType(id object, SEL selector, const char *expecte
     return actualType && expectedType && strcmp(actualType, expectedType) == 0;
 }
 
+static void WaaLogDanmakuLoopEvent(NSString *event, id danmakuPlayer, double sourceTime, double targetTime) {
+    NSLog(@"[DYYY][PureDanmaku] %@ player=%p source=%.3f target=%.3f", event, danmakuPlayer, sourceTime, targetTime);
+}
+
 static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
     if (!WaaShouldForceShowPureModeDanmaku()) {
         return;
@@ -605,6 +609,9 @@ static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
 
 static void WaaStopMigratedDanmakuTimeSync(UIViewController *controller) {
     WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
+    if (state.timeSyncTimer) {
+        NSLog(@"[DYYY][PureDanmaku] 停止时间同步");
+    }
     [state.timeSyncTimer invalidate];
     state.timeSyncTimer = nil;
     state.hasLastTimeSyncValue = NO;
@@ -668,6 +675,7 @@ static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
                                     state.lastTimeSyncAdvanceTime > 0.0 &&
                                     now - state.lastTimeSyncAdvanceTime >= 1.0;
         if (didRecoverStalledLoop) {
+            WaaLogDanmakuLoopEvent(@"原生时间停滞，进入模拟循环", danmakuPlayer, currentTime, 0.0);
             // 视频时间停在末尾时，先记录周期长度，再用墙钟驱动新的弹幕周期。
             state.hasPerformedStalledLoopRecovery = YES;
             state.isUsingSyntheticLoopTime = YES;
@@ -679,10 +687,12 @@ static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
                 void (*prepareReplayImplementation)(id, SEL) =
                     (void (*)(id, SEL))[danmakuPlayer methodForSelector:prepareReplaySelector];
                 if (prepareReplayImplementation) {
+                    WaaLogDanmakuLoopEvent(@"停滞恢复调用 prepareRePlayForLoop", danmakuPlayer, currentTime, 0.0);
                     prepareReplayImplementation(danmakuPlayer, prepareReplaySelector);
                 }
             }
             updateImplementation(danmakuPlayer, updateSelector, 0.0);
+            WaaLogDanmakuLoopEvent(@"停滞恢复已重置到零点", danmakuPlayer, currentTime, 0.0);
             WaaResumeMigratedDanmakuPlayer(controller);
             return;
         }
@@ -693,11 +703,13 @@ static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
         double syntheticTime = fmod(elapsed, state.syntheticLoopDuration);
         BOOL didRestartSyntheticLoop = state.hasLastTimeSyncValue && syntheticTime + 0.5 < state.lastTimeSyncValue;
         if (didRestartSyntheticLoop) {
+            WaaLogDanmakuLoopEvent(@"模拟周期回到起点", danmakuPlayer, state.lastTimeSyncValue, syntheticTime);
             SEL prepareReplaySelector = @selector(prepareRePlayForLoop);
             if (WaaDanmakuMethodHasType(danmakuPlayer, prepareReplaySelector, "v16@0:8")) {
                 void (*prepareReplayImplementation)(id, SEL) =
                     (void (*)(id, SEL))[danmakuPlayer methodForSelector:prepareReplaySelector];
                 if (prepareReplayImplementation) {
+                    WaaLogDanmakuLoopEvent(@"模拟循环调用 prepareRePlayForLoop", danmakuPlayer, state.lastTimeSyncValue, syntheticTime);
                     prepareReplayImplementation(danmakuPlayer, prepareReplaySelector);
                 }
             }
@@ -713,11 +725,13 @@ static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
     state.lastTimeSyncValue = currentTime;
     updateImplementation(danmakuPlayer, updateSelector, currentTime);
     if (didRestartVideoLoop) {
+        WaaLogDanmakuLoopEvent(@"检测到原生时间回退", danmakuPlayer, state.lastTimeSyncValue, currentTime);
         SEL prepareReplaySelector = @selector(prepareRePlayForLoop);
         if (WaaDanmakuMethodHasType(danmakuPlayer, prepareReplaySelector, "v16@0:8")) {
             void (*prepareReplayImplementation)(id, SEL) =
                 (void (*)(id, SEL))[danmakuPlayer methodForSelector:prepareReplaySelector];
             if (prepareReplayImplementation) {
+                WaaLogDanmakuLoopEvent(@"原生循环调用 prepareRePlayForLoop", danmakuPlayer, state.lastTimeSyncValue, currentTime);
                 prepareReplayImplementation(danmakuPlayer, prepareReplaySelector);
             }
         }
@@ -750,6 +764,7 @@ static void WaaStartMigratedDanmakuTimeSync(UIViewController *controller) {
         }
     }];
     state.timeSyncTimer = timer;
+    NSLog(@"[DYYY][PureDanmaku] 启动时间同步 player=%p", WaaDanmakuPlayerForView(state.player));
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
     WaaSyncMigratedDanmakuTime(controller);
 }
