@@ -505,6 +505,93 @@ static UIView *WaaCurrentVisibleDanmakuPlayer(void) {
     return bestPlayer;
 }
 
+static BOOL WaaDanmakuDiagnosticSelectorIsRelevant(NSString *selectorName) {
+    if (selectorName.length == 0) {
+        return NO;
+    }
+    NSString *lowercaseName = selectorName.lowercaseString;
+    NSArray<NSString *> *keywords = @[
+        @"danmaku", @"pause", @"resume", @"start", @"stop", @"play",
+        @"timer", @"display", @"tick", @"clock", @"time", @"active",
+        @"visible", @"window", @"superview"
+    ];
+    for (NSString *keyword in keywords) {
+        if ([lowercaseName containsString:keyword]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static void WaaLogDanmakuDiagnosticMethods(Class objectClass, NSString *source, BOOL includeAll) {
+    if (!objectClass) {
+        return;
+    }
+
+    unsigned int methodCount = 0;
+    Method *methods = class_copyMethodList(objectClass, &methodCount);
+    for (unsigned int index = 0; index < methodCount; index++) {
+        SEL selector = method_getName(methods[index]);
+        NSString *selectorName = NSStringFromSelector(selector);
+        if (!includeAll && !WaaDanmakuDiagnosticSelectorIsRelevant(selectorName)) {
+            continue;
+        }
+        const char *typeEncoding = method_getTypeEncoding(methods[index]);
+        NSLog(@"[WaaPMDanmaku] event=runtimeMethod source=%@ class=%@ selector=%@ types=%s",
+              source, NSStringFromClass(objectClass), selectorName, typeEncoding ?: "");
+    }
+    free(methods);
+}
+
+static void WaaLogDanmakuRuntimeDiagnostics(UIView *player) {
+    static BOOL didLogDiagnostics = NO;
+    if (didLogDiagnostics || !WaaDanmakuTraceEnabled() || !player) {
+        return;
+    }
+    didLogDiagnostics = YES;
+
+    Class playerClass = [player class];
+    NSLog(@"[WaaPMDanmaku] event=runtimeDiagnosticBegin player=%@", WaaDanmakuObjectDescription(player));
+    WaaLogDanmakuDiagnosticMethods(playerClass, @"player", YES);
+
+    NSMutableSet<NSString *> *loggedObjectClasses = [NSMutableSet set];
+    for (Class currentClass = playerClass; currentClass && currentClass != UIView.class; currentClass = class_getSuperclass(currentClass)) {
+        unsigned int ivarCount = 0;
+        Ivar *ivars = class_copyIvarList(currentClass, &ivarCount);
+        for (unsigned int index = 0; index < ivarCount; index++) {
+            Ivar ivar = ivars[index];
+            const char *ivarName = ivar_getName(ivar);
+            const char *typeEncoding = ivar_getTypeEncoding(ivar);
+            id value = nil;
+            if (typeEncoding && typeEncoding[0] == '@') {
+                @try {
+                    value = object_getIvar(player, ivar);
+                } @catch (__unused NSException *exception) {
+                    value = nil;
+                }
+            }
+
+            NSLog(@"[WaaPMDanmaku] event=runtimeIvar owner=%@ name=%s type=%s value=%@",
+                  NSStringFromClass(currentClass), ivarName ?: "", typeEncoding ?: "",
+                  value ? WaaDanmakuObjectDescription(value) : @"nil");
+
+            Class valueClass = value ? [value class] : Nil;
+            NSString *valueClassName = valueClass ? NSStringFromClass(valueClass) : nil;
+            if (!valueClassName || [loggedObjectClasses containsObject:valueClassName]) {
+                continue;
+            }
+            [loggedObjectClasses addObject:valueClassName];
+            for (Class diagnosticClass = valueClass; diagnosticClass && diagnosticClass != NSObject.class; diagnosticClass = class_getSuperclass(diagnosticClass)) {
+                WaaLogDanmakuDiagnosticMethods(diagnosticClass,
+                                               [NSString stringWithFormat:@"ivar.%s", ivarName ?: ""],
+                                               NO);
+            }
+        }
+        free(ivars);
+    }
+    NSLog(@"[WaaPMDanmaku] event=runtimeDiagnosticEnd player=%@", WaaDanmakuObjectDescription(player));
+}
+
 static NSArray<NSLayoutConstraint *> *WaaActiveExternalConstraintsForView(UIView *view) {
     NSMutableArray<NSLayoutConstraint *> *constraints = [NSMutableArray array];
     for (UIView *ancestor = view.superview; ancestor; ancestor = ancestor.superview) {
@@ -572,6 +659,7 @@ static void WaaAttachDanmakuPlayerToPureModeController(UIViewController *control
     if (!player || !originalSuperview || !targetView) {
         return;
     }
+    WaaLogDanmakuRuntimeDiagnostics(player);
 
     WaaDanmakuMigrationState *state = [WaaDanmakuMigrationState new];
     state.player = player;
