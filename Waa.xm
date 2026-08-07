@@ -374,6 +374,71 @@ static char kWaaDanmakuOriginalHiddenKey;
 static char kWaaDanmakuOriginalAlphaKey;
 static char kWaaDanmakuOriginalLayerOpacityKey;
 
+static BOOL WaaDanmakuTraceEnabled(void) {
+    return DYYYGetBool(@"WaaEnablePureModePlus") && DYYYGetBool(@"WaaPureModePlusShowDanmaku");
+}
+
+static NSString *WaaDanmakuObjectDescription(id object) {
+    if (!object) {
+        return @"nil";
+    }
+    return [NSString stringWithFormat:@"%p/%@", object, NSStringFromClass([object class])];
+}
+
+static NSString *WaaDanmakuAncestorChain(UIView *view) {
+    NSMutableArray<NSString *> *ancestors = [NSMutableArray array];
+    UIView *ancestor = view.superview;
+    for (NSUInteger depth = 0; ancestor && depth < 8; depth++, ancestor = ancestor.superview) {
+        [ancestors addObject:WaaDanmakuObjectDescription(ancestor)];
+    }
+    return ancestors.count > 0 ? [ancestors componentsJoinedByString:@" <- "] : @"nil";
+}
+
+static void WaaLogDanmakuPlayerState(NSString *event, UIView *view, NSString *extra) {
+    if (!WaaDanmakuTraceEnabled() || !view) {
+        return;
+    }
+    NSLog(@"[WaaPMDanmaku] event=%@ obj=%@ hidden=%d alpha=%.3f opacity=%.3f frame=%@ super=%@ window=%@ ancestors=%@ main=%d %@",
+          event,
+          WaaDanmakuObjectDescription(view),
+          view.hidden,
+          view.alpha,
+          view.layer.opacity,
+          NSStringFromCGRect(view.frame),
+          WaaDanmakuObjectDescription(view.superview),
+          WaaDanmakuObjectDescription(view.window),
+          WaaDanmakuAncestorChain(view),
+          NSThread.isMainThread,
+          extra ?: @"");
+}
+
+static void WaaCollectDanmakuPlayerViews(UIView *view, NSMutableArray<UIView *> *results) {
+    if (!view) {
+        return;
+    }
+    Class playerClass = NSClassFromString(@"DDanmakuPlayerView");
+    if (playerClass && [view isKindOfClass:playerClass]) {
+        [results addObject:view];
+    }
+    for (UIView *subview in view.subviews) {
+        WaaCollectDanmakuPlayerViews(subview, results);
+    }
+}
+
+static void WaaLogDanmakuHierarchySnapshot(NSString *phase) {
+    if (!WaaDanmakuTraceEnabled()) {
+        return;
+    }
+    NSMutableArray<UIView *> *players = [NSMutableArray array];
+    for (UIWindow *window in UIApplication.sharedApplication.windows) {
+        WaaCollectDanmakuPlayerViews(window, players);
+    }
+    NSLog(@"[WaaPMDanmaku] phase=%@ players=%lu active=%d", phase, (unsigned long)players.count, dyyyPureModePlusActive);
+    for (UIView *player in players) {
+        WaaLogDanmakuPlayerState([@"snapshot." stringByAppendingString:phase], player, nil);
+    }
+}
+
 static BOOL WaaFloatClearHidesDanmaku(void) {
     return hideButton.isElementsHidden && DYYYGetBool(@"DYYYHideDanmaku");
 }
@@ -497,7 +562,9 @@ static void removeTargetSubviews(UIView *view) {
 %hook AFDPureModePageContainerViewController
 
 - (void)viewDidLoad {
+    WaaLogDanmakuHierarchySnapshot(@"viewDidLoad.before");
     %orig;
+    WaaLogDanmakuHierarchySnapshot(@"viewDidLoad.after");
 
     if (!WaaPureModeEnabledForController(self)) {
         return;
@@ -505,15 +572,19 @@ static void removeTargetSubviews(UIView *view) {
 
     UIView *mainView = self.view;
     if ([mainView isKindOfClass:[UIView class]]) {
+        WaaLogDanmakuHierarchySnapshot(@"viewDidLoad.beforeRemoveTargets");
         removeTargetSubviews(mainView);
+        WaaLogDanmakuHierarchySnapshot(@"viewDidLoad.afterRemoveTargets");
     }
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    WaaLogDanmakuHierarchySnapshot(@"viewWillAppear.before");
     BOOL active = WaaPureModeEnabledForController(self);
     WaaRefreshPureModePlusState(active);
     %orig;
     WaaRefreshPureModePlusState(active);
+    WaaLogDanmakuHierarchySnapshot(@"viewWillAppear.after");
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -527,18 +598,77 @@ static void removeTargetSubviews(UIView *view) {
 
     UIView *mainView = self.view;
     if ([mainView isKindOfClass:[UIView class]]) {
+        WaaLogDanmakuHierarchySnapshot(@"viewDidAppear.beforeRemoveTargets");
         removeTargetSubviews(mainView);
+        WaaLogDanmakuHierarchySnapshot(@"viewDidAppear.afterRemoveTargets");
     }
+    WaaLogDanmakuHierarchySnapshot(@"viewDidAppear.after");
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
+    WaaLogDanmakuHierarchySnapshot(@"viewWillDisappear.before");
     WaaRefreshPureModePlusState(NO);
     %orig;
+    WaaLogDanmakuHierarchySnapshot(@"viewWillDisappear.after");
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
     %orig;
     WaaRefreshPureModePlusState(NO);
+    WaaLogDanmakuHierarchySnapshot(@"viewDidDisappear.after");
+}
+
+%end
+
+%hook DDanmakuPlayerView
+
+- (void)setHidden:(BOOL)hidden {
+    UIView *view = (UIView *)self;
+    BOOL before = view.hidden;
+    %orig(hidden);
+    if (before != hidden || view.hidden != hidden) {
+        WaaLogDanmakuPlayerState(@"setHidden", view,
+                                 [NSString stringWithFormat:@"requested=%d before=%d after=%d", hidden, before, view.hidden]);
+    }
+}
+
+- (void)willMoveToSuperview:(UIView *)newSuperview {
+    WaaLogDanmakuPlayerState(@"willMoveToSuperview", (UIView *)self,
+                             [NSString stringWithFormat:@"newSuper=%@", WaaDanmakuObjectDescription(newSuperview)]);
+    %orig;
+}
+
+- (void)didMoveToSuperview {
+    %orig;
+    WaaLogDanmakuPlayerState(@"didMoveToSuperview", (UIView *)self, nil);
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    WaaLogDanmakuPlayerState(@"didMoveToWindow", (UIView *)self, nil);
+}
+
+- (void)removeFromSuperview {
+    UIView *view = (UIView *)self;
+    NSString *extra = nil;
+    if (WaaDanmakuTraceEnabled()) {
+        NSString *stack = [[NSThread callStackSymbols] componentsJoinedByString:@" <- "];
+        extra = [NSString stringWithFormat:@"stack=%@", stack];
+    }
+    WaaLogDanmakuPlayerState(@"removeFromSuperview.before", view, extra);
+    %orig;
+    WaaLogDanmakuPlayerState(@"removeFromSuperview.after", view, nil);
+}
+
+- (void)dealloc {
+    if (WaaDanmakuTraceEnabled()) {
+        if (NSThread.isMainThread) {
+            WaaLogDanmakuPlayerState(@"dealloc", (UIView *)self, nil);
+        } else {
+            NSLog(@"[WaaPMDanmaku] event=dealloc obj=%p/%@ main=0", self, NSStringFromClass([self class]));
+        }
+    }
+    %orig;
 }
 
 %end
