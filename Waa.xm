@@ -397,44 +397,6 @@ static BOOL WaaShouldForceShowPureModeDanmaku(void);
 @implementation WaaDanmakuMigrationState
 @end
 
-static BOOL WaaDanmakuTraceEnabled(void) {
-    return DYYYGetBool(@"WaaEnablePureModePlus") && DYYYGetBool(@"WaaPureModePlusShowDanmaku");
-}
-
-static NSString *WaaDanmakuObjectDescription(id object) {
-    if (!object) {
-        return @"nil";
-    }
-    return [NSString stringWithFormat:@"%p/%@", object, NSStringFromClass([object class])];
-}
-
-static NSString *WaaDanmakuAncestorChain(UIView *view) {
-    NSMutableArray<NSString *> *ancestors = [NSMutableArray array];
-    UIView *ancestor = view.superview;
-    for (NSUInteger depth = 0; ancestor && depth < 8; depth++, ancestor = ancestor.superview) {
-        [ancestors addObject:WaaDanmakuObjectDescription(ancestor)];
-    }
-    return ancestors.count > 0 ? [ancestors componentsJoinedByString:@" <- "] : @"nil";
-}
-
-static void WaaLogDanmakuPlayerState(NSString *event, UIView *view, NSString *extra) {
-    if (!WaaDanmakuTraceEnabled() || !view) {
-        return;
-    }
-    NSLog(@"[WaaPMDanmaku] event=%@ obj=%@ hidden=%d alpha=%.3f opacity=%.3f frame=%@ super=%@ window=%@ ancestors=%@ main=%d %@",
-          event,
-          WaaDanmakuObjectDescription(view),
-          view.hidden,
-          view.alpha,
-          view.layer.opacity,
-          NSStringFromCGRect(view.frame),
-          WaaDanmakuObjectDescription(view.superview),
-          WaaDanmakuObjectDescription(view.window),
-          WaaDanmakuAncestorChain(view),
-          NSThread.isMainThread,
-          extra ?: @"");
-}
-
 static void WaaCollectDanmakuPlayerViews(UIView *view, NSMutableArray<UIView *> *results) {
     if (!view) {
         return;
@@ -445,20 +407,6 @@ static void WaaCollectDanmakuPlayerViews(UIView *view, NSMutableArray<UIView *> 
     }
     for (UIView *subview in view.subviews) {
         WaaCollectDanmakuPlayerViews(subview, results);
-    }
-}
-
-static void WaaLogDanmakuHierarchySnapshot(NSString *phase) {
-    if (!WaaDanmakuTraceEnabled()) {
-        return;
-    }
-    NSMutableArray<UIView *> *players = [NSMutableArray array];
-    for (UIWindow *window in UIApplication.sharedApplication.windows) {
-        WaaCollectDanmakuPlayerViews(window, players);
-    }
-    NSLog(@"[WaaPMDanmaku] phase=%@ players=%lu active=%d", phase, (unsigned long)players.count, dyyyPureModePlusActive);
-    for (UIView *player in players) {
-        WaaLogDanmakuPlayerState([@"snapshot." stringByAppendingString:phase], player, nil);
     }
 }
 
@@ -486,8 +434,6 @@ static UIView *WaaCurrentVisibleDanmakuPlayer(void) {
             CGRect windowRect = [player convertRect:player.bounds toView:window];
             CGRect visibleRect = CGRectIntersection(windowRect, window.bounds);
             CGFloat area = CGRectIsNull(visibleRect) ? 0.0 : CGRectGetWidth(visibleRect) * CGRectGetHeight(visibleRect);
-            NSLog(@"[WaaPMDanmaku] event=migrationCandidate obj=%@ rect=%@ area=%.1f",
-                  WaaDanmakuObjectDescription(player), NSStringFromCGRect(windowRect), area);
             if (area > bestArea) {
                 secondBestArea = bestArea;
                 bestArea = area;
@@ -499,99 +445,9 @@ static UIView *WaaCurrentVisibleDanmakuPlayer(void) {
     }
 
     if (!bestPlayer || bestArea < 100.0 || fabs(bestArea - secondBestArea) < 1.0) {
-        NSLog(@"[WaaPMDanmaku] event=migrationSelection result=none bestArea=%.1f secondArea=%.1f", bestArea, secondBestArea);
         return nil;
     }
-    NSLog(@"[WaaPMDanmaku] event=migrationSelection result=%@ bestArea=%.1f secondArea=%.1f",
-          WaaDanmakuObjectDescription(bestPlayer), bestArea, secondBestArea);
     return bestPlayer;
-}
-
-static BOOL WaaDanmakuDiagnosticSelectorIsRelevant(NSString *selectorName) {
-    if (selectorName.length == 0) {
-        return NO;
-    }
-    NSString *lowercaseName = selectorName.lowercaseString;
-    NSArray<NSString *> *keywords = @[
-        @"danmaku", @"pause", @"resume", @"start", @"stop", @"play",
-        @"timer", @"display", @"tick", @"clock", @"time", @"active",
-        @"visible", @"window", @"superview"
-    ];
-    for (NSString *keyword in keywords) {
-        if ([lowercaseName containsString:keyword]) {
-            return YES;
-        }
-    }
-    return NO;
-}
-
-static void WaaLogDanmakuDiagnosticMethods(Class objectClass, NSString *source, BOOL includeAll) {
-    if (!objectClass) {
-        return;
-    }
-
-    unsigned int methodCount = 0;
-    Method *methods = class_copyMethodList(objectClass, &methodCount);
-    for (unsigned int index = 0; index < methodCount; index++) {
-        SEL selector = method_getName(methods[index]);
-        NSString *selectorName = NSStringFromSelector(selector);
-        if (!includeAll && !WaaDanmakuDiagnosticSelectorIsRelevant(selectorName)) {
-            continue;
-        }
-        const char *typeEncoding = method_getTypeEncoding(methods[index]);
-        NSLog(@"[WaaPMDanmaku] event=runtimeMethod source=%@ class=%@ selector=%@ types=%s",
-              source, NSStringFromClass(objectClass), selectorName, typeEncoding ?: "");
-    }
-    free(methods);
-}
-
-static void WaaLogDanmakuRuntimeDiagnostics(UIView *player) {
-    static BOOL didLogDiagnostics = NO;
-    if (didLogDiagnostics || !WaaDanmakuTraceEnabled() || !player) {
-        return;
-    }
-    didLogDiagnostics = YES;
-
-    Class playerClass = [player class];
-    NSLog(@"[WaaPMDanmaku] event=runtimeDiagnosticBegin player=%@", WaaDanmakuObjectDescription(player));
-    WaaLogDanmakuDiagnosticMethods(playerClass, @"player", YES);
-
-    NSMutableSet<NSString *> *loggedObjectClasses = [NSMutableSet set];
-    for (Class currentClass = playerClass; currentClass && currentClass != UIView.class; currentClass = class_getSuperclass(currentClass)) {
-        unsigned int ivarCount = 0;
-        Ivar *ivars = class_copyIvarList(currentClass, &ivarCount);
-        for (unsigned int index = 0; index < ivarCount; index++) {
-            Ivar ivar = ivars[index];
-            const char *ivarName = ivar_getName(ivar);
-            const char *typeEncoding = ivar_getTypeEncoding(ivar);
-            id value = nil;
-            if (typeEncoding && typeEncoding[0] == '@') {
-                @try {
-                    value = object_getIvar(player, ivar);
-                } @catch (__unused NSException *exception) {
-                    value = nil;
-                }
-            }
-
-            NSLog(@"[WaaPMDanmaku] event=runtimeIvar owner=%@ name=%s type=%s value=%@",
-                  NSStringFromClass(currentClass), ivarName ?: "", typeEncoding ?: "",
-                  value ? WaaDanmakuObjectDescription(value) : @"nil");
-
-            Class valueClass = value ? [value class] : Nil;
-            NSString *valueClassName = valueClass ? NSStringFromClass(valueClass) : nil;
-            if (!valueClassName || [loggedObjectClasses containsObject:valueClassName]) {
-                continue;
-            }
-            [loggedObjectClasses addObject:valueClassName];
-            for (Class diagnosticClass = valueClass; diagnosticClass && diagnosticClass != NSObject.class; diagnosticClass = class_getSuperclass(diagnosticClass)) {
-                WaaLogDanmakuDiagnosticMethods(diagnosticClass,
-                                               [NSString stringWithFormat:@"ivar.%s", ivarName ?: ""],
-                                               NO);
-            }
-        }
-        free(ivars);
-    }
-    NSLog(@"[WaaPMDanmaku] event=runtimeDiagnosticEnd player=%@", WaaDanmakuObjectDescription(player));
 }
 
 static NSArray<NSLayoutConstraint *> *WaaActiveExternalConstraintsForView(UIView *view) {
@@ -661,7 +517,6 @@ static void WaaAttachDanmakuPlayerToPureModeController(UIViewController *control
     if (!player || !originalSuperview || !targetView) {
         return;
     }
-    WaaLogDanmakuRuntimeDiagnostics(player);
 
     WaaDanmakuMigrationState *state = [WaaDanmakuMigrationState new];
     state.player = player;
@@ -688,7 +543,6 @@ static void WaaAttachDanmakuPlayerToPureModeController(UIViewController *control
     player.layer.opacity = 1.0f;
     [targetView bringSubviewToFront:player];
     objc_setAssociatedObject(controller, &kWaaDanmakuMigrationStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    WaaLogDanmakuPlayerState(@"migrationAttached", player, nil);
 }
 
 static void WaaLayoutMigratedDanmakuPlayer(UIViewController *controller) {
@@ -698,25 +552,6 @@ static void WaaLayoutMigratedDanmakuPlayer(UIViewController *controller) {
         state.player.frame = controller.view.bounds;
         [controller.view bringSubviewToFront:state.player];
     }
-}
-
-static double WaaDanmakuPlayerDoubleValue(id player, SEL selector) {
-    Method method = class_getInstanceMethod([player class], selector);
-    if (!method || strcmp(method_getTypeEncoding(method), "d16@0:8") != 0) {
-        return NAN;
-    }
-    double (*implementation)(id, SEL) = (double (*)(id, SEL))[player methodForSelector:selector];
-    return implementation ? implementation(player, selector) : NAN;
-}
-
-static unsigned long long WaaDanmakuPlayerUnsignedValue(id player, SEL selector) {
-    Method method = class_getInstanceMethod([player class], selector);
-    if (!method || strcmp(method_getTypeEncoding(method), "Q16@0:8") != 0) {
-        return 0;
-    }
-    unsigned long long (*implementation)(id, SEL) =
-        (unsigned long long (*)(id, SEL))[player methodForSelector:selector];
-    return implementation ? implementation(player, selector) : 0;
 }
 
 static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
@@ -738,25 +573,13 @@ static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
     Method playMethod = danmakuPlayer ? class_getInstanceMethod([danmakuPlayer class], @selector(play)) : NULL;
     if (!danmakuPlayerClass || ![danmakuPlayer isKindOfClass:danmakuPlayerClass] || !playMethod ||
         strcmp(method_getTypeEncoding(playMethod), "v16@0:8") != 0) {
-        NSLog(@"[WaaPMDanmaku] event=resumeSkipped player=%@ delegate=%@",
-              WaaDanmakuObjectDescription(playerView), WaaDanmakuObjectDescription(danmakuPlayer));
         return;
     }
 
-    double currentTimeBefore = WaaDanmakuPlayerDoubleValue(danmakuPlayer, @selector(currentTime));
-    double playbackTimeBefore = WaaDanmakuPlayerDoubleValue(danmakuPlayer, @selector(playbackTime));
-    unsigned long long clockStepBefore = WaaDanmakuPlayerUnsignedValue(danmakuPlayer, @selector(clockStepCount));
     void (*playImplementation)(id, SEL) = (void (*)(id, SEL))[danmakuPlayer methodForSelector:@selector(play)];
     if (playImplementation) {
         playImplementation(danmakuPlayer, @selector(play));
     }
-    double currentTimeAfter = WaaDanmakuPlayerDoubleValue(danmakuPlayer, @selector(currentTime));
-    double playbackTimeAfter = WaaDanmakuPlayerDoubleValue(danmakuPlayer, @selector(playbackTime));
-    unsigned long long clockStepAfter = WaaDanmakuPlayerUnsignedValue(danmakuPlayer, @selector(clockStepCount));
-    NSLog(@"[WaaPMDanmaku] event=resumePlay player=%@ delegate=%@ currentTime=%.3f->%.3f playbackTime=%.3f->%.3f clockStep=%llu->%llu",
-          WaaDanmakuObjectDescription(playerView), WaaDanmakuObjectDescription(danmakuPlayer),
-          currentTimeBefore, currentTimeAfter, playbackTimeBefore, playbackTimeAfter,
-          clockStepBefore, clockStepAfter);
 }
 
 static void WaaRestoreMigratedDanmakuPlayer(UIViewController *controller) {
@@ -785,7 +608,6 @@ static void WaaRestoreMigratedDanmakuPlayer(UIViewController *controller) {
     [NSLayoutConstraint activateConstraints:WaaValidConstraintsForActivation(state.activeExternalConstraints)];
     [originalSuperview setNeedsLayout];
     [originalSuperview layoutIfNeeded];
-    WaaLogDanmakuPlayerState(@"migrationRestored", player, nil);
 }
 
 static BOOL WaaFloatClearHidesDanmaku(void) {
@@ -911,9 +733,7 @@ static void removeTargetSubviews(UIView *view) {
 %hook AFDPureModePageContainerViewController
 
 - (void)viewDidLoad {
-    WaaLogDanmakuHierarchySnapshot(@"viewDidLoad.before");
     %orig;
-    WaaLogDanmakuHierarchySnapshot(@"viewDidLoad.after");
 
     if (!WaaPureModeEnabledForController(self)) {
         return;
@@ -921,14 +741,11 @@ static void removeTargetSubviews(UIView *view) {
 
     UIView *mainView = self.view;
     if ([mainView isKindOfClass:[UIView class]]) {
-        WaaLogDanmakuHierarchySnapshot(@"viewDidLoad.beforeRemoveTargets");
         removeTargetSubviews(mainView);
-        WaaLogDanmakuHierarchySnapshot(@"viewDidLoad.afterRemoveTargets");
     }
 }
 
 - (void)viewWillAppear:(BOOL)animated {
-    WaaLogDanmakuHierarchySnapshot(@"viewWillAppear.before");
     BOOL active = WaaPureModeEnabledForController(self);
     WaaRefreshPureModePlusState(active);
     if (active) {
@@ -937,7 +754,6 @@ static void removeTargetSubviews(UIView *view) {
     %orig;
     WaaRefreshPureModePlusState(active);
     WaaLayoutMigratedDanmakuPlayer(self);
-    WaaLogDanmakuHierarchySnapshot(@"viewWillAppear.after");
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -951,13 +767,10 @@ static void removeTargetSubviews(UIView *view) {
 
     UIView *mainView = self.view;
     if ([mainView isKindOfClass:[UIView class]]) {
-        WaaLogDanmakuHierarchySnapshot(@"viewDidAppear.beforeRemoveTargets");
         removeTargetSubviews(mainView);
-        WaaLogDanmakuHierarchySnapshot(@"viewDidAppear.afterRemoveTargets");
     }
     WaaLayoutMigratedDanmakuPlayer(self);
     WaaResumeMigratedDanmakuPlayer(self);
-    WaaLogDanmakuHierarchySnapshot(@"viewDidAppear.after");
 }
 
 - (void)viewDidLayoutSubviews {
@@ -966,70 +779,14 @@ static void removeTargetSubviews(UIView *view) {
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
-    WaaLogDanmakuHierarchySnapshot(@"viewWillDisappear.before");
     WaaRefreshPureModePlusState(NO);
     %orig;
-    WaaLogDanmakuHierarchySnapshot(@"viewWillDisappear.after");
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
     %orig;
     WaaRefreshPureModePlusState(NO);
     WaaRestoreMigratedDanmakuPlayer(self);
-    WaaLogDanmakuHierarchySnapshot(@"viewDidDisappear.after");
-}
-
-%end
-
-%hook DDanmakuPlayerView
-
-- (void)setHidden:(BOOL)hidden {
-    UIView *view = (UIView *)self;
-    BOOL before = view.hidden;
-    %orig(hidden);
-    if (before != hidden || view.hidden != hidden) {
-        WaaLogDanmakuPlayerState(@"setHidden", view,
-                                 [NSString stringWithFormat:@"requested=%d before=%d after=%d", hidden, before, view.hidden]);
-    }
-}
-
-- (void)willMoveToSuperview:(UIView *)newSuperview {
-    WaaLogDanmakuPlayerState(@"willMoveToSuperview", (UIView *)self,
-                             [NSString stringWithFormat:@"newSuper=%@", WaaDanmakuObjectDescription(newSuperview)]);
-    %orig;
-}
-
-- (void)didMoveToSuperview {
-    %orig;
-    WaaLogDanmakuPlayerState(@"didMoveToSuperview", (UIView *)self, nil);
-}
-
-- (void)didMoveToWindow {
-    %orig;
-    WaaLogDanmakuPlayerState(@"didMoveToWindow", (UIView *)self, nil);
-}
-
-- (void)removeFromSuperview {
-    UIView *view = (UIView *)self;
-    NSString *extra = nil;
-    if (WaaDanmakuTraceEnabled()) {
-        NSString *stack = [[NSThread callStackSymbols] componentsJoinedByString:@" <- "];
-        extra = [NSString stringWithFormat:@"stack=%@", stack];
-    }
-    WaaLogDanmakuPlayerState(@"removeFromSuperview.before", view, extra);
-    %orig;
-    WaaLogDanmakuPlayerState(@"removeFromSuperview.after", view, nil);
-}
-
-- (void)dealloc {
-    if (WaaDanmakuTraceEnabled()) {
-        if (NSThread.isMainThread) {
-            WaaLogDanmakuPlayerState(@"dealloc", (UIView *)self, nil);
-        } else {
-            NSLog(@"[WaaPMDanmaku] event=dealloc obj=%p/%@ main=0", self, NSStringFromClass([self class]));
-        }
-    }
-    %orig;
 }
 
 %end

@@ -5177,27 +5177,10 @@ static void DYYYShowProfileFollowGlassConfirm(id user, void (^confirmAction)(voi
 %hook DDanmakuPlayerView
 
 - (void)setAlpha:(CGFloat)alpha {
-    UIView *view = (UIView *)self;
-    CGFloat before = view.alpha;
-    BOOL blocked = DYYYGetBool(@"DYYYCommentShowDanmaku") && alpha == 0.0;
-    if (!blocked) {
-        %orig(alpha);
+    if (DYYYGetBool(@"DYYYCommentShowDanmaku") && alpha == 0.0) {
+        return;
     }
-    if (DYYYGetBool(@"WaaEnablePureModePlus") && DYYYGetBool(@"WaaPureModePlusShowDanmaku") &&
-        (before != alpha || view.alpha != alpha)) {
-        NSLog(@"[WaaPMDanmaku] event=setAlpha obj=%p/%@ requested=%.3f before=%.3f after=%.3f blockedByCommentShow=%d super=%p/%@ window=%p/%@ main=%d",
-              view,
-              NSStringFromClass(view.class),
-              alpha,
-              before,
-              view.alpha,
-              blocked,
-              view.superview,
-              view.superview ? NSStringFromClass(view.superview.class) : @"nil",
-              view.window,
-              view.window ? NSStringFromClass(view.window.class) : @"nil",
-              NSThread.isMainThread);
-    }
+    %orig(alpha);
 }
 
 %end
