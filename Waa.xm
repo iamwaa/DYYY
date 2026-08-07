@@ -392,6 +392,7 @@ static BOOL WaaShouldForceShowPureModeDanmaku(void);
 @property(nonatomic, assign) BOOL originalTranslatesAutoresizingMaskIntoConstraints;
 @property(nonatomic, assign) UIViewAutoresizing originalAutoresizingMask;
 @property(nonatomic, strong) NSArray<NSLayoutConstraint *> *activeExternalConstraints;
+@property(nonatomic, strong) NSTimer *timeSyncTimer;
 @end
 
 @implementation WaaDanmakuMigrationState
@@ -554,6 +555,24 @@ static void WaaLayoutMigratedDanmakuPlayer(UIViewController *controller) {
     }
 }
 
+static id WaaDanmakuPlayerForView(UIView *playerView) {
+    if (!playerView || ![playerView respondsToSelector:@selector(delegate)]) {
+        return nil;
+    }
+
+    id (*delegateImplementation)(id, SEL) =
+        (id (*)(id, SEL))[playerView methodForSelector:@selector(delegate)];
+    id danmakuPlayer = delegateImplementation ? delegateImplementation(playerView, @selector(delegate)) : nil;
+    Class danmakuPlayerClass = NSClassFromString(@"DDanmakuPlayer");
+    return danmakuPlayerClass && [danmakuPlayer isKindOfClass:danmakuPlayerClass] ? danmakuPlayer : nil;
+}
+
+static BOOL WaaDanmakuMethodHasType(id object, SEL selector, const char *expectedType) {
+    Method method = object ? class_getInstanceMethod([object class], selector) : NULL;
+    const char *actualType = method ? method_getTypeEncoding(method) : NULL;
+    return actualType && expectedType && strcmp(actualType, expectedType) == 0;
+}
+
 static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
     if (!WaaShouldForceShowPureModeDanmaku()) {
         return;
@@ -561,28 +580,84 @@ static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
 
     WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
     UIView *playerView = state.player;
-    if (!playerView || playerView.superview != controller.view || !playerView.window ||
-        ![playerView respondsToSelector:@selector(delegate)]) {
+    if (!playerView || playerView.superview != controller.view || !playerView.window) {
         return;
     }
 
-    id (*delegateImplementation)(id, SEL) =
-        (id (*)(id, SEL))[playerView methodForSelector:@selector(delegate)];
-    id danmakuPlayer = delegateImplementation ? delegateImplementation(playerView, @selector(delegate)) : nil;
-    Class danmakuPlayerClass = NSClassFromString(@"DDanmakuPlayer");
-    Method playMethod = danmakuPlayer ? class_getInstanceMethod([danmakuPlayer class], @selector(play)) : NULL;
-    if (!danmakuPlayerClass || ![danmakuPlayer isKindOfClass:danmakuPlayerClass] || !playMethod ||
-        strcmp(method_getTypeEncoding(playMethod), "v16@0:8") != 0) {
+    id danmakuPlayer = WaaDanmakuPlayerForView(playerView);
+    SEL playSelector = @selector(play);
+    if (!WaaDanmakuMethodHasType(danmakuPlayer, playSelector, "v16@0:8")) {
         return;
     }
 
-    void (*playImplementation)(id, SEL) = (void (*)(id, SEL))[danmakuPlayer methodForSelector:@selector(play)];
+    void (*playImplementation)(id, SEL) = (void (*)(id, SEL))[danmakuPlayer methodForSelector:playSelector];
     if (playImplementation) {
-        playImplementation(danmakuPlayer, @selector(play));
+        playImplementation(danmakuPlayer, playSelector);
     }
 }
 
+static void WaaStopMigratedDanmakuTimeSync(UIViewController *controller) {
+    WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
+    [state.timeSyncTimer invalidate];
+    state.timeSyncTimer = nil;
+}
+
+static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
+    if (!WaaShouldForceShowPureModeDanmaku()) {
+        WaaStopMigratedDanmakuTimeSync(controller);
+        return;
+    }
+
+    WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
+    UIView *playerView = state.player;
+    if (!playerView || playerView.superview != controller.view || !playerView.window) {
+        WaaStopMigratedDanmakuTimeSync(controller);
+        return;
+    }
+
+    id danmakuPlayer = WaaDanmakuPlayerForView(playerView);
+    SEL currentTimeSelector = @selector(timeDriverCurrentPlayTime);
+    SEL updateSelector = @selector(optimizedTimeUpdated:);
+    if (!WaaDanmakuMethodHasType(danmakuPlayer, currentTimeSelector, "d16@0:8") ||
+        !WaaDanmakuMethodHasType(danmakuPlayer, updateSelector, "v24@0:8d16")) {
+        WaaStopMigratedDanmakuTimeSync(controller);
+        return;
+    }
+
+    double (*currentTimeImplementation)(id, SEL) =
+        (double (*)(id, SEL))[danmakuPlayer methodForSelector:currentTimeSelector];
+    void (*updateImplementation)(id, SEL, double) =
+        (void (*)(id, SEL, double))[danmakuPlayer methodForSelector:updateSelector];
+    double currentTime = currentTimeImplementation ? currentTimeImplementation(danmakuPlayer, currentTimeSelector) : NAN;
+    if (updateImplementation && isfinite(currentTime) && currentTime >= 0.0) {
+        updateImplementation(danmakuPlayer, updateSelector, currentTime);
+    }
+}
+
+static void WaaStartMigratedDanmakuTimeSync(UIViewController *controller) {
+    WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
+    if (!state || state.timeSyncTimer) {
+        return;
+    }
+
+    __weak UIViewController *weakController = controller;
+    NSTimer *timer = [NSTimer timerWithTimeInterval:0.1
+                                            repeats:YES
+                                              block:^(__unused NSTimer *runningTimer) {
+        UIViewController *strongController = weakController;
+        if (strongController) {
+            WaaSyncMigratedDanmakuTime(strongController);
+        } else {
+            [runningTimer invalidate];
+        }
+    }];
+    state.timeSyncTimer = timer;
+    [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+    WaaSyncMigratedDanmakuTime(controller);
+}
+
 static void WaaRestoreMigratedDanmakuPlayer(UIViewController *controller) {
+    WaaStopMigratedDanmakuTimeSync(controller);
     WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
     if (!state) {
         return;
@@ -771,6 +846,7 @@ static void removeTargetSubviews(UIView *view) {
     }
     WaaLayoutMigratedDanmakuPlayer(self);
     WaaResumeMigratedDanmakuPlayer(self);
+    WaaStartMigratedDanmakuTimeSync(self);
 }
 
 - (void)viewDidLayoutSubviews {
@@ -779,6 +855,7 @@ static void removeTargetSubviews(UIView *view) {
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
+    WaaStopMigratedDanmakuTimeSync(self);
     WaaRefreshPureModePlusState(NO);
     %orig;
 }
