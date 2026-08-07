@@ -13,7 +13,7 @@ cd "$repo_root"
 assert_build_relevant() {
     local hash=$1
 
-    if ! .github/scripts/build-relevance.sh commit "$hash"; then
+    if ! bash .github/scripts/build-relevance.sh commit "$hash"; then
         printf 'expected %s to affect the build\n' "$hash" >&2
         exit 1
     fi
@@ -22,7 +22,7 @@ assert_build_relevant() {
 assert_not_build_relevant() {
     local hash=$1
 
-    if .github/scripts/build-relevance.sh commit "$hash"; then
+    if bash .github/scripts/build-relevance.sh commit "$hash"; then
         printf 'expected %s not to affect the build\n' "$hash" >&2
         exit 1
     fi
@@ -62,7 +62,7 @@ assert_not_build_relevant "$release_automation_commit"
 RELEASE_PREVIOUS_TAG="${hide_ai_commit}^" \
 RELEASE_HEAD_SHA="$image_speed_commit" \
 RELEASE_TITLE='DYYY_2.3-0#19' \
-    .github/scripts/generate-release-notes.sh "$notes_file" 2>"$stderr_file" >/dev/null
+    bash .github/scripts/generate-release-notes.sh "$notes_file" 2>"$stderr_file" >/dev/null
 
 assert_contains '### 新功能与体验改进'
 assert_contains '综合搜索 AI 浮钮'
@@ -91,7 +91,7 @@ RELEASE_PREVIOUS_TAG="$generic_parent" \
 RELEASE_HEAD_SHA="$generic_commit" \
 RELEASE_TITLE='fallback-test' \
 GITHUB_ACTIONS=true \
-    .github/scripts/generate-release-notes.sh "$notes_file" 2>"$stderr_file" >/dev/null
+    bash .github/scripts/generate-release-notes.sh "$notes_file" 2>"$stderr_file" >/dev/null
 
 assert_contains '主页关注确认弹窗与提示优化'
 assert_contains '现在可以使用主页关注确认弹窗与提示优化。'

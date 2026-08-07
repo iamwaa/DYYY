@@ -58,7 +58,7 @@ jobs:
           fetch-depth: 0
 
       - name: Validate release automation
-        run: .github/scripts/test-release-notes.sh
+        run: bash .github/scripts/test-release-notes.sh
 
       - name: Detect build-relevant changes
         id: relevance
@@ -66,7 +66,7 @@ jobs:
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] ||
-             .github/scripts/build-relevance.sh range "$PUSH_BEFORE" "$GITHUB_SHA"; then
+             bash .github/scripts/build-relevance.sh range "$PUSH_BEFORE" "$GITHUB_SHA"; then
             echo "should_build=true" >> "$GITHUB_OUTPUT"
             echo "Build-relevant plugin, package, or Makefile changes detected."
           else
@@ -179,7 +179,7 @@ jobs:
       - name: Extract arm64 dylib
         env:
           PACKAGE_VERSION: ${{ steps.package.outputs.version }}
-        run: .github/scripts/extract-release-dylib.sh
+        run: bash .github/scripts/extract-release-dylib.sh
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v7
