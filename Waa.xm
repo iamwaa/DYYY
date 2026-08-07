@@ -1,7 +1,7 @@
 // Modified By @Waa
 
-#import "AwemeHeaders.h"
-#import "DYYYBottomAlertView.h"
+#import "Sources/Core/AwemeHeaders.h"
+#import "Sources/UI/DYYYBottomAlertView.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
