@@ -393,6 +393,8 @@ static BOOL WaaShouldForceShowPureModeDanmaku(void);
 @property(nonatomic, assign) UIViewAutoresizing originalAutoresizingMask;
 @property(nonatomic, strong) NSArray<NSLayoutConstraint *> *activeExternalConstraints;
 @property(nonatomic, strong) NSTimer *timeSyncTimer;
+@property(nonatomic, assign) BOOL hasLastTimeSyncValue;
+@property(nonatomic, assign) double lastTimeSyncValue;
 @end
 
 @implementation WaaDanmakuMigrationState
@@ -600,6 +602,8 @@ static void WaaStopMigratedDanmakuTimeSync(UIViewController *controller) {
     WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
     [state.timeSyncTimer invalidate];
     state.timeSyncTimer = nil;
+    state.hasLastTimeSyncValue = NO;
+    state.lastTimeSyncValue = 0.0;
 }
 
 static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
@@ -629,8 +633,27 @@ static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
     void (*updateImplementation)(id, SEL, double) =
         (void (*)(id, SEL, double))[danmakuPlayer methodForSelector:updateSelector];
     double currentTime = currentTimeImplementation ? currentTimeImplementation(danmakuPlayer, currentTimeSelector) : NAN;
-    if (updateImplementation && isfinite(currentTime) && currentTime >= 0.0) {
-        updateImplementation(danmakuPlayer, updateSelector, currentTime);
+    if (!updateImplementation || !isfinite(currentTime) || currentTime < 0.0) {
+        return;
+    }
+
+    BOOL didRestartVideoLoop = state.hasLastTimeSyncValue && currentTime + 0.5 < state.lastTimeSyncValue;
+    state.hasLastTimeSyncValue = YES;
+    state.lastTimeSyncValue = currentTime;
+    if (didRestartVideoLoop) {
+        SEL prepareReplaySelector = @selector(prepareRePlayForLoop);
+        if (WaaDanmakuMethodHasType(danmakuPlayer, prepareReplaySelector, "v16@0:8")) {
+            void (*prepareReplayImplementation)(id, SEL) =
+                (void (*)(id, SEL))[danmakuPlayer methodForSelector:prepareReplaySelector];
+            if (prepareReplayImplementation) {
+                prepareReplayImplementation(danmakuPlayer, prepareReplaySelector);
+            }
+        }
+    }
+
+    updateImplementation(danmakuPlayer, updateSelector, currentTime);
+    if (didRestartVideoLoop) {
+        WaaResumeMigratedDanmakuPlayer(controller);
     }
 }
 
@@ -640,6 +663,8 @@ static void WaaStartMigratedDanmakuTimeSync(UIViewController *controller) {
         return;
     }
 
+    state.hasLastTimeSyncValue = NO;
+    state.lastTimeSyncValue = 0.0;
     __weak UIViewController *weakController = controller;
     NSTimer *timer = [NSTimer timerWithTimeInterval:0.1
                                             repeats:YES
