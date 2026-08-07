@@ -5604,7 +5604,7 @@ static void DYYYApplyFeedVideoCollectButtonSettingsWithRetry(AWEFeedVideoButton 
 %hook AWEPlayInteractionProgressContainerView
 - (void)layoutSubviews {
     %orig;
-    DYYYApplyFloatClearProgressStateToView(self);
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
 
     if (![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFullScreen"]) {
         return;
@@ -5634,7 +5634,7 @@ static void DYYYApplyFeedVideoCollectButtonSettingsWithRetry(AWEFeedVideoButton 
 
 - (void)layoutSubviews {
     %orig;
-    DYYYApplyFloatClearProgressStateToView(self);
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
 }
 
 - (void)setAlpha:(CGFloat)alpha {
@@ -5858,7 +5858,7 @@ static void DYYYApplyFeedVideoCollectButtonSettingsWithRetry(AWEFeedVideoButton 
 
 - (void)layoutSubviews {
     %orig;
-    DYYYApplyFloatClearProgressStateToView(self);
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
 }
 
 %end
@@ -5867,7 +5867,7 @@ static void DYYYApplyFeedVideoCollectButtonSettingsWithRetry(AWEFeedVideoButton 
 
 - (void)layoutSubviews {
     %orig;
-    DYYYApplyFloatClearProgressStateToView(self);
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
 }
 
 %end
@@ -5876,7 +5876,7 @@ static void DYYYApplyFeedVideoCollectButtonSettingsWithRetry(AWEFeedVideoButton 
 
 - (void)layoutSubviews {
     %orig;
-    DYYYApplyFloatClearProgressStateToView(self);
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
 }
 
 %end
@@ -5885,7 +5885,7 @@ static void DYYYApplyFeedVideoCollectButtonSettingsWithRetry(AWEFeedVideoButton 
 
 - (void)layoutSubviews {
     %orig;
-    DYYYApplyFloatClearProgressStateToView(self);
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
 }
 
 %end
@@ -17527,7 +17527,7 @@ static NSString *const kHideRecentUsersKey = @"DYYYHideSidebarRecentUsers";
 
 - (void)layoutSubviews {
     %orig;
-    DYYYApplyFloatClearProgressStateToView(self);
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
 
     if (![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFullScreen"]) {
         return;
