@@ -4,12 +4,12 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-iOS%2014.0%2B-black?style=flat&labelColor=black" />
-  <img src="https://img.shields.io/badge/App-%E6%8A%96%E9%9F%B3%2036.5.0-black?style=flat&labelColor=black" />
+  <img src="https://img.shields.io/badge/App-%E6%8A%96%E9%9F%B3%E6%9C%80%E6%96%B0%E7%89%88-black?style=flat&labelColor=black" />
 </p>
 
 # DYYY
 
-用于调整抖音 UI 的 Theos/Logos Tweak，仅在 **36.5.0 版本** 中测试。  
+用于调整抖音 UI 的 Theos/Logos Tweak，仅在 **最新版** 中测试。<br>
 **仅供学习交流，禁止用于商业用途。**
 
 ## 目录
@@ -190,10 +190,12 @@ make clean package
 make package INSTALL=1
 ```
 
-- 切换不同包方案（示例 rootless）：
+- 默认打包为 rootless；切换其他方案：
 
 ```bash
-make package SCHEME=rootless
+make package                 # 默认 rootless
+make package SCHEME=rootful
+make package SCHEME=roothide
 ```
 
 - CI/无人值守：

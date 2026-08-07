@@ -14,13 +14,18 @@ ARCHS = arm64 arm64e
 #export THEOS=/Users/huami/theos
 #export THEOS_PACKAGE_SCHEME=roothide
 
-# 根据参数选择打包方案
+# 本地默认 rootless；SCHEME=rootful / SCHEME=roothide 可切换
+SCHEME ?= rootless
 ifeq ($(SCHEME),roothide)
     export THEOS_PACKAGE_SCHEME = roothide
+    export FINALPACKAGE = 1
+else ifeq ($(SCHEME),rootful)
+    unexport THEOS_PACKAGE_SCHEME
 else ifeq ($(SCHEME),rootless)
     export THEOS_PACKAGE_SCHEME = rootless
+    export FINALPACKAGE = 1
 else
-    unexport THEOS_PACKAGE_SCHEME
+    $(error Unknown SCHEME=$(SCHEME); use rootless, rootful, or roothide)
 endif
 
 # 在GitHub Actions中运行时的特殊配置
@@ -36,10 +41,51 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = DYYY
 
-DYYY_FILES = Waa.xm DYYY.xm DYYYFloatClearButton.xm DYYYFloatSpeedButton.m DYYYSettings.xm DYYYABTestHook.xm DYYYLongPressPanel.xm DYYYSettingsHelper.m DYYYImagePickerDelegate.m DYYYBackupPickerDelegate.m DYYYSettingViewController.m DYYYBottomAlertView.m DYYYCustomInputView.m DYYYOptionsSelectionView.m DYYYIconOptionsDialogView.m DYYYAboutDialogView.m DYYYKeywordListView.m DYYYFilterSettingsView.m DYYYConfirmCloseView.m DYYYToast.m DYYYManager.m DYYYUtils.m CityManager.m AWMSafeDispatchTimer.m
-DYYY_CFLAGS = -fobjc-arc -w
-DYYY_LDFLAGS = -weak_framework AVFAudio
-DYYY_FRAMEWORKS = CoreAudio
+DYYY_FILES = Waa.xm \
+	DYYY.xm \
+	DYYYFloatClearButton.xm \
+	DYYYSettings.xm \
+	DYYYABTestHook.xm \
+	DYYYLongPressPanel.xm \
+	Sources/Features/DYYYFloatSpeedButton.m \
+	Sources/Settings/DYYYSettingsHelper.m \
+	Sources/Settings/DYYYPickerDelegates.m \
+	Sources/Media/DYYYBackupManager.m \
+	Sources/Settings/DYYYSettingViewController.m \
+	Sources/UI/DYYYKeyboardAvoidanceCoordinator.m \
+	Sources/Features/DYYYLivePreStreamLayoutCoordinator.m \
+	Sources/UI/DYYYBottomAlertView.m \
+	Sources/UI/DYYYCustomInputView.m \
+	Sources/UI/DYYYOptionsSelectionView.m \
+	Sources/UI/DYYYIconOptionsDialogView.m \
+	Sources/UI/DYYYAboutDialogView.m \
+	Sources/UI/DYYYGlassConfirmView.m \
+	Sources/UI/DYYYKeywordListView.m \
+	Sources/UI/DYYYFilterSettingsView.m \
+	Sources/UI/DYYYConfirmCloseView.m \
+	Sources/UI/DYYYToast.m \
+	Sources/Media/DYYYManager.m \
+	Sources/Core/DYYYUtils.m \
+	Sources/Features/DYYYLoginBypassManager.m \
+	Sources/Features/DYYYPrivacyRecordUploadGuard.m \
+	Sources/Core/CityManager.m \
+	Sources/Core/AWMSafeDispatchTimer.m \
+	Sources/Features/DYYYMiniProgramRewardBypass.m \
+	Sources/Features/DYYYHideMusicButtonHooks.m \
+	Sources/Features/DYYYHideMessageAndMinePageHooks.m \
+	Sources/Features/DYYYHideCommentAIAnalysisHooks.m \
+	Sources/Features/DYYYHideTemplateCollectionHooks.m \
+	Sources/Features/DYYYSearchKeyboardVoiceHooks.m \
+	Sources/Features/DYYYHighFPSHooks.m \
+	Sources/Features/DYYYFPSOverlay.m
+DYYY_CFLAGS = -fobjc-arc -w \
+	-I$(THEOS_PROJECT_DIR)/Sources/Core \
+	-I$(THEOS_PROJECT_DIR)/Sources/Settings \
+	-I$(THEOS_PROJECT_DIR)/Sources/UI \
+	-I$(THEOS_PROJECT_DIR)/Sources/Media \
+	-I$(THEOS_PROJECT_DIR)/Sources/Features
+DYYY_LDFLAGS = -weak_framework AVFAudio -lcompression
+DYYY_FRAMEWORKS = UIKit Foundation AVFoundation CoreAudio UniformTypeIdentifiers
 CXXFLAGS += -std=c++11
 CCFLAGS += -std=c++11
 DYYY_LOGOS_DEFAULT_GENERATOR = internal

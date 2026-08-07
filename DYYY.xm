@@ -13,21 +13,36 @@
 #import <math.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <os/lock.h>
 #import <substrate.h>
+#import <stdlib.h>
+#import <string.h>
 #import <syslog.h>
 
-#import "AwemeHeaders.h"
-#import "CityManager.h"
-#import "DYYYBottomAlertView.h"
-#import "DYYYManager.h"
+#import "Sources/Core/AwemeHeaders.h"
+#import "Sources/Core/CityManager.h"
+#import "Sources/UI/DYYYBottomAlertView.h"
+#import "Sources/UI/DYYYGlassConfirmView.h"
+#import "Sources/Media/DYYYManager.h"
 
-#import "AWMSafeDispatchTimer.h"
-#import "DYYYConstants.h"
+#import "Sources/Core/AWMSafeDispatchTimer.h"
+#import "Sources/Core/DYYYConstants.h"
 #import "DYYYFloatClearButton.h"
-#import "DYYYFloatSpeedButton.h"
-#import "DYYYSettingViewController.h"
-#import "DYYYToast.h"
-#import "DYYYUtils.h"
+#import "Sources/Features/DYYYFloatSpeedButton.h"
+#import "Sources/Features/DYYYLivePreStreamLayoutCoordinator.h"
+#import "Sources/Features/DYYYLoginBypassManager.h"
+#import "Sources/Features/DYYYHideMusicButtonHooks.h"
+#import "Sources/Features/DYYYHideMessageAndMinePageHooks.h"
+#import "Sources/Features/DYYYHideCommentAIAnalysisHooks.h"
+#import "Sources/Features/DYYYHideTemplateCollectionHooks.h"
+#import "Sources/Features/DYYYSearchKeyboardVoiceHooks.h"
+#import "Sources/Features/DYYYHighFPSHooks.h"
+#import "Sources/Features/DYYYFPSOverlay.h"
+#import "Sources/Features/DYYYMiniProgramRewardBypass.h"
+#import "Sources/Features/DYYYPrivacyRecordUploadGuard.h"
+#import "Sources/Settings/DYYYSettingViewController.h"
+#import "Sources/UI/DYYYToast.h"
+#import "Sources/Core/DYYYUtils.h"
 
 static CGFloat gStartY = 0.0;
 static CGFloat gStartVal = 0.0;
@@ -41,6 +56,7 @@ static CGFloat gCurrentTabBarHeight = kInvalidHeight;
 static CGFloat originalTabBarHeight = kInvalidHeight;
 static NSString *const kDYYYGlobalTransparencyKey = @"DYYYGlobalTransparency";
 static NSString *const kDYYYGlobalTransparencyDidChangeNotification = @"DYYYGlobalTransparencyDidChangeNotification";
+static NSString *const kDYYYEnableLoginBypassKey = @"DYYYEnableLoginBypass";
 static char kDYYYGlobalTransparencyBaseAlphaKey;
 static NSInteger dyyyGlobalTransparencyMutationDepth = 0;
 
@@ -325,6 +341,425 @@ static void DYYYExpandFullScreenContainerFrameIfNeeded(UIView *view, UIViewContr
     }
 }
 
+static BOOL DYYYLoginBypassEnabled(void) {
+    return [DYYYLoginBypassManager isLoginBypassEnabled];
+}
+
+static BOOL DYYYShouldBlockVersionUpdateWorkflow(void) {
+    return DYYYGetBool(@"DYYYNoUpdates") || DYYYLoginBypassEnabled();
+}
+
+static void DYYYLoginBypassInvokeCloseCallback(id callback) {
+    if (!callback) {
+        return;
+    }
+
+    void (^completionBlock)(void) = callback;
+    completionBlock();
+}
+
+static NSArray<NSString *> *DYYYLoginBypassTargetBundleIdentifiers(void) {
+    static NSArray<NSString *> *bundleIdentifiers = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      bundleIdentifiers = @[
+          @"com.ss.iphone.ugc.Aweme",
+          @"com.ss.iphone.ugc.Aweme.beta",
+          @"com.ss.iphone.ugc.Aweme.internal",
+          @"com.ss.iphone.ugc.aweme.lite"
+      ];
+    });
+    return bundleIdentifiers;
+}
+
+static BOOL DYYYLoginBypassIsTargetBundleIdentifier(id value) {
+    if (![value isKindOfClass:[NSString class]]) {
+        return NO;
+    }
+
+    for (NSString *bundleIdentifier in DYYYLoginBypassTargetBundleIdentifiers()) {
+        if ([value isEqualToString:bundleIdentifier]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static NSArray<NSString *> *DYYYLoginBypassEmojiSuffixes(void) {
+    static NSArray<NSString *> *suffixes = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      suffixes = @[
+          @"\U0001F60A",
+          @"\U0001F60E",
+          @"\U0001F914",
+          @"\U0001F609",
+          @"\U0001F60B",
+          @"\U0001F60D",
+          @"\U0001F970",
+          @"\U0001F618",
+          @"\U0001F617",
+          @"\U0001F619",
+          @"\U0001F61A",
+          @"\U0001F642",
+          @"\U0001F917",
+          @"\U0001F929",
+          @"\U0001F928",
+          @"\U0001F9D0",
+          @"\U0001F913",
+          @"\U0001F607",
+          @"\U0001F973",
+          @"\U0001F60C",
+          @"\U0001F60F",
+          @"\U0001F60A",
+          @"\U0001F612",
+          @"\U0001F643"
+      ];
+    });
+    return suffixes;
+}
+
+static NSMutableDictionary<NSString *, NSString *> *DYYYLoginBypassReplacementCache(void) {
+    static NSMutableDictionary<NSString *, NSString *> *cache = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      cache = [NSMutableDictionary dictionary];
+      [NSTimer scheduledTimerWithTimeInterval:60.0
+                                      repeats:YES
+                                        block:^(__unused NSTimer *timer) {
+                                          @synchronized(cache) {
+                                              [cache removeAllObjects];
+                                          }
+                                        }];
+    });
+    return cache;
+}
+
+static NSString *DYYYLoginBypassReplacementBundleIdentifier(NSString *bundleIdentifier) {
+    if (!DYYYLoginBypassEnabled() || !DYYYLoginBypassIsTargetBundleIdentifier(bundleIdentifier)) {
+        return bundleIdentifier;
+    }
+
+    NSMutableDictionary<NSString *, NSString *> *cache = DYYYLoginBypassReplacementCache();
+    @synchronized(cache) {
+        NSString *cachedValue = cache[bundleIdentifier];
+        if (cachedValue.length > 0) {
+            return cachedValue;
+        }
+
+        NSArray<NSString *> *suffixes = DYYYLoginBypassEmojiSuffixes();
+        if (suffixes.count == 0) {
+            return bundleIdentifier;
+        }
+
+        NSString *suffix = suffixes[arc4random_uniform((uint32_t)suffixes.count)];
+        NSString *replacement = [bundleIdentifier stringByAppendingString:suffix];
+        if (replacement.length > 0 && cache.count <= 99) {
+            cache[bundleIdentifier] = replacement;
+        }
+        return replacement ?: bundleIdentifier;
+    }
+}
+
+static NSString *DYYYLoginBypassHeaderValueByReplacingBundleIdentifier(NSString *value, NSString *field) {
+    if (!DYYYLoginBypassEnabled() || ![value isKindOfClass:[NSString class]] || ![field isKindOfClass:[NSString class]]) {
+        return value;
+    }
+
+    NSString *lowercaseField = [field lowercaseString];
+    BOOL isBundleHeaderField = [lowercaseField isEqualToString:@"x-bundle-id"] || [lowercaseField isEqualToString:@"bundle-identifier"] ||
+                               [lowercaseField isEqualToString:@"app-bundle-id"] || [lowercaseField isEqualToString:@"x-app-bundle-id"];
+    if (!isBundleHeaderField || !DYYYLoginBypassIsTargetBundleIdentifier(value)) {
+        return value;
+    }
+
+    return DYYYLoginBypassReplacementBundleIdentifier(value);
+}
+
+static NSDictionary *DYYYLoginBypassHeadersByReplacingBundleIdentifiers(NSDictionary *headers) {
+    if (!DYYYLoginBypassEnabled() || ![headers isKindOfClass:[NSDictionary class]]) {
+        return headers;
+    }
+
+    NSMutableDictionary *mutableHeaders = [headers mutableCopy];
+    NSArray<NSString *> *headerKeys = @[ @"X-Bundle-ID", @"X-App-Bundle-ID", @"Bundle-Identifier", @"App-Bundle-ID" ];
+    for (NSString *headerKey in headerKeys) {
+        id value = mutableHeaders[headerKey];
+        if (DYYYLoginBypassIsTargetBundleIdentifier(value)) {
+            mutableHeaders[headerKey] = DYYYLoginBypassReplacementBundleIdentifier(value);
+        }
+
+        NSString *lowercaseKey = [headerKey lowercaseString];
+        id lowercaseValue = mutableHeaders[lowercaseKey];
+        if (DYYYLoginBypassIsTargetBundleIdentifier(lowercaseValue)) {
+            mutableHeaders[lowercaseKey] = DYYYLoginBypassReplacementBundleIdentifier(lowercaseValue);
+        }
+    }
+
+    return mutableHeaders;
+}
+
+static BOOL DYYYLoginBypassURLStringContainsBundleKey(NSString *urlString) {
+    return [urlString containsString:@"bundle_id"] || [urlString containsString:@"bundleId"] || [urlString containsString:@"bundle_identifier"];
+}
+
+static NSURL *DYYYLoginBypassURLByReplacingBundleIdentifier(NSURL *url) {
+    if (!DYYYLoginBypassEnabled() || ![url isKindOfClass:[NSURL class]]) {
+        return url;
+    }
+
+    NSString *absoluteString = [url absoluteString];
+    if (absoluteString.length == 0 || !DYYYLoginBypassURLStringContainsBundleKey(absoluteString)) {
+        return url;
+    }
+
+    NSString *updatedString = absoluteString;
+    NSString *awemeBundleIdentifier = @"com.ss.iphone.ugc.Aweme";
+    NSString *liteBundleIdentifier = @"com.ss.iphone.ugc.aweme.lite";
+    if ([updatedString containsString:awemeBundleIdentifier]) {
+        updatedString = [updatedString stringByReplacingOccurrencesOfString:awemeBundleIdentifier
+                                                                 withString:DYYYLoginBypassReplacementBundleIdentifier(awemeBundleIdentifier)];
+    } else if ([updatedString containsString:liteBundleIdentifier]) {
+        updatedString = [updatedString stringByReplacingOccurrencesOfString:liteBundleIdentifier
+                                                                 withString:DYYYLoginBypassReplacementBundleIdentifier(liteBundleIdentifier)];
+    }
+
+    if ([updatedString isEqualToString:absoluteString]) {
+        return url;
+    }
+
+    return [NSURL URLWithString:updatedString] ?: url;
+}
+
+%group DYYYLoginBypassCore
+
+%hook NSBundle
+- (NSString *)bundleIdentifier {
+    NSString *bundleIdentifier = %orig;
+    return DYYYLoginBypassReplacementBundleIdentifier(bundleIdentifier);
+}
+
+- (NSDictionary *)infoDictionary {
+    NSDictionary *infoDictionary = %orig;
+    if (!DYYYLoginBypassEnabled() || ![infoDictionary isKindOfClass:[NSDictionary class]]) {
+        return infoDictionary;
+    }
+
+    NSString *bundleIdentifier = infoDictionary[@"CFBundleIdentifier"];
+    if (!DYYYLoginBypassIsTargetBundleIdentifier(bundleIdentifier)) {
+        return infoDictionary;
+    }
+
+    NSMutableDictionary *mutableInfoDictionary = [infoDictionary mutableCopy];
+    mutableInfoDictionary[@"CFBundleIdentifier"] = DYYYLoginBypassReplacementBundleIdentifier(bundleIdentifier);
+    return mutableInfoDictionary;
+}
+
++ (NSBundle *)mainBundle {
+    return %orig;
+}
+%end
+
+%hook NSURLRequest
+- (NSURL *)URL {
+    NSURL *url = %orig;
+    return DYYYLoginBypassURLByReplacingBundleIdentifier(url);
+}
+%end
+
+%hook NSMutableURLRequest
+- (void)setValue:(NSString *)value forHTTPHeaderField:(NSString *)field {
+    %orig(DYYYLoginBypassHeaderValueByReplacingBundleIdentifier(value, field), field);
+}
+
+- (void)addValue:(NSString *)value forHTTPHeaderField:(NSString *)field {
+    %orig(DYYYLoginBypassHeaderValueByReplacingBundleIdentifier(value, field), field);
+}
+%end
+
+%hook NSURLSessionConfiguration
+- (NSDictionary *)HTTPAdditionalHeaders {
+    return DYYYLoginBypassHeadersByReplacingBundleIdentifiers(%orig);
+}
+
+- (void)setHTTPAdditionalHeaders:(NSDictionary *)headers {
+    %orig(DYYYLoginBypassHeadersByReplacingBundleIdentifiers(headers));
+}
+%end
+
+%end
+
+%group DYYYLoginBypassAccountLifecycle
+
+%hook AWEUserServiceListener
+
+- (void)didFinishLoginWithUid:(NSString *)userID {
+    %orig(userID);
+    [DYYYLoginBypassManager handleOfficialLoginCompletionWithUserID:userID];
+}
+
+%end
+
+%end
+
+%group DYYYLoginBypassAccountMulticast
+
+%hook TTAccountMulticast
+
+- (void)broadcastLoginSuccess:(id)user platform:(NSInteger)platform reason:(id)reason {
+    %orig(user, platform, reason);
+    [DYYYLoginBypassManager handleOfficialLoginCompletionWithUserID:user];
+}
+
+%end
+
+%end
+
+%group DYYYLoginBypassVersionUpdateAlert
+%hook AWEVersionUpdateAlert
+- (BOOL)canShow {
+    return DYYYShouldBlockVersionUpdateWorkflow() ? NO : %orig;
+}
+
+- (BOOL)canShowWithUpgradeStatus {
+    return DYYYShouldBlockVersionUpdateWorkflow() ? NO : %orig;
+}
+
+- (BOOL)isUpgradeStatusVersionValid {
+    return DYYYShouldBlockVersionUpdateWorkflow() ? NO : %orig;
+}
+
+- (BOOL)versionCompareForNeedUpgrade {
+    return DYYYShouldBlockVersionUpdateWorkflow() ? NO : %orig;
+}
+
+- (void)showWithCloseCallback:(id)closeCallback {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        DYYYLoginBypassInvokeCloseCallback(closeCallback);
+        return;
+    }
+    %orig(closeCallback);
+}
+
+- (void)_showUpgradeModal {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        return;
+    }
+    %orig;
+}
+
+- (void)showDialog {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        return;
+    }
+    %orig;
+}
+
+- (void)requestNewVersion {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        return;
+    }
+    %orig;
+}
+%end
+%end
+
+%group DYYYLoginBypassVersionUpdatePopup
+%hook AWEVersionUpdatePopup
+- (BOOL)isShowing {
+    return DYYYShouldBlockVersionUpdateWorkflow() ? NO : %orig;
+}
+
+- (void)showDialog {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        return;
+    }
+    %orig;
+}
+
+- (void)showInfoPanel {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        return;
+    }
+    %orig;
+}
+
+- (void)p_showDialog {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        return;
+    }
+    %orig;
+}
+
+- (void)p_showInfoPanel {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        return;
+    }
+    %orig;
+}
+%end
+%end
+
+%group DYYYLoginBypassVersionUpdateWorkflow
+%hook AWEVersionUpdateWorkflow
+- (void)startVersionUpdateWorkflow:(id)request completion:(id)completion {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        DYYYLoginBypassInvokeCloseCallback(completion);
+        return;
+    }
+    %orig(request, completion);
+}
+
+- (void)openAppStore {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        return;
+    }
+    %orig;
+}
+
+- (void)showLoadingView {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        return;
+    }
+    %orig;
+}
+%end
+%end
+
+%group DYYYLoginBypassTeenVersionUpdateManager
+%hook AWETeenVersionUpdateManager
+- (BOOL)canShow {
+    return DYYYShouldBlockVersionUpdateWorkflow() ? NO : %orig;
+}
+
+- (void)showWithCloseCallback:(id)closeCallback {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        DYYYLoginBypassInvokeCloseCallback(closeCallback);
+        return;
+    }
+    %orig(closeCallback);
+}
+
+- (void)p_showUpgradeAlert {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        return;
+    }
+    %orig;
+}
+
+- (BOOL)versionCompareForUpgrade {
+    return DYYYShouldBlockVersionUpdateWorkflow() ? NO : %orig;
+}
+
+- (void)requestNewVersion {
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        return;
+    }
+    %orig;
+}
+%end
+%end
+
 static void updateGlobalTransparencyCache() {
     NSString *transparentValue = DYYYGetString(kDYYYGlobalTransparencyKey);
     if (transparentValue.length > 0) {
@@ -489,28 +924,137 @@ static UIImage *DYYYLoadCustomImage(NSString *fileName, CGSize targetSize) {
     return resultImage;
 }
 
+static __weak AWEPlayInteractionViewController *dyyyActivePlaybackInteractionController = nil;
+static __weak UIViewController *dyyyActiveSpeedPlayerViewController = nil;
+static __weak AWEDPlayerSpeedController *dyyyActiveDPlayerSpeedController = nil;
+static __weak AWEDPlayerSpeedController *dyyyLongPressDPlayerSpeedController = nil;
+static __weak AFDSpeedManager *dyyyActiveNativeSpeedManager = nil;
+static __weak AWEAwemeModel *dyyyCurrentSpeedAweme = nil;
+static NSString *dyyyCommittedSpeedAwemeIdentifier = nil;
+static NSHashTable<_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *> *dyyyCommentPauseViewModels = nil;
+static __weak _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *dyyyLastCommentPauseViewModel = nil;
+
+static float DYYYConfiguredDefaultPlaybackSpeed(void) {
+    float speed = [[NSUserDefaults standardUserDefaults] floatForKey:@"DYYYDefaultSpeed"];
+    return isfinite(speed) && speed > 0.0f ? speed : 1.0f;
+}
+
+static BOOL DYYYNativeLockedPlaybackSpeed(float *speedOut) {
+    @try {
+        AFDSpeedManager *speedManager = dyyyActiveNativeSpeedManager;
+        if (!speedManager) {
+            Class managerClass = NSClassFromString(@"AFDSpeedManager");
+            if ([managerClass respondsToSelector:@selector(sharedInstance)]) {
+                speedManager = [(id)managerClass sharedInstance];
+            }
+        }
+        if (![speedManager respondsToSelector:@selector(isLockedSpeedAwemeID)] ||
+            ![speedManager respondsToSelector:@selector(currentSpeed)]) {
+            return NO;
+        }
+
+        NSString *lockedAwemeID = [speedManager isLockedSpeedAwemeID];
+        if (![lockedAwemeID isKindOfClass:[NSString class]] || lockedAwemeID.length == 0) {
+            return NO;
+        }
+
+        NSString *currentAwemeID = dyyyCurrentSpeedAweme.itemID;
+        if (currentAwemeID.length > 0 && ![currentAwemeID isEqualToString:lockedAwemeID]) {
+            return NO;
+        }
+
+        double speed = [speedManager currentSpeed];
+        if (!isfinite(speed) || speed <= 0.0) {
+            return NO;
+        }
+
+        if (speedOut) {
+            *speedOut = (float)speed;
+        }
+        return YES;
+    } @catch (__unused NSException *exception) {
+        return NO;
+    }
+}
+
+static float DYYYUnlockedNormalPlaybackSpeed(void) {
+    if (isFloatSpeedButtonEnabled) {
+        float speed = getCurrentSpeed();
+        if (isfinite(speed) && speed > 0.0f && fabsf(speed - 1.0f) > FLT_EPSILON) {
+            return speed;
+        }
+    }
+    return DYYYConfiguredDefaultPlaybackSpeed();
+}
+
+static float DYYYNormalPlaybackSpeed(void) {
+    float lockedSpeed = 0.0f;
+    if (DYYYNativeLockedPlaybackSpeed(&lockedSpeed)) {
+        return lockedSpeed;
+    }
+    return DYYYUnlockedNormalPlaybackSpeed();
+}
+
 static BOOL DYYYShouldHandleSpeedFeatures(void) {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFloatSpeedButton"]) {
+    if (isFloatSpeedButtonEnabled) {
         return YES;
     }
 
-    float defaultSpeed = [[NSUserDefaults standardUserDefaults] floatForKey:@"DYYYDefaultSpeed"];
-    if (defaultSpeed <= 0.0f) {
-        return NO;
-    }
-
+    float defaultSpeed = DYYYConfiguredDefaultPlaybackSpeed();
     return fabsf(defaultSpeed - 1.0f) > FLT_EPSILON;
 }
 
-static __weak AWEPlayInteractionViewController *dyyyActiveSpeedInteractionController = nil;
-static __weak AWEAwemeModel *dyyyCurrentSpeedAweme = nil;
-static NSString *dyyyLastAutoRestoredSpeedAwemeIdentifier = nil;
-static BOOL dyyyLongPressFastSpeedActive = NO;
-static BOOL dyyyLongPressLockedSpeedActive = NO;
+static BOOL DYYYSpeedMethodMatchesEncoding(id object, SEL selector, const char *expectedEncoding) {
+    if (!object || !selector || !expectedEncoding) {
+        return NO;
+    }
+    Method method = class_getInstanceMethod(object_getClass(object), selector);
+    const char *actualEncoding = method ? method_getTypeEncoding(method) : NULL;
+    return actualEncoding && strcmp(actualEncoding, expectedEncoding) == 0;
+}
 
-static void DYYYClearLongPressSpeedState(void) {
-    dyyyLongPressFastSpeedActive = NO;
-    dyyyLongPressLockedSpeedActive = NO;
+static BOOL DYYYIsVerifiedNativeDPlayerSpeedController(id object) {
+    return object &&
+           DYYYSpeedMethodMatchesEncoding(object, @selector(playbackRate), "f16@0:8") &&
+           DYYYSpeedMethodMatchesEncoding(object, @selector(setPlaybackRate:), "v20@0:8f16") &&
+           DYYYSpeedMethodMatchesEncoding(object, @selector(isInLongPressSpeed), "B16@0:8");
+}
+
+static BOOL DYYYNativeDPlayerLongPressIsActive(AWEDPlayerSpeedController *speedController) {
+    if (!DYYYIsVerifiedNativeDPlayerSpeedController(speedController)) {
+        return NO;
+    }
+    @try {
+        return [speedController isInLongPressSpeed];
+    } @catch (__unused NSException *exception) {
+        return NO;
+    }
+}
+
+static BOOL DYYYAnyNativeDPlayerLongPressIsActive(void) {
+    return DYYYNativeDPlayerLongPressIsActive(dyyyLongPressDPlayerSpeedController) ||
+           DYYYNativeDPlayerLongPressIsActive(dyyyActiveDPlayerSpeedController);
+}
+
+static BOOL DYYYApplyPlaybackRateToNativeDPlayer(AWEDPlayerSpeedController *speedController, double speed) {
+    if (!DYYYIsVerifiedNativeDPlayerSpeedController(speedController) ||
+        !isfinite(speed) ||
+        speed <= 0.0 ||
+        DYYYAnyNativeDPlayerLongPressIsActive() ||
+        DYYYNativeDPlayerLongPressIsActive(speedController)) {
+        return NO;
+    }
+
+    @try {
+        dyyyActiveDPlayerSpeedController = speedController;
+        [speedController setPlaybackRate:(float)speed];
+        return YES;
+    } @catch (NSException *exception) {
+        NSLog(@"[DYYY][Speed397] native setPlaybackRate failed on %@: %@",
+              NSStringFromClass([speedController class]),
+              exception.reason);
+        return NO;
+    }
 }
 
 static CGFloat DYYYViewControllerVisibilityScore(UIViewController *viewController) {
@@ -551,16 +1095,6 @@ static BOOL DYYYAwemeModelsMatch(AWEAwemeModel *lhs, AWEAwemeModel *rhs) {
     return lhsItemID.length > 0 && rhsItemID.length > 0 && [lhsItemID isEqualToString:rhsItemID];
 }
 
-static NSString *DYYYSpeedAwemeIdentifier(AWEAwemeModel *aweme) {
-    if (!aweme) {
-        return nil;
-    }
-    if (aweme.itemID.length > 0) {
-        return aweme.itemID;
-    }
-    return [NSString stringWithFormat:@"%p", aweme];
-}
-
 static AWEAwemeModel *DYYYSpeedAwemeFromObject(id object) {
     Class awemeClass = NSClassFromString(@"AWEAwemeModel");
     if (!object || !awemeClass) {
@@ -582,67 +1116,57 @@ static AWEAwemeModel *DYYYSpeedAwemeFromObject(id object) {
     return nil;
 }
 
-static double DYYYDefaultPlaybackSpeed(void) {
-    double defaultSpeed = [[NSUserDefaults standardUserDefaults] doubleForKey:@"DYYYDefaultSpeed"];
-    if (isfinite(defaultSpeed) && defaultSpeed > 0.0) {
-        return defaultSpeed;
+static NSArray<UIViewController *> *DYYYViewControllersInHierarchy(UIViewController *rootViewController) {
+    if (!rootViewController) {
+        return @[];
     }
-    return 1.0;
+
+    NSMutableArray<UIViewController *> *viewControllers = [NSMutableArray arrayWithObject:rootViewController];
+    for (UIViewController *childViewController in rootViewController.childViewControllers) {
+        [viewControllers addObjectsFromArray:DYYYViewControllersInHierarchy(childViewController)];
+    }
+    return viewControllers;
 }
 
-static void DYYYRestoreFloatSpeedButtonForAwemeIfNeeded(AWEAwemeModel *aweme) {
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    BOOL shouldAutoRestore = [defaults boolForKey:@"DYYYEnableFloatSpeedButton"] && [defaults boolForKey:@"DYYYAutoRestoreSpeed"];
-    if (!shouldAutoRestore) {
-        dyyyLastAutoRestoredSpeedAwemeIdentifier = nil;
-        return;
-    }
-
-    NSString *awemeIdentifier = DYYYSpeedAwemeIdentifier(aweme);
-    if (awemeIdentifier.length == 0 || [awemeIdentifier isEqualToString:dyyyLastAutoRestoredSpeedAwemeIdentifier]) {
-        return;
-    }
-
-    dyyyLastAutoRestoredSpeedAwemeIdentifier = [awemeIdentifier copy];
-    if (!setCurrentSpeedValue((float)DYYYDefaultPlaybackSpeed())) {
-        setCurrentSpeedIndex(0);
-    }
-    updateSpeedButtonUI();
-}
-
-static NSArray<AWEPlayInteractionViewController *> *DYYYSpeedInteractionControllers(AWEPlayInteractionViewController *preferredController) {
-    NSMutableArray<AWEPlayInteractionViewController *> *controllers = [NSMutableArray array];
-    Class interactionControllerClass = NSClassFromString(@"AWEPlayInteractionViewController");
+static NSArray<UIViewController *> *DYYYViewControllersInActiveWindowHierarchy(void) {
     UIWindow *window = [DYYYUtils getActiveWindow];
     UIViewController *rootViewController = window.rootViewController;
-    while (rootViewController.presentedViewController) {
+    NSMutableOrderedSet<UIViewController *> *viewControllers = [NSMutableOrderedSet orderedSet];
+    while (rootViewController) {
+        [viewControllers addObjectsFromArray:DYYYViewControllersInHierarchy(rootViewController)];
         rootViewController = rootViewController.presentedViewController;
     }
+    return viewControllers.array;
+}
 
-    for (UIViewController *viewController in rootViewController ? findViewControllersInHierarchy(rootViewController) : @[]) {
+static NSArray<AWEPlayInteractionViewController *> *DYYYPlaybackInteractionControllers(AWEPlayInteractionViewController *preferredController) {
+    NSMutableArray<AWEPlayInteractionViewController *> *controllers = [NSMutableArray array];
+    Class interactionControllerClass = NSClassFromString(@"AWEPlayInteractionViewController");
+
+    for (UIViewController *viewController in DYYYViewControllersInActiveWindowHierarchy()) {
         if (interactionControllerClass && [viewController isKindOfClass:interactionControllerClass]) {
             [controllers addObject:(AWEPlayInteractionViewController *)viewController];
         }
     }
-
     if (preferredController && ![controllers containsObject:preferredController]) {
         [controllers addObject:preferredController];
     }
     return controllers;
 }
 
-static AWEPlayInteractionViewController *DYYYResolveSpeedInteractionController(AWEPlayInteractionViewController *preferredController, AWEAwemeModel *targetAweme, BOOL allowVisibleFallback) {
+static AWEPlayInteractionViewController *DYYYResolvePlaybackInteractionController(AWEPlayInteractionViewController *preferredController,
+                                                                                  AWEAwemeModel *targetAweme,
+                                                                                  BOOL allowVisibleFallback) {
     AWEPlayInteractionViewController *bestModelMatch = nil;
     AWEPlayInteractionViewController *bestVisibleController = nil;
     CGFloat bestModelMatchScore = -1.0;
     CGFloat bestVisibleScore = -1.0;
 
-    for (AWEPlayInteractionViewController *controller in DYYYSpeedInteractionControllers(preferredController)) {
+    for (AWEPlayInteractionViewController *controller in DYYYPlaybackInteractionControllers(preferredController)) {
         CGFloat visibilityScore = DYYYViewControllerVisibilityScore(controller);
         if (visibilityScore < 0.0) {
             continue;
         }
-
         if (visibilityScore > bestVisibleScore) {
             bestVisibleScore = visibilityScore;
             bestVisibleController = controller;
@@ -652,252 +1176,681 @@ static AWEPlayInteractionViewController *DYYYResolveSpeedInteractionController(A
             bestModelMatch = controller;
         }
     }
-
     return bestModelMatch ?: (allowVisibleFallback ? bestVisibleController : nil);
 }
 
-static AWEPlayInteractionViewController *DYYYResolveCurrentSpeedInteractionController(AWEPlayInteractionViewController *preferredController) {
-    return DYYYResolveSpeedInteractionController(preferredController, dyyyCurrentSpeedAweme, YES);
-}
-
-id DYYYCurrentSpeedInteractionController(void) {
-    return DYYYResolveCurrentSpeedInteractionController(dyyyActiveSpeedInteractionController);
-}
-
-static void DYYYEnsureFloatSpeedButton(AWEPlayInteractionViewController *interactionController) {
-    [FloatingSpeedButton reloadConfiguration];
-    AWEAwemeModel *targetAweme = dyyyCurrentSpeedAweme;
-    BOOL allowVisibleFallback = !targetAweme || (interactionController && DYYYAwemeModelsMatch(interactionController.model, targetAweme));
-    AWEPlayInteractionViewController *currentController = DYYYResolveSpeedInteractionController(interactionController, targetAweme, allowVisibleFallback);
+static void DYYYEnsureFloatSpeedButton(AWEPlayInteractionViewController *preferredController) {
+    AWEPlayInteractionViewController *currentController =
+        DYYYResolvePlaybackInteractionController(preferredController ?: dyyyActivePlaybackInteractionController,
+                                                 dyyyCurrentSpeedAweme,
+                                                 YES);
     if (!currentController) {
         updateSpeedButtonVisibility();
         return;
     }
 
-    if ((dyyyLongPressFastSpeedActive || dyyyLongPressLockedSpeedActive) &&
-        currentController.model &&
-        !DYYYAwemeModelsMatch(dyyyCurrentSpeedAweme, currentController.model)) {
-        DYYYClearLongPressSpeedState();
+    dyyyActivePlaybackInteractionController = currentController;
+    if (!dyyyCurrentSpeedAweme && currentController.model) {
+        dyyyCurrentSpeedAweme = currentController.model;
     }
-
-    dyyyActiveSpeedInteractionController = currentController;
-    dyyyCurrentSpeedAweme = currentController.model;
     dyyyInteractionViewVisible = YES;
 
     if (!isFloatSpeedButtonEnabled) {
-        updateSpeedButtonVisibility();
+        if (speedButton) {
+            speedButton.hidden = YES;
+        }
         return;
     }
+
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    CGFloat configuredSize = [defaults floatForKey:@"DYYYSpeedButtonSize"];
+    speedButtonSize = configuredSize > 0.0 ? configuredSize : 35.0;
+    showSpeedX = [defaults boolForKey:@"DYYYSpeedButtonShowX"];
 
     UIWindow *keyWindow = [DYYYUtils getActiveWindow];
     if (!keyWindow) {
         return;
     }
 
-    DYYYRestoreFloatSpeedButtonForAwemeIfNeeded(currentController.model);
-
     if (!speedButton) {
         CGRect windowBounds = keyWindow.bounds;
-        CGRect initialFrame = CGRectMake((windowBounds.size.width - speedButtonSize) / 2.0, (windowBounds.size.height - speedButtonSize) / 2.0, speedButtonSize, speedButtonSize);
+        CGFloat initialY = CGRectGetHeight(windowBounds) * 0.7 - speedButtonSize / 2.0;
+        initialY = MAX(10.0, MIN(initialY, CGRectGetHeight(windowBounds) - speedButtonSize - 10.0));
+        CGRect initialFrame = CGRectMake(CGRectGetWidth(windowBounds) - speedButtonSize - 10.0,
+                                         initialY,
+                                         speedButtonSize,
+                                         speedButtonSize);
         speedButton = [[FloatingSpeedButton alloc] initWithFrame:initialFrame];
         speedButton.interactionController = currentController;
         updateSpeedButtonUI();
-    } else if (speedButton.interactionController != currentController) {
-        speedButton.interactionController = currentController;
-        [speedButton resetButtonState];
+    } else {
+        if (speedButton.interactionController != currentController) {
+            speedButton.interactionController = currentController;
+        }
+        if (fabs(CGRectGetWidth(speedButton.frame) - speedButtonSize) > 0.5) {
+            speedButton.frame = CGRectMake(0, 0, speedButtonSize, speedButtonSize);
+            speedButton.layer.cornerRadius = speedButtonSize / 2.0;
+            [speedButton loadSavedPosition];
+        }
     }
 
     if (![speedButton isDescendantOfView:keyWindow]) {
         [keyWindow addSubview:speedButton];
         [speedButton loadSavedPosition];
-        [speedButton resetFadeTimer];
+        [speedButton dyyy_schedulePresentationTimersIfNeeded];
     }
 
     [keyWindow bringSubviewToFront:speedButton];
+    updateSpeedButtonUI();
     updateSpeedButtonVisibility();
 }
 
-// 提供给跨文件调用的刷新入口：根据当前可见 PlayInteractionVC 重新评估并恢复倍速按钮，
-// 用于清屏退出等场景，避免清屏期间 viewDidDisappear 把 dyyyInteractionViewVisible 置 NO 后状态卡住。
 void DYYYRefreshFloatSpeedButton(void) {
-    void (^applyBlock)(void) = ^{
-        AWEPlayInteractionViewController *currentController = (AWEPlayInteractionViewController *)DYYYCurrentSpeedInteractionController();
-        DYYYEnsureFloatSpeedButton(currentController);
+    dispatch_block_t refreshBlock = ^{
+      DYYYEnsureFloatSpeedButton(dyyyActivePlaybackInteractionController);
     };
     if ([NSThread isMainThread]) {
-        applyBlock();
+        refreshBlock();
     } else {
-        dispatch_async(dispatch_get_main_queue(), applyBlock);
+        dispatch_async(dispatch_get_main_queue(), refreshBlock);
     }
 }
 
+static id DYYYBestVisiblePlaybackRateTarget(id preferredTarget) {
+    if ([preferredTarget isKindOfClass:UIViewController.class] &&
+        [preferredTarget respondsToSelector:@selector(setVideoControllerPlaybackRate:)] &&
+        DYYYViewControllerVisibilityScore((UIViewController *)preferredTarget) >= 0.0) {
+        return preferredTarget;
+    }
+
+    UIViewController *activePlayerViewController = dyyyActiveSpeedPlayerViewController;
+    if (activePlayerViewController &&
+        [activePlayerViewController respondsToSelector:@selector(setVideoControllerPlaybackRate:)] &&
+        DYYYViewControllerVisibilityScore(activePlayerViewController) >= 0.0) {
+        return activePlayerViewController;
+    }
+
+    UIViewController *bestPlayerViewController = nil;
+    CGFloat bestVisibilityScore = -1.0;
+    for (UIViewController *viewController in DYYYViewControllersInActiveWindowHierarchy()) {
+        if ([viewController isKindOfClass:NSClassFromString(@"AWEAwemePlayVideoViewController")] ||
+            [viewController isKindOfClass:NSClassFromString(@"AWEDPlayerFeedPlayerViewController")] ||
+            [viewController isKindOfClass:NSClassFromString(@"AWEDPlayerViewController_Merge")]) {
+            CGFloat visibilityScore = DYYYViewControllerVisibilityScore(viewController);
+            if (visibilityScore > bestVisibilityScore) {
+                bestVisibilityScore = visibilityScore;
+                bestPlayerViewController = viewController;
+            }
+        }
+    }
+    return bestPlayerViewController;
+}
+
+static AWEDPlayerSpeedController *DYYYNativeDPlayerSpeedControllerFromFastSpeedController(id fastSpeedController) {
+    if (DYYYIsVerifiedNativeDPlayerSpeedController(fastSpeedController)) {
+        return (AWEDPlayerSpeedController *)fastSpeedController;
+    }
+    if (!fastSpeedController ||
+        !DYYYSpeedMethodMatchesEncoding(fastSpeedController, @selector(dPlayerSpeed), "@16@0:8")) {
+        return nil;
+    }
+
+    @try {
+        id candidate = [(AWEPlayInteractionDPlayerSpeedController *)fastSpeedController dPlayerSpeed];
+        return DYYYIsVerifiedNativeDPlayerSpeedController(candidate) ? (AWEDPlayerSpeedController *)candidate : nil;
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static AWEDPlayerSpeedController *DYYYNativeDPlayerSpeedControllerFromInteractionControllerOptions(AWEPlayInteractionViewController *interactionController,
+                                                                                                  BOOL allowCachedController) {
+    if (allowCachedController && dyyyActiveDPlayerSpeedController) {
+        return dyyyActiveDPlayerSpeedController;
+    }
+    if (!interactionController || ![interactionController respondsToSelector:@selector(controllerByProtocol:)]) {
+        return nil;
+    }
+
+    Protocol *speedControllerProtocol = NSProtocolFromString(@"AWEFastSpeedControllerProtocol");
+    if (!speedControllerProtocol) {
+        return nil;
+    }
+
+    @try {
+        id fastSpeedController = [interactionController controllerByProtocol:speedControllerProtocol];
+        return DYYYNativeDPlayerSpeedControllerFromFastSpeedController(fastSpeedController);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static AWEDPlayerSpeedController *DYYYNativeDPlayerSpeedControllerFromInteractionController(AWEPlayInteractionViewController *interactionController) {
+    return DYYYNativeDPlayerSpeedControllerFromInteractionControllerOptions(interactionController, YES);
+}
+
 static BOOL DYYYSetPlaybackRateOnTarget(id target, double speed) {
-    if (!target || ![target respondsToSelector:@selector(setVideoControllerPlaybackRate:)]) {
+    if (DYYYAnyNativeDPlayerLongPressIsActive() ||
+        !target ||
+        ![target respondsToSelector:@selector(setVideoControllerPlaybackRate:)]) {
         return NO;
     }
 
     @try {
         [(AWEAwemePlayVideoViewController *)target setVideoControllerPlaybackRate:speed];
+        if ([target isKindOfClass:UIViewController.class]) {
+            dyyyActiveSpeedPlayerViewController = (UIViewController *)target;
+        }
         return YES;
     } @catch (NSException *exception) {
+        NSLog(@"[DYYY][DefaultSpeed] apply failed on %@: %@", NSStringFromClass([target class]), exception.reason);
         return NO;
     }
 }
 
-static BOOL DYYYApplyPlaybackSpeed(AWEPlayInteractionViewController *interactionController, double speed) {
-    interactionController = DYYYResolveCurrentSpeedInteractionController(interactionController);
+static BOOL DYYYIsImageAlbumAweme(AWEAwemeModel *model) {
+    return model && [model respondsToSelector:@selector(awemeType)] && model.awemeType == 68;
+}
+
+static BOOL DYYYInteractionUsesRichContent(AWEPlayInteractionViewController *interactionController) {
     if (!interactionController) {
         return NO;
+    }
+
+    AWEPlayInteractionContext *context = interactionController.context;
+    if (context.isInRichContentContainer || context.richContentContainer || interactionController.richContentContainer) {
+        return YES;
+    }
+
+    id videoDelegate = interactionController.videoDelegate ?: context.videoDelegate;
+    return [videoDelegate respondsToSelector:@selector(setAlbumFastPlaySpeed:)];
+}
+
+static BOOL DYYYShouldUseImageAlbumSpeedPath(AWEPlayInteractionViewController *interactionController) {
+    AWEAwemeModel *model = interactionController.model ?: dyyyCurrentSpeedAweme;
+    return DYYYIsImageAlbumAweme(model) || DYYYInteractionUsesRichContent(interactionController);
+}
+
+static void DYYYSyncNativeSpeedManagerCurrentSpeed(double speed) {
+    AFDSpeedManager *speedManager = dyyyActiveNativeSpeedManager;
+    if (!speedManager) {
+        Class managerClass = NSClassFromString(@"AFDSpeedManager");
+        if ([managerClass respondsToSelector:@selector(sharedInstance)]) {
+            speedManager = [(id)managerClass sharedInstance];
+        }
+    }
+    if ([speedManager respondsToSelector:@selector(setCurrentSpeed:)]) {
+        [speedManager setCurrentSpeed:speed];
+    }
+}
+
+static BOOL DYYYApplySpeedToAFDSlidesView(AFDSlidesView *slidesView, double speed) {
+    if (!slidesView || !isfinite(speed) || speed <= 0.0) {
+        return NO;
+    }
+
+    @try {
+        BOOL useFastRate = fabs(speed - 1.0) > 0.001;
+        slidesView.fastPlaySpeed = useFastRate ? speed : 1.0;
+        slidesView.needFastPlay = useFastRate;
+        if ([slidesView isPlaying]) {
+            [slidesView pauseTimer];
+            [slidesView setupAndPlayTimer];
+        } else {
+            [slidesView playTimer];
+        }
+        return YES;
+    } @catch (NSException *exception) {
+        NSLog(@"[DYYY][Speed] AFDSlidesView fastPlay apply failed: %@", exception.reason);
+        return NO;
+    }
+}
+
+static BOOL DYYYApplySpeedToAFDSlidesViewsInHierarchy(UIView *rootView, double speed) {
+    if (!rootView) {
+        return NO;
+    }
+
+    Class slidesViewClass = NSClassFromString(@"AFDSlidesView");
+    if (!slidesViewClass) {
+        return NO;
+    }
+
+    BOOL applied = NO;
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:rootView];
+    while (queue.count > 0) {
+        UIView *view = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        if ([view isKindOfClass:slidesViewClass] &&
+            DYYYApplySpeedToAFDSlidesView((AFDSlidesView *)view, speed)) {
+            applied = YES;
+        }
+        for (UIView *subview in view.subviews) {
+            [queue addObject:subview];
+        }
+    }
+    return applied;
+}
+
+static BOOL DYYYApplySpeedToVisibleAFDSlidesViews(AWEPlayInteractionViewController *interactionController,
+                                                  id albumTarget,
+                                                  double speed) {
+    BOOL applied = NO;
+    if (DYYYApplySpeedToAFDSlidesViewsInHierarchy(interactionController.view, speed)) {
+        applied = YES;
+    }
+    if ([albumTarget isKindOfClass:UIViewController.class] &&
+        DYYYApplySpeedToAFDSlidesViewsInHierarchy([(UIViewController *)albumTarget view], speed)) {
+        applied = YES;
+    }
+    // 图文 slides 常挂在 interaction 覆盖层的兄弟子树，向上扩一层父视图再找。
+    UIView *parentView = interactionController.view.superview;
+    for (NSInteger depth = 0; parentView && depth < 4; depth++) {
+        if (DYYYApplySpeedToAFDSlidesViewsInHierarchy(parentView, speed)) {
+            applied = YES;
+            break;
+        }
+        parentView = parentView.superview;
+    }
+    return applied;
+}
+
+static id DYYYRichContentAlbumSpeedTarget(AWEPlayInteractionViewController *interactionController) {
+    if (!interactionController) {
+        return nil;
+    }
+
+    AWEPlayInteractionContext *context = interactionController.context;
+    id target = interactionController.richContentContainer ?: context.richContentContainer;
+    if (!target) {
+        target = interactionController.videoDelegate ?: context.videoDelegate;
+    }
+    return [target respondsToSelector:@selector(setAlbumFastPlaySpeed:)] ? target : nil;
+}
+
+static BOOL DYYYApplyImageAlbumPlaybackSpeed(AWEPlayInteractionViewController *interactionController, double speed) {
+    if (!interactionController || !isfinite(speed) || speed <= 0.0 ||
+        !DYYYShouldUseImageAlbumSpeedPath(interactionController)) {
+        return NO;
+    }
+
+    BOOL applied = NO;
+    BOOL useFastRate = fabs(speed - 1.0) > 0.001;
+    DYYYSyncNativeSpeedManagerCurrentSpeed(speed);
+
+    // 图文必须从当前 interaction 解析，避免复用上一个视频残留的 DPlayerSpeedController。
+    AWEDPlayerSpeedController *dplayerSpeedController =
+        DYYYNativeDPlayerSpeedControllerFromInteractionControllerOptions(interactionController, NO);
+    if (dplayerSpeedController && [dplayerSpeedController respondsToSelector:@selector(speedContainer)]) {
+        @try {
+            AWEDSpeedCoreContainer *coreContainer = [dplayerSpeedController speedContainer];
+            if (coreContainer.albumContainer) {
+                [coreContainer.albumContainer changeAlbumSpeed:speed];
+                applied = YES;
+            }
+            [coreContainer changeSpeed:speed];
+            applied = YES;
+        } @catch (NSException *exception) {
+            NSLog(@"[DYYY][Speed] native album speed apply failed: %@", exception.reason);
+        }
+    }
+
+    id albumTarget = DYYYRichContentAlbumSpeedTarget(interactionController);
+    if (albumTarget) {
+        @try {
+            if ([albumTarget respondsToSelector:@selector(setAlbumFastPlaySpeed:enterMethod:)]) {
+                [(id<AFDRichContentAlbumContainerProtocol>)albumTarget setAlbumFastPlaySpeed:speed
+                                                                                 enterMethod:@"speed_button"];
+            } else {
+                [(id<AFDRichContentAlbumContainerProtocol>)albumTarget setAlbumFastPlaySpeed:speed];
+            }
+            // 配置写入后必须真正启用/关闭图文快播。
+            // forcePlay:YES 会触发长按快进转场（拉伸/停顿/回弹）；这里用 forcePlay:NO 只驱动速率。
+            if ([albumTarget respondsToSelector:@selector(setAlbumFastPlay:forcePlay:)]) {
+                [(id<AFDRichContentAlbumContainerProtocol>)albumTarget setAlbumFastPlay:useFastRate
+                                                                             forcePlay:NO];
+            } else if ([albumTarget respondsToSelector:@selector(setAlbumFastPlay:)]) {
+                [(id<AFDRichContentAlbumContainerProtocol>)albumTarget setAlbumFastPlay:useFastRate];
+            }
+            applied = YES;
+        } @catch (NSException *exception) {
+            NSLog(@"[DYYY][Speed] rich content album speed apply failed on %@: %@",
+                  NSStringFromClass([albumTarget class]),
+                  exception.reason);
+        }
+    }
+
+    if (DYYYApplySpeedToVisibleAFDSlidesViews(interactionController, albumTarget, speed)) {
+        applied = YES;
+    }
+
+    return applied;
+}
+
+static BOOL DYYYApplyPlaybackSpeedThroughInteractionController(AWEPlayInteractionViewController *interactionController, double speed) {
+    if (!isfinite(speed) || speed <= 0.0) {
+        return NO;
+    }
+
+    interactionController = DYYYResolvePlaybackInteractionController(interactionController, dyyyCurrentSpeedAweme, YES);
+    if (!interactionController) {
+        return DYYYSetPlaybackRateOnTarget(DYYYBestVisiblePlaybackRateTarget(nil), speed);
+    }
+
+    if (DYYYShouldUseImageAlbumSpeedPath(interactionController)) {
+        return DYYYApplyImageAlbumPlaybackSpeed(interactionController, speed);
     }
 
     Protocol *speedControllerProtocol = NSProtocolFromString(@"AWEFastSpeedControllerProtocol");
     if (speedControllerProtocol && [interactionController respondsToSelector:@selector(controllerByProtocol:)]) {
         @try {
             id speedController = [interactionController controllerByProtocol:speedControllerProtocol];
-            if ([speedController respondsToSelector:@selector(playVideoViewController)]) {
-                id playVideoViewController = [(AWEPlayInteractionSpeedController *)speedController playVideoViewController];
-                if (DYYYSetPlaybackRateOnTarget(playVideoViewController, speed)) {
-                    return YES;
+            AWEDPlayerSpeedController *nativeDPlayerSpeedController =
+                DYYYNativeDPlayerSpeedControllerFromFastSpeedController(speedController);
+            if (nativeDPlayerSpeedController) {
+                if (DYYYNativeDPlayerLongPressIsActive(nativeDPlayerSpeedController)) {
+                    return NO;
                 }
+                return DYYYApplyPlaybackRateToNativeDPlayer(nativeDPlayerSpeedController, speed);
+            }
+            if ([speedController respondsToSelector:@selector(playVideoViewController)] &&
+                DYYYSetPlaybackRateOnTarget([(AWEPlayInteractionSpeedController *)speedController playVideoViewController], speed)) {
+                return YES;
+            }
+            if ([speedController respondsToSelector:@selector(changeSpeed:)] &&
+                !DYYYAnyNativeDPlayerLongPressIsActive()) {
+                [(AWEPlayInteractionSpeedController *)speedController changeSpeed:speed];
+                return YES;
             }
         } @catch (NSException *exception) {
+            NSLog(@"[DYYY][Speed] apply through speedController failed: %@", exception.reason);
         }
     }
-
-    if ([interactionController respondsToSelector:@selector(videoDelegate)] && DYYYSetPlaybackRateOnTarget([interactionController videoDelegate], speed)) {
+    if ([interactionController respondsToSelector:@selector(videoDelegate)] &&
+        DYYYSetPlaybackRateOnTarget([interactionController videoDelegate], speed)) {
         return YES;
     }
-
-    UIWindow *window = [DYYYUtils getActiveWindow];
-    UIViewController *rootViewController = window.rootViewController;
-    while (rootViewController.presentedViewController) {
-        rootViewController = rootViewController.presentedViewController;
-    }
-
-    UIViewController *bestPlayerViewController = nil;
-    CGFloat bestPlayerVisibilityScore = -1.0;
-    for (UIViewController *viewController in rootViewController ? findViewControllersInHierarchy(rootViewController) : @[]) {
-        if ([viewController isKindOfClass:NSClassFromString(@"AWEAwemePlayVideoViewController")] ||
-            [viewController isKindOfClass:NSClassFromString(@"AWEDPlayerFeedPlayerViewController")] ||
-            [viewController isKindOfClass:NSClassFromString(@"AWEDPlayerViewController_Merge")]) {
-            CGFloat visibilityScore = DYYYViewControllerVisibilityScore(viewController);
-            if (visibilityScore > bestPlayerVisibilityScore) {
-                bestPlayerVisibilityScore = visibilityScore;
-                bestPlayerViewController = viewController;
-            }
-        }
-    }
-
-    return DYYYSetPlaybackRateOnTarget(bestPlayerViewController, speed);
+    return DYYYSetPlaybackRateOnTarget(DYYYBestVisiblePlaybackRateTarget(nil), speed);
 }
 
-static double DYYYConfiguredPlaybackSpeed(void) {
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    if ([defaults boolForKey:@"DYYYEnableFloatSpeedButton"]) {
-        return getCurrentSpeed();
-    }
-
-    if ([defaults boolForKey:@"DYYYUserAgreementAccepted"]) {
-        return DYYYDefaultPlaybackSpeed();
-    }
-    return 1.0;
-}
-
-static BOOL DYYYShouldPrepareDefaultPlaybackSpeedForPlayer(id playerViewController) {
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    if (![defaults boolForKey:@"DYYYEnableFloatSpeedButton"] || ![defaults boolForKey:@"DYYYAutoRestoreSpeed"]) {
-        return NO;
-    }
-
-    AWEAwemeModel *targetAweme = DYYYSpeedAwemeFromObject(playerViewController) ?: dyyyCurrentSpeedAweme;
-    NSString *awemeIdentifier = DYYYSpeedAwemeIdentifier(targetAweme);
-    return awemeIdentifier.length > 0 && ![awemeIdentifier isEqualToString:dyyyLastAutoRestoredSpeedAwemeIdentifier];
-}
-
-static double DYYYPreparedPlaybackSpeedForPlayer(id playerViewController) {
-    // Auto-restore belongs to aweme transitions; current-video refreshes should keep the selected quick speed.
-    if (DYYYShouldPrepareDefaultPlaybackSpeedForPlayer(playerViewController)) {
-        return DYYYDefaultPlaybackSpeed();
-    }
-    return DYYYConfiguredPlaybackSpeed();
-}
-
-static void DYYYApplyPreparedPlaybackSpeedToPlayer(id playerViewController) {
-    if (!DYYYShouldHandleSpeedFeatures() || !playerViewController || dyyyLongPressFastSpeedActive || dyyyLongPressLockedSpeedActive) {
+static void DYYYApplyNormalPlaybackSpeedToNativeDPlayer(AWEDPlayerSpeedController *speedController) {
+    if (!DYYYShouldHandleSpeedFeatures() || !speedController) {
         return;
     }
 
-    double speed = DYYYPreparedPlaybackSpeedForPlayer(playerViewController);
     void (^applyBlock)(void) = ^{
-      DYYYSetPlaybackRateOnTarget(playerViewController, speed);
+      DYYYApplyPlaybackRateToNativeDPlayer(speedController, DYYYNormalPlaybackSpeed());
     };
     if ([NSThread isMainThread]) {
         applyBlock();
     } else {
-        dispatch_async(dispatch_get_main_queue(), applyBlock);
+        __weak AWEDPlayerSpeedController *weakSpeedController = speedController;
+        dispatch_async(dispatch_get_main_queue(), ^{
+          DYYYApplyPlaybackRateToNativeDPlayer(weakSpeedController, DYYYNormalPlaybackSpeed());
+        });
     }
 }
 
-static void DYYYBindAndApplyCurrentPlaybackSpeed(void) {
-    if (!DYYYShouldHandleSpeedFeatures() || dyyyLongPressFastSpeedActive || dyyyLongPressLockedSpeedActive) {
-        return;
+static BOOL DYYYHandleNormalPlaybackSpeedWithMatchingNativeController(AWEDPlayerSpeedController *speedController,
+                                                                      id playerViewController) {
+    if (!DYYYIsVerifiedNativeDPlayerSpeedController(speedController) || !playerViewController) {
+        return NO;
     }
 
-    AWEAwemeModel *targetAweme = dyyyCurrentSpeedAweme;
-    AWEPlayInteractionViewController *currentController = DYYYResolveSpeedInteractionController(nil, targetAweme, targetAweme == nil);
-    if (!currentController) {
-        return;
+    id nativePlayerViewController = nil;
+    @try {
+        nativePlayerViewController = [speedController playerViewController];
+    } @catch (__unused NSException *exception) {
+    }
+    if (nativePlayerViewController != playerViewController) {
+        return NO;
     }
 
-    DYYYEnsureFloatSpeedButton(currentController);
-    DYYYApplyPlaybackSpeed(currentController, DYYYConfiguredPlaybackSpeed());
+    DYYYApplyPlaybackRateToNativeDPlayer(speedController, DYYYNormalPlaybackSpeed());
+    return YES;
 }
 
-static void DYYYScheduleConfiguredPlaybackSpeedRestoreAfterDelay(NSTimeInterval delay) {
-    dispatch_block_t restoreBlock = ^{
-      DYYYBindAndApplyCurrentPlaybackSpeed();
+static void DYYYApplyNormalPlaybackSpeedToPlayerFallback(id playerViewController) {
+    if (!DYYYShouldHandleSpeedFeatures() || !playerViewController) {
+        return;
+    }
+
+    void (^applyBlock)(void) = ^{
+      AWEPlayInteractionViewController *visibleInteractionController =
+          DYYYResolvePlaybackInteractionController(dyyyActivePlaybackInteractionController,
+                                                   dyyyCurrentSpeedAweme,
+                                                   YES);
+      AWEDPlayerSpeedController *visibleNativeSpeedController =
+          DYYYNativeDPlayerSpeedControllerFromInteractionController(visibleInteractionController);
+      if (DYYYHandleNormalPlaybackSpeedWithMatchingNativeController(visibleNativeSpeedController,
+                                                                    playerViewController) ||
+          DYYYHandleNormalPlaybackSpeedWithMatchingNativeController(dyyyActiveDPlayerSpeedController,
+                                                                    playerViewController)) {
+          return;
+      }
+      if (DYYYAnyNativeDPlayerLongPressIsActive()) {
+          return;
+      }
+      DYYYSetPlaybackRateOnTarget(playerViewController, DYYYNormalPlaybackSpeed());
     };
-    if (delay <= 0.0) {
-        dispatch_async(dispatch_get_main_queue(), restoreBlock);
+
+    if ([NSThread isMainThread]) {
+        applyBlock();
     } else {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), restoreBlock);
+        __weak id weakPlayerViewController = playerViewController;
+        dispatch_async(dispatch_get_main_queue(), ^{
+          id strongPlayerViewController = weakPlayerViewController;
+          if (strongPlayerViewController) {
+              DYYYApplyNormalPlaybackSpeedToPlayerFallback(strongPlayerViewController);
+          }
+        });
     }
 }
 
-static void DYYYScheduleConfiguredPlaybackSpeedRestore(void) {
-    DYYYScheduleConfiguredPlaybackSpeedRestoreAfterDelay(0.0);
-    DYYYScheduleConfiguredPlaybackSpeedRestoreAfterDelay(0.2);
+static NSObject *DYYYCommentPauseViewModelRegistryLock(void) {
+    static NSObject *lock = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      lock = [NSObject new];
+    });
+    return lock;
 }
 
-static void DYYYEndLockedLongPressSpeedAndRestoreIfNeeded(void) {
-    if (!dyyyLongPressLockedSpeedActive) {
+static void DYYYRegisterCommentPauseViewModel(_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *viewModel) {
+    if (!viewModel) {
         return;
     }
-    dyyyLongPressLockedSpeedActive = NO;
-    DYYYScheduleConfiguredPlaybackSpeedRestore();
+
+    @synchronized(DYYYCommentPauseViewModelRegistryLock()) {
+        if (!dyyyCommentPauseViewModels) {
+            dyyyCommentPauseViewModels = [NSHashTable weakObjectsHashTable];
+        }
+        [dyyyCommentPauseViewModels addObject:viewModel];
+    }
 }
 
-static void DYYYHandleCurrentSpeedAwemeChanged(id aweme) {
+static NSArray<_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *> *DYYYRegisteredCommentPauseViewModels(void) {
+    @synchronized(DYYYCommentPauseViewModelRegistryLock()) {
+        return dyyyCommentPauseViewModels.allObjects ?: @[];
+    }
+}
+
+static BOOL DYYYCommentViewModelIsPlaying(_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *viewModel) {
+    if (!viewModel || ![viewModel respondsToSelector:@selector(isFeedVideoPlaying)]) {
+        return NO;
+    }
+
+    @try {
+        return [viewModel isFeedVideoPlaying];
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
+static CGFloat DYYYCommentViewModelScore(_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *viewModel) {
+    CGFloat score = 0.0;
+    id playerController = nil;
+    @try {
+        if ([viewModel respondsToSelector:@selector(feedVideoPlayerController)]) {
+            playerController = [viewModel feedVideoPlayerController];
+        }
+    } @catch (NSException *exception) {
+        return score;
+    }
+
+    AWEAwemeModel *viewModelAweme = DYYYSpeedAwemeFromObject(playerController);
+    if (DYYYAwemeModelsMatch(viewModelAweme, dyyyCurrentSpeedAweme)) {
+        score += 1000000000000.0;
+    }
+    if ([playerController isKindOfClass:[UIViewController class]]) {
+        CGFloat visibilityScore = DYYYViewControllerVisibilityScore((UIViewController *)playerController);
+        if (visibilityScore >= 0.0) {
+            score += visibilityScore;
+        }
+    }
+    return score;
+}
+
+static _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *DYYYCurrentPlayingCommentViewModel(void) {
+    _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *bestViewModel = nil;
+    CGFloat bestScore = -CGFLOAT_MAX;
+    for (_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *viewModel in DYYYRegisteredCommentPauseViewModels()) {
+        if (!DYYYCommentViewModelIsPlaying(viewModel)) {
+            continue;
+        }
+
+        CGFloat score = DYYYCommentViewModelScore(viewModel);
+        if (viewModel == dyyyLastCommentPauseViewModel) {
+            score += 1.0;
+        }
+        if (!bestViewModel || score > bestScore) {
+            bestViewModel = viewModel;
+            bestScore = score;
+        }
+    }
+    return bestViewModel;
+}
+
+static void DYYYCommentPausePlaybackIfNeeded(void) {
+    if (!dyyyCommentViewVisible || !DYYYGetBool(@"DYYYCommentPausePlayback")) {
+        return;
+    }
+
+    _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *viewModel = DYYYCurrentPlayingCommentViewModel();
+    if (!viewModel || ![viewModel respondsToSelector:@selector(pauseVideoIfPlayingWithoutShowingPauseIcon)]) {
+        return;
+    }
+
+    @try {
+        // This native entry owns the comment pause state used by media-preview
+        // parameters. Recovery remains with the original comment lifecycle.
+        [viewModel pauseVideoIfPlayingWithoutShowingPauseIcon];
+        dyyyLastCommentPauseViewModel = viewModel;
+    } @catch (NSException *exception) {
+        NSLog(@"[DYYY][CommentPause] native pause failed on %@: %@", NSStringFromClass([viewModel class]), exception.reason);
+    }
+}
+
+static BOOL DYYYCommentContainerSkipsPanelLifecycle(AWECommentContainerViewController *commentViewController) {
+    if (!commentViewController || ![commentViewController respondsToSelector:@selector(state)]) {
+        return NO;
+    }
+
+    @try {
+        _TtC33AWECommentPanelContainerSwiftImpl31CommentViewControllerStateModel *state = [commentViewController state];
+        if (!state || ![state respondsToSelector:@selector(isSkipCommentPanelLifecycle)]) {
+            return NO;
+        }
+        return [state isSkipCommentPanelLifecycle];
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
+static void DYYYCommentRecoverPlaybackIfNeeded(_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *viewModel) {
+    if (!viewModel || ![viewModel respondsToSelector:@selector(recoverPlayIfPauseByComment)]) {
+        return;
+    }
+
+    @try {
+        [viewModel recoverPlayIfPauseByComment];
+    } @catch (NSException *exception) {
+        NSLog(@"[DYYY][CommentPause] native recovery failed on %@: %@", NSStringFromClass([viewModel class]), exception.reason);
+    }
+
+    if (dyyyLastCommentPauseViewModel == viewModel) {
+        dyyyLastCommentPauseViewModel = nil;
+    }
+}
+
+static BOOL DYYYCommentPauseOwnsPlayback(void) {
+    return DYYYGetBool(@"DYYYCommentPausePlayback") && dyyyLastCommentPauseViewModel != nil;
+}
+
+static void DYYYHandleCurrentAwemeChanged(id aweme) {
     if (![NSThread isMainThread]) {
         dispatch_async(dispatch_get_main_queue(), ^{
-          DYYYHandleCurrentSpeedAwemeChanged(aweme);
+          DYYYHandleCurrentAwemeChanged(aweme);
         });
         return;
     }
 
-    Class awemeClass = NSClassFromString(@"AWEAwemeModel");
-    if (awemeClass && [aweme isKindOfClass:awemeClass]) {
-        dyyyCurrentSpeedAweme = (AWEAwemeModel *)aweme;
+    AWEAwemeModel *currentAweme = DYYYSpeedAwemeFromObject(aweme);
+    if (currentAweme) {
+        dyyyCurrentSpeedAweme = currentAweme;
     }
-    if (!DYYYShouldHandleSpeedFeatures()) {
+}
+
+static void DYYYHandleCommittedSpeedAwemeChanged(id aweme) {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          DYYYHandleCommittedSpeedAwemeChanged(aweme);
+        });
         return;
     }
 
-    DYYYClearLongPressSpeedState();
-    DYYYRestoreFloatSpeedButtonForAwemeIfNeeded(dyyyCurrentSpeedAweme);
+    AWEAwemeModel *currentAweme = DYYYSpeedAwemeFromObject(aweme);
+    if (!currentAweme) {
+        return;
+    }
 
-    DYYYBindAndApplyCurrentPlaybackSpeed();
-    DYYYScheduleConfiguredPlaybackSpeedRestore();
+    NSString *itemID = currentAweme.itemID;
+    BOOL hasStableIdentifier = itemID.length > 0;
+    BOOL isNewCommittedAweme = hasStableIdentifier
+                                   ? ![dyyyCommittedSpeedAwemeIdentifier isEqualToString:itemID]
+                                   : !DYYYAwemeModelsMatch(dyyyCurrentSpeedAweme, currentAweme);
+
+    dyyyCurrentSpeedAweme = currentAweme;
+    if (hasStableIdentifier) {
+        dyyyCommittedSpeedAwemeIdentifier = [itemID copy];
+    }
+
+    if (isNewCommittedAweme) {
+        if (isFloatSpeedButtonEnabled &&
+            [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAutoRestoreSpeed"]) {
+            setCurrentSpeedIndex(0);
+            updateSpeedButtonUI();
+        }
+    }
+}
+
+static void DYYYScheduleCurrentAwemeTracking(id source, id fallbackAweme) {
+    __weak id weakSource = source;
+    void (^trackingBlock)(void) = ^{
+      AWEPlayInteractionViewController *visibleController = DYYYResolvePlaybackInteractionController(nil, nil, YES);
+      if (!visibleController) {
+          return;
+      }
+      AWEAwemeModel *candidateAweme = DYYYSpeedAwemeFromObject(weakSource);
+      if (!DYYYAwemeModelsMatch(candidateAweme, visibleController.model)) {
+          candidateAweme = DYYYSpeedAwemeFromObject(fallbackAweme);
+      }
+      if (DYYYAwemeModelsMatch(candidateAweme, visibleController.model)) {
+          DYYYHandleCurrentAwemeChanged(candidateAweme);
+      }
+    };
+    dispatch_async(dispatch_get_main_queue(), trackingBlock);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), trackingBlock);
 }
 
 @interface AWEFeedProgressSlider (DYYYProgressLabel)
@@ -1148,7 +2101,7 @@ static void DYYYHandleCurrentSpeedAwemeChanged(id aweme) {
 %hook AWEProfileUserDetailComponent
 
 - (void)reportUserDetailVisitIfNeeded:(id)user {
-    if (DYYYGetBool(@"DYYYDisableProfileVisitRecordUpload")) {
+    if ([DYYYPrivacyRecordUploadGuard isProfileVisitRecordUploadDisabled]) {
         return;
     }
 
@@ -1160,12 +2113,308 @@ static void DYYYHandleCurrentSpeedAwemeChanged(id aweme) {
 // 兼容旧版访客记录上传路径
 %hook AWEProfileRecordHelper
 
-+ (void)postProfileRecordWithParams:(id)params completionBlock:(id)completionBlock {
-    if (DYYYGetBool(@"DYYYDisableProfileVisitRecordUpload")) {
++ (void)postProfileRecordWithParams:(id)params {
+    if ([DYYYPrivacyRecordUploadGuard isProfileVisitRecordUploadDisabled]) {
         return;
     }
 
     %orig;
+}
+
++ (void)postProfileRecordWithParams:(id)params completionBlock:(id)completionBlock {
+    if ([DYYYPrivacyRecordUploadGuard isProfileVisitRecordUploadDisabled]) {
+        return;
+    }
+
+    %orig;
+}
+
++ (void)postProfileRecordWithKey:(id)key valueDic:(id)valueDic {
+    if ([DYYYPrivacyRecordUploadGuard isProfileVisitRecordUploadDisabled]) {
+        return;
+    }
+
+    %orig;
+}
+
++ (void)postProfileRecordWithKey:(id)key valueDic:(id)valueDic completionBlock:(id)completionBlock {
+    if ([DYYYPrivacyRecordUploadGuard isProfileVisitRecordUploadDisabled]) {
+        return;
+    }
+
+    %orig;
+}
+
+%end
+
+// 抖音 39.7.0：作品浏览记录由 AFDPlayerAndInteractionService 上报至
+// /aweme/v1/familiar/video/stats/（scene 常见值 FeedVideoViewedDedicatedStats）
+%hook AFDPlayerAndInteractionService
+
+- (void)statisticsVideoViewedWithID:(NSString *)itemID scene:(NSString *)scene {
+    if ([DYYYPrivacyRecordUploadGuard isAwemeViewRecordUploadDisabled]) {
+        return;
+    }
+
+    %orig;
+}
+
+- (void)statisticsVideoViewedWithID:(NSString *)itemID
+                           authorID:(NSString *)authorID
+                       followStatus:(long long)followStatus
+                     followerStatus:(long long)followerStatus
+                            isStory:(BOOL)isStory
+                  isRequestDirectly:(BOOL)isRequestDirectly
+                              scene:(NSString *)scene {
+    if ([DYYYPrivacyRecordUploadGuard isAwemeViewRecordUploadDisabled]) {
+        return;
+    }
+
+    %orig;
+}
+
+%end
+
+static BOOL DYYYTryBlockPrivacyNetworkRequest(NSString *URLString, id completion) {
+    if (![DYYYPrivacyRecordUploadGuard shouldBlockURLString:URLString]) {
+        return NO;
+    }
+
+    [DYYYPrivacyRecordUploadGuard invokeCancelledCompletionIfPossible:completion];
+    return YES;
+}
+
+%hook AWENetworkService
+
++ (id)postWithURLString:(NSString *)URLString params:(id)params completion:(id)completion {
+    if (DYYYTryBlockPrivacyNetworkRequest(URLString, completion)) {
+        return nil;
+    }
+    return %orig;
+}
+
++ (id)getWithURLString:(NSString *)URLString params:(id)params completion:(id)completion {
+    if (DYYYTryBlockPrivacyNetworkRequest(URLString, completion)) {
+        return nil;
+    }
+    return %orig;
+}
+
++ (id)requestWithURLString:(NSString *)URLString params:(id)params method:(id)method completion:(id)completion {
+    if (DYYYTryBlockPrivacyNetworkRequest(URLString, completion)) {
+        return nil;
+    }
+    return %orig;
+}
+
++ (id)postWithURLString:(NSString *)URLString params:(id)params headerField:(id)headerField completion:(id)completion {
+    if (DYYYTryBlockPrivacyNetworkRequest(URLString, completion)) {
+        return nil;
+    }
+    return %orig;
+}
+
++ (id)getWithURLString:(NSString *)URLString params:(id)params headerField:(id)headerField completion:(id)completion {
+    if (DYYYTryBlockPrivacyNetworkRequest(URLString, completion)) {
+        return nil;
+    }
+    return %orig;
+}
+
+%end
+
+%hook TTNetworkManager
+
+- (id)requestForJSONWithURL:(NSString *)url
+                     params:(id)params
+                     method:(NSString *)method
+           needCommonParams:(BOOL)needCommonParams
+                headerField:(id)headerField
+          requestSerializer:(Class)requestSerializerClass
+         responseSerializer:(Class)responseSerializerClass
+                 autoResume:(BOOL)autoResume
+                   callback:(id)callback {
+    if (DYYYTryBlockPrivacyNetworkRequest(url, callback)) {
+        return nil;
+    }
+    return %orig;
+}
+
+- (id)requestForJSONWithResponse:(NSString *)url
+                          params:(id)params
+                          method:(NSString *)method
+                needCommonParams:(BOOL)needCommonParams
+                     headerField:(id)headerField
+               requestSerializer:(Class)requestSerializerClass
+              responseSerializer:(Class)responseSerializerClass
+                      autoResume:(BOOL)autoResume
+                        callback:(id)callback {
+    if (DYYYTryBlockPrivacyNetworkRequest(url, callback)) {
+        return nil;
+    }
+    return %orig;
+}
+
+- (id)requestForBinaryWithResponse:(NSString *)url
+                            params:(id)params
+                            method:(NSString *)method
+                  needCommonParams:(BOOL)needCommonParams
+                       headerField:(id)headerField
+                          callback:(id)callback {
+    if (DYYYTryBlockPrivacyNetworkRequest(url, callback)) {
+        return nil;
+    }
+    return %orig;
+}
+
+%end
+
+static BOOL DYYYShouldSkipPrivacyRecordTaskStart(id task) {
+    BOOL shouldBlock = [DYYYPrivacyRecordUploadGuard isTaskMarkedForBlocking:task] ||
+                       [DYYYPrivacyRecordUploadGuard shouldBlockRequestObject:task];
+    if (!shouldBlock) {
+        return NO;
+    }
+
+    // 即使任务对象不支持 cancel，也必须阻止原始启动，避免隐私请求继续发出。
+    (void)[DYYYPrivacyRecordUploadGuard cancelTaskIfPossible:task];
+    return YES;
+}
+
+%hook TTHttpTask
+
+- (void)resume {
+    if (DYYYShouldSkipPrivacyRecordTaskStart(self)) {
+        return;
+    }
+
+    %orig;
+}
+
+%end
+
+%hook TTHttpTaskChromium
+
+- (void)runRequestFiltersAndStart {
+    if (DYYYShouldSkipPrivacyRecordTaskStart(self)) {
+        return;
+    }
+
+    %orig;
+}
+
+- (void)resume {
+    if (DYYYShouldSkipPrivacyRecordTaskStart(self)) {
+        return;
+    }
+
+    %orig;
+}
+
+%end
+
+%hook TTConcurrentHttpTask
+
+- (void)resume {
+    if (DYYYShouldSkipPrivacyRecordTaskStart(self)) {
+        return;
+    }
+
+    %orig;
+}
+
+%end
+
+%hook NSURLSessionTask
+
+- (void)resume {
+    if (DYYYShouldSkipPrivacyRecordTaskStart(self)) {
+        return;
+    }
+
+    %orig;
+}
+
+%end
+
+%hook NSURLSession
+
+- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url {
+    NSURLSessionDataTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:url];
+    return task;
+}
+
+- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler {
+    NSURLSessionDataTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:url];
+    return task;
+}
+
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request {
+    NSURLSessionDataTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler {
+    NSURLSessionDataTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionDownloadTask *)downloadTaskWithURL:(NSURL *)url {
+    NSURLSessionDownloadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:url];
+    return task;
+}
+
+- (NSURLSessionDownloadTask *)downloadTaskWithURL:(NSURL *)url completionHandler:(void (^)(NSURL *location, NSURLResponse *response, NSError *error))completionHandler {
+    NSURLSessionDownloadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:url];
+    return task;
+}
+
+- (NSURLSessionDownloadTask *)downloadTaskWithRequest:(NSURLRequest *)request {
+    NSURLSessionDownloadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionDownloadTask *)downloadTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSURL *location, NSURLResponse *response, NSError *error))completionHandler {
+    NSURLSessionDownloadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionUploadTask *)uploadTaskWithRequest:(NSURLRequest *)request fromData:(NSData *)bodyData {
+    NSURLSessionUploadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionUploadTask *)uploadTaskWithRequest:(NSURLRequest *)request fromData:(NSData *)bodyData completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler {
+    NSURLSessionUploadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionUploadTask *)uploadTaskWithRequest:(NSURLRequest *)request fromFile:(NSURL *)fileURL {
+    NSURLSessionUploadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionUploadTask *)uploadTaskWithRequest:(NSURLRequest *)request fromFile:(NSURL *)fileURL completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler {
+    NSURLSessionUploadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionUploadTask *)uploadTaskWithStreamedRequest:(NSURLRequest *)request {
+    NSURLSessionUploadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
 }
 
 %end
@@ -1182,13 +2431,13 @@ static void DYYYHandleCurrentSpeedAwemeChanged(id aweme) {
 static BOOL dyyyClearingFeedNowPlayingSystemInfo = NO;
 static CFTimeInterval dyyyLastFeedNowPlayingSystemClearTime = 0.0;
 
-static void DYYYClearFeedNowPlayingSystemInfoThrottled(void) {
-    if (!DYYYGetBool(@"DYYYDisableFeedNowPlayingInfo") || dyyyClearingFeedNowPlayingSystemInfo) {
+static void DYYYClearFeedNowPlayingSystemInfo(BOOL ignoreThrottle) {
+    if (dyyyClearingFeedNowPlayingSystemInfo) {
         return;
     }
 
     CFTimeInterval currentTime = CFAbsoluteTimeGetCurrent();
-    if (currentTime - dyyyLastFeedNowPlayingSystemClearTime < 0.25) {
+    if (!ignoreThrottle && currentTime - dyyyLastFeedNowPlayingSystemClearTime < 0.25) {
         return;
     }
     dyyyLastFeedNowPlayingSystemClearTime = currentTime;
@@ -1219,8 +2468,74 @@ static void DYYYClearFeedNowPlayingSystemInfoThrottled(void) {
     }
 }
 
+static void DYYYClearFeedNowPlayingSystemInfoThrottled(void) {
+    if (!DYYYGetBool(DYYY_DISABLE_FEED_NOW_PLAYING_INFO_KEY)) {
+        return;
+    }
+
+    DYYYClearFeedNowPlayingSystemInfo(NO);
+}
+
+static id DYYYSharedInstanceForClass(Class cls) {
+    if (!cls) {
+        return nil;
+    }
+
+    for (NSString *selectorName in @[ @"sharedManager", @"sharedInstance", @"defaultCenter", @"shared", @"defaultManager" ]) {
+        SEL selector = NSSelectorFromString(selectorName);
+        if ([cls respondsToSelector:selector]) {
+            id instance = ((id (*)(Class, SEL))objc_msgSend)(cls, selector);
+            if (instance) {
+                return instance;
+            }
+        }
+    }
+
+    return nil;
+}
+
+static void DYYYRefreshFeedNowPlayingInfoFromDouyin(void) {
+    for (NSString *className in @[ @"AWEFeedBackgroundPlayManager", @"AWENowPlayingInfoCenter", @"AWEAwemeBackgroundPlayModule" ]) {
+        id instance = DYYYSharedInstanceForClass(NSClassFromString(className));
+        if (!instance) {
+            continue;
+        }
+
+        SEL forceRefreshSelector = @selector(refreshNowPlayingInfoIsForce:);
+        if ([instance respondsToSelector:forceRefreshSelector]) {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(instance, forceRefreshSelector, YES);
+        }
+
+        SEL refreshSelector = @selector(refreshNowPlayingInfo);
+        if ([instance respondsToSelector:refreshSelector]) {
+            ((void (*)(id, SEL))objc_msgSend)(instance, refreshSelector);
+        }
+
+        SEL refreshIfNeededSelector = @selector(refreshNowPlayingInfoIfNeeded);
+        if ([instance respondsToSelector:refreshIfNeededSelector]) {
+            ((void (*)(id, SEL))objc_msgSend)(instance, refreshIfNeededSelector);
+        }
+
+        SEL updatePlaybackSelector = @selector(updateNowPlayingInfoPlayback);
+        if ([instance respondsToSelector:updatePlaybackSelector]) {
+            ((void (*)(id, SEL))objc_msgSend)(instance, updatePlaybackSelector);
+        }
+    }
+}
+
+void DYYYApplyFeedNowPlayingSettingChange(BOOL disableNowPlayingInfo) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (disableNowPlayingInfo) {
+            DYYYClearFeedNowPlayingSystemInfo(YES);
+            return;
+        }
+
+        DYYYRefreshFeedNowPlayingInfoFromDouyin();
+    });
+}
+
 static BOOL DYYYShouldBlockFeedNowPlayingSystemInfoWrite(void) {
-    return DYYYGetBool(@"DYYYDisableFeedNowPlayingInfo") && !dyyyClearingFeedNowPlayingSystemInfo;
+    return DYYYGetBool(DYYY_DISABLE_FEED_NOW_PLAYING_INFO_KEY) && !dyyyClearingFeedNowPlayingSystemInfo;
 }
 
 %hook AWEAwemeBackgroundPlayModule
@@ -1372,11 +2687,22 @@ static NSArray *DYYYFilteredSDRBitrateModels(NSArray *models);
 static NSArray *DYYYFilteredSDRRawBitrateData(NSArray *rawData);
 static void DYYYStripHDRHintsFromBitrateModels(NSArray *models);
 
+// 读取单个码率档位的比特率；档位类型不符或字段缺失时返回 -1，排序时会被沉到末尾。
+static NSInteger DYYYBitrateForBitrateModel(id model) {
+    Class bitrateModelClass = %c(AWEVideoBSModel);
+    if (!bitrateModelClass || ![model isKindOfClass:bitrateModelClass]) {
+        return -1;
+    }
+
+    id bitrateValue = [model bitrate];
+    return bitrateValue ? [bitrateValue integerValue] : -1;
+}
+
 // 默认视频流最高画质
 %hook AWEVideoModel
 
 - (AWEURLModel *)playURL {
-    if (!DYYYGetBool(@"DYYYEnableVideoHighestQuality")) {
+    if (!DYYYGetBoolCached(@"DYYYEnableVideoHighestQuality")) {
         return %orig;
     }
 
@@ -1391,18 +2717,8 @@ static void DYYYStripHDRHintsFromBitrateModels(NSArray *models);
     NSInteger highestBitrate = 0;
 
     for (id model in bitrateModels) {
-        NSInteger bitrate = 0;
-        BOOL validModel = NO;
-
-        if ([model isKindOfClass:NSClassFromString(@"AWEVideoBSModel")]) {
-            id bitrateValue = [model bitrate];
-            if (bitrateValue) {
-                bitrate = [bitrateValue integerValue];
-                validModel = YES;
-            }
-        }
-
-        if (validModel && bitrate > highestBitrate) {
+        NSInteger bitrate = DYYYBitrateForBitrateModel(model);
+        if (bitrate >= 0 && bitrate > highestBitrate) {
             highestBitrate = bitrate;
             highestBitrateModel = model;
         }
@@ -1420,7 +2736,6 @@ static void DYYYStripHDRHintsFromBitrateModels(NSArray *models);
 }
 
 - (NSArray *)bitrateModels {
-
     NSArray *originalModels = %orig;
 
     if (DYYYShouldDisableAllHDR()) {
@@ -1429,44 +2744,26 @@ static void DYYYStripHDRHintsFromBitrateModels(NSArray *models);
         originalModels = filteredModels;
     }
 
-    if (!DYYYGetBool(@"DYYYEnableVideoHighestQuality")) {
+    if (!DYYYGetBoolCached(@"DYYYEnableVideoHighestQuality")) {
         return originalModels;
     }
 
-    if (originalModels.count == 0) {
+    if (originalModels.count < 2) {
         return originalModels;
     }
 
-    // 查找比特率最高的模型
-    id highestBitrateModel = nil;
-    NSInteger highestBitrate = 0;
-
-    for (id model in originalModels) {
-
-        NSInteger bitrate = 0;
-        BOOL validModel = NO;
-
-        if ([model isKindOfClass:NSClassFromString(@"AWEVideoBSModel")]) {
-            id bitrateValue = [model bitrate];
-            if (bitrateValue) {
-                bitrate = [bitrateValue integerValue];
-                validModel = YES;
-            }
-        }
-
-        if (validModel) {
-            if (bitrate > highestBitrate) {
-                highestBitrate = bitrate;
-                highestBitrateModel = model;
-            }
-        }
-    }
-
-    if (highestBitrateModel) {
-        return @[ highestBitrateModel ];
-    }
-
-    return originalModels;
+    // 按比特率降序排列，最高画质档位置于首位。
+    // 这里刻意保留完整档位表而不裁剪成单档：只留最高码率会让播放器在带宽下滑时无档可退，
+    // 只能停在原地反复重缓冲，表现为播放中途卡住。保留低码率档后仍可自适应降级。
+    return [originalModels sortedArrayWithOptions:NSSortStable
+                                  usingComparator:^NSComparisonResult(id lhs, id rhs) {
+                                    NSInteger leftBitrate = DYYYBitrateForBitrateModel(lhs);
+                                    NSInteger rightBitrate = DYYYBitrateForBitrateModel(rhs);
+                                    if (leftBitrate == rightBitrate) {
+                                        return NSOrderedSame;
+                                    }
+                                    return leftBitrate > rightBitrate ? NSOrderedAscending : NSOrderedDescending;
+                                  }];
 }
 
 - (void)setBitrateModels:(NSArray *)bitrateModels {
@@ -1576,12 +2873,104 @@ static void DYYYMigrateCombinedHDRModeIfNeeded(void) {
     });
 }
 
+static NSString *DYYYUserDefaultsStringValue(id value) {
+    if ([value isKindOfClass:[NSString class]]) {
+        return (NSString *)value;
+    }
+    if ([value isKindOfClass:[NSNumber class]]) {
+        return [(NSNumber *)value stringValue];
+    }
+    return nil;
+}
+
+static NSString *DYYYMigratedVerticalOffsetString(id value) {
+    NSString *stringValue = DYYYUserDefaultsStringValue(value);
+    if (stringValue.length == 0) {
+        return stringValue;
+    }
+
+    CGFloat offset = [stringValue floatValue];
+    if (offset == 0.0f) {
+        return stringValue;
+    }
+
+    return [NSString stringWithFormat:@"%g", -offset];
+}
+
+static void DYYYMigrateScaleAndSizeSettingsIfNeeded(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        if ([defaults boolForKey:@"DYYYScaleAndSizeSettingsMigratedV1"]) {
+            return;
+        }
+
+        NSString *nicknameScale = DYYYUserDefaultsStringValue([defaults objectForKey:@"DYYYNicknameScale"]);
+        if (nicknameScale.length > 0 && [defaults objectForKey:@"DYYYDescriptionScale"] == nil) {
+            [defaults setObject:nicknameScale forKey:@"DYYYDescriptionScale"];
+        }
+
+        id nicknameOffsetValue = [defaults objectForKey:@"DYYYNicknameVerticalOffset"];
+        if (nicknameOffsetValue != nil) {
+            NSString *migratedNicknameOffset = DYYYMigratedVerticalOffsetString(nicknameOffsetValue);
+            if (migratedNicknameOffset.length > 0) {
+                [defaults setObject:migratedNicknameOffset forKey:@"DYYYNicknameVerticalOffset"];
+            }
+        }
+
+        id descriptionOffsetValue = [defaults objectForKey:@"DYYYDescriptionVerticalOffset"];
+        if (descriptionOffsetValue != nil) {
+            NSString *migratedDescriptionOffset = DYYYMigratedVerticalOffsetString(descriptionOffsetValue);
+            if (migratedDescriptionOffset.length > 0) {
+                [defaults setObject:migratedDescriptionOffset forKey:@"DYYYDescriptionVerticalOffset"];
+            }
+        }
+
+        [defaults setBool:YES forKey:@"DYYYScaleAndSizeSettingsMigratedV1"];
+    });
+}
+
+static void DYYYMigrateScaleAndSizeSettingsV2IfNeeded(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        if ([defaults boolForKey:@"DYYYScaleAndSizeSettingsMigratedV2"]) {
+            return;
+        }
+
+        NSString *nicknameScale = DYYYUserDefaultsStringValue([defaults objectForKey:@"DYYYNicknameScale"]);
+        if (nicknameScale.length > 0 && [defaults objectForKey:@"DYYYIPLabelScale"] == nil) {
+            [defaults setObject:nicknameScale forKey:@"DYYYIPLabelScale"];
+        }
+
+        [defaults setBool:YES forKey:@"DYYYScaleAndSizeSettingsMigratedV2"];
+    });
+}
+
+// HDR 模式判定被 AVPlayerLayer、CALayer、UIImageView 等极高频钩子反复调用，
+// 每次读取字符串偏好并比较的开销在滚动时不可忽略，这里按设置代际号缓存结果。
 static BOOL DYYYShouldDisableAllHDR(void) {
-    return [[[NSUserDefaults standardUserDefaults] stringForKey:kDYYYHDRModeKey] isEqualToString:kDYYYHDRModeDisable];
+    static uint32_t cachedGeneration = UINT32_MAX;
+    static BOOL cachedValue = NO;
+
+    uint32_t generation = gDYYYSettingsGeneration;
+    if (cachedGeneration != generation) {
+        cachedValue = [[[NSUserDefaults standardUserDefaults] stringForKey:kDYYYHDRModeKey] isEqualToString:kDYYYHDRModeDisable];
+        cachedGeneration = generation;
+    }
+    return cachedValue;
 }
 
 static BOOL DYYYShouldFilterGlobalHDR(void) {
-    return [[[NSUserDefaults standardUserDefaults] stringForKey:kDYYYHDRModeKey] isEqualToString:kDYYYHDRModeFilter];
+    static uint32_t cachedGeneration = UINT32_MAX;
+    static BOOL cachedValue = NO;
+
+    uint32_t generation = gDYYYSettingsGeneration;
+    if (cachedGeneration != generation) {
+        cachedValue = [[[NSUserDefaults standardUserDefaults] stringForKey:kDYYYHDRModeKey] isEqualToString:kDYYYHDRModeFilter];
+        cachedGeneration = generation;
+    }
+    return cachedValue;
 }
 
 static id DYYYKVCValueIfPossible(id object, NSString *key) {
@@ -2027,6 +3416,17 @@ static void DYYYApplySDRDynamicRangeToImageView(UIImageView *imageView) {
 static BOOL DYYYShouldForceHideAvatarActionLayer(CALayer *layer);
 static BOOL DYYYShouldClearAvatarActionLayer(CALayer *layer);
 static void DYYYPrepareAvatarActionSublayer(CALayer *parentLayer, CALayer *sublayer);
+
+// 收藏按钮在部分视频中会异步重建图片/动画图层，标记后在写入点继续压制。
+static char kDYYYFeedVideoCollectButtonHiddenViewKey;
+static char kDYYYFeedVideoCollectButtonHiddenLayerKey;
+static char kDYYYFeedVideoCollectButtonDeferredApplyKey;
+
+static BOOL DYYYShouldForceHideFeedVideoCollectButtonLayer(CALayer *layer);
+static BOOL DYYYShouldClearFeedVideoCollectButtonLayer(CALayer *layer);
+static void DYYYPrepareFeedVideoCollectButtonSublayer(CALayer *parentLayer, CALayer *sublayer);
+static BOOL DYYYShouldForceHideFeedVideoCollectButtonView(UIView *view);
+static void DYYYMarkFeedVideoCollectButtonViewHidden(UIView *view);
 
 static void DYYYDisableExtendedRangeForLayer(CALayer *layer) {
     if (!DYYYShouldDisableAllHDR() || !layer) {
@@ -2859,60 +4259,73 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 %hook CALayer
 
 - (void)setHidden:(BOOL)hidden {
-    %orig(DYYYShouldForceHideAvatarActionLayer(self) ? YES : hidden);
+    BOOL shouldForceHidden = DYYYShouldForceHideAvatarActionLayer(self) || DYYYShouldForceHideFeedVideoCollectButtonLayer(self);
+    %orig(shouldForceHidden ? YES : hidden);
 }
 
 - (void)setContents:(id)contents {
-    %orig(DYYYShouldClearAvatarActionLayer(self) ? nil : contents);
+    BOOL shouldClearLayer = DYYYShouldClearAvatarActionLayer(self) || DYYYShouldClearFeedVideoCollectButtonLayer(self);
+    %orig(shouldClearLayer ? nil : contents);
 }
 
 - (void)setBackgroundColor:(CGColorRef)backgroundColor {
-    %orig(DYYYShouldClearAvatarActionLayer(self) ? UIColor.clearColor.CGColor : backgroundColor);
+    BOOL shouldClearLayer = DYYYShouldClearAvatarActionLayer(self) || DYYYShouldClearFeedVideoCollectButtonLayer(self);
+    %orig(shouldClearLayer ? UIColor.clearColor.CGColor : backgroundColor);
 }
 
 - (void)setOpaque:(BOOL)opaque {
-    %orig(DYYYShouldClearAvatarActionLayer(self) ? NO : opaque);
+    BOOL shouldClearLayer = DYYYShouldClearAvatarActionLayer(self) || DYYYShouldClearFeedVideoCollectButtonLayer(self);
+    %orig(shouldClearLayer ? NO : opaque);
 }
 
 - (void)setBorderWidth:(CGFloat)borderWidth {
-    %orig(DYYYShouldClearAvatarActionLayer(self) ? 0.0 : borderWidth);
+    BOOL shouldClearLayer = DYYYShouldClearAvatarActionLayer(self) || DYYYShouldClearFeedVideoCollectButtonLayer(self);
+    %orig(shouldClearLayer ? 0.0 : borderWidth);
 }
 
 - (void)setBorderColor:(CGColorRef)borderColor {
-    %orig(DYYYShouldClearAvatarActionLayer(self) ? UIColor.clearColor.CGColor : borderColor);
+    BOOL shouldClearLayer = DYYYShouldClearAvatarActionLayer(self) || DYYYShouldClearFeedVideoCollectButtonLayer(self);
+    %orig(shouldClearLayer ? UIColor.clearColor.CGColor : borderColor);
 }
 
 - (void)setShadowOpacity:(float)shadowOpacity {
-    %orig(DYYYShouldClearAvatarActionLayer(self) ? 0.0f : shadowOpacity);
+    BOOL shouldClearLayer = DYYYShouldClearAvatarActionLayer(self) || DYYYShouldClearFeedVideoCollectButtonLayer(self);
+    %orig(shouldClearLayer ? 0.0f : shadowOpacity);
 }
 
 - (void)setShadowColor:(CGColorRef)shadowColor {
-    %orig(DYYYShouldClearAvatarActionLayer(self) ? UIColor.clearColor.CGColor : shadowColor);
+    BOOL shouldClearLayer = DYYYShouldClearAvatarActionLayer(self) || DYYYShouldClearFeedVideoCollectButtonLayer(self);
+    %orig(shouldClearLayer ? UIColor.clearColor.CGColor : shadowColor);
 }
 
 - (void)addSublayer:(CALayer *)layer {
     DYYYPrepareAvatarActionSublayer(self, layer);
+    DYYYPrepareFeedVideoCollectButtonSublayer(self, layer);
     %orig(layer);
 }
 
 - (void)insertSublayer:(CALayer *)layer atIndex:(unsigned int)index {
     DYYYPrepareAvatarActionSublayer(self, layer);
+    DYYYPrepareFeedVideoCollectButtonSublayer(self, layer);
     %orig(layer, index);
 }
 
 - (void)insertSublayer:(CALayer *)layer below:(CALayer *)sibling {
     DYYYPrepareAvatarActionSublayer(self, layer);
+    DYYYPrepareFeedVideoCollectButtonSublayer(self, layer);
     %orig(layer, sibling);
 }
 
 - (void)insertSublayer:(CALayer *)layer above:(CALayer *)sibling {
     DYYYPrepareAvatarActionSublayer(self, layer);
+    DYYYPrepareFeedVideoCollectButtonSublayer(self, layer);
     %orig(layer, sibling);
 }
 
 - (void)setSublayers:(NSArray<CALayer *> *)sublayers {
     for (CALayer *layer in sublayers) {
         DYYYPrepareAvatarActionSublayer(self, layer);
+        DYYYPrepareFeedVideoCollectButtonSublayer(self, layer);
     }
     %orig(sublayers);
 }
@@ -2949,11 +4362,13 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 %hook CAShapeLayer
 
 - (void)setFillColor:(CGColorRef)fillColor {
-    %orig(DYYYShouldClearAvatarActionLayer(self) ? UIColor.clearColor.CGColor : fillColor);
+    BOOL shouldClearLayer = DYYYShouldClearAvatarActionLayer(self) || DYYYShouldClearFeedVideoCollectButtonLayer(self);
+    %orig(shouldClearLayer ? UIColor.clearColor.CGColor : fillColor);
 }
 
 - (void)setStrokeColor:(CGColorRef)strokeColor {
-    %orig(DYYYShouldClearAvatarActionLayer(self) ? UIColor.clearColor.CGColor : strokeColor);
+    BOOL shouldClearLayer = DYYYShouldClearAvatarActionLayer(self) || DYYYShouldClearFeedVideoCollectButtonLayer(self);
+    %orig(shouldClearLayer ? UIColor.clearColor.CGColor : strokeColor);
 }
 
 %end
@@ -2997,24 +4412,24 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
     NSError *error = nil;
     NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"^(\\d{10,13})([\\s\\S]*)" options:0 error:&error];
-    
+
     NSTextCheckingResult *match = [regex firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
 
     if (match) {
         NSString *rawTs = [text substringWithRange:[match rangeAtIndex:1]];
         NSString *suffix = [text substringWithRange:[match rangeAtIndex:2]];
-        
+
         long long ts = [rawTs longLongValue];
-        
+
         if (ts > 100000000000) {
             ts = ts / 1000;
         }
-        
+
         NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts];
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
         [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
         NSString *formattedDate = [formatter stringFromDate:date];
-        
+
         NSString *newText = [NSString stringWithFormat:@"%@%@", formattedDate, suffix];
         %orig(newText);
     } else {
@@ -3029,7 +4444,7 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 - (void)setText:(NSString *)text {
     %orig(text); // 先让系统把文本赋上去
-    
+
     if (!DYYYGetBool(@"DYYYCommentExactTime")) {
         return;
     }
@@ -3052,11 +4467,11 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     if (font) {
         CGFloat expectedWidth = ceilf([text sizeWithAttributes:@{NSFontAttributeName: font}].width);
         CGRect currentFrame = label.frame;
-        
+
         // 如果当前宽度不够，并且不是尚未初始化的状态（>0），则强行修改并重新赋值
         if (currentFrame.size.width < expectedWidth && currentFrame.size.width > 0) {
             currentFrame.size.width = expectedWidth;
-            label.frame = currentFrame; 
+            label.frame = currentFrame;
             label.clipsToBounds = NO;
         }
     }
@@ -3076,7 +4491,7 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
         if ([text isEqualToString:@"翻译"] || [text isEqualToString:@"隐藏翻译"]) {
             CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
             frame.origin.x = screenWidth - 100.0 - frame.size.width;
-        } 
+        }
         // --- 2. 拦截时间文本，如果不够宽则扩充宽度 ---
         else if ([self respondsToSelector:@selector(font)]) {
             UIFont *font = label.font;
@@ -3115,19 +4530,19 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     if (match) {
         NSString *rawTs = [plainText substringWithRange:[match rangeAtIndex:1]];
         long long ts = [rawTs longLongValue];
-        
+
         if (ts > 100000000000) {
             ts = ts / 1000;
         }
-        
+
         NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts];
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
         [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
         NSString *formattedDate = [formatter stringFromDate:date];
-        
+
         NSMutableAttributedString *newAttrStr = [attributedText mutableCopy];
         [newAttrStr replaceCharactersInRange:[match rangeAtIndex:1] withString:formattedDate];
-        
+
         %orig(newAttrStr);
     } else {
         %orig(attributedText);
@@ -3243,7 +4658,6 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 // 拦截手指拖动
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
-
     /* 仅处理横屏Feed列表。其余collectionView直接走系统逻辑 */
     if (self != gFeedCV || !DYYYGetBool(@"DYYYVideoGesture")) {
         %orig;
@@ -3258,17 +4672,14 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
     /* BEGAN：判定左右 20 % 区域 → 进入亮度 / 音量模式 */
     if (st == UIGestureRecognizerStateBegan) {
-
         gStartY = loc.y;
 
         if (xPct <= 0.20) { // 左边缘 → 亮度
             gMode = DYEdgeModeBrightness;
             gStartVal = [UIScreen mainScreen].brightness;
-
         } else if (xPct >= 0.80) { // 右边缘 → 音量
             gMode = DYEdgeModeVolume;
             gStartVal = [[objc_getClass("AVSystemController") sharedAVSystemController] volumeForCategory:@"Audio/Video"];
-
         } else {
             gMode = DYEdgeModeNone; // 中间区域走原逻辑
         }
@@ -3276,9 +4687,7 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
     /* 调节阶段：左右边缘时吞掉滚动、修改亮度/音量 */
     if (gMode != DYEdgeModeNone) {
-
         if (st == UIGestureRecognizerStateChanged) {
-
             CGFloat delta = (gStartY - loc.y) / self.bounds.size.height; // ↑ 为正
             const CGFloat kScale = 2.0;                                  // 灵敏度
             float newVal = gStartVal + delta * kScale;
@@ -3288,7 +4697,6 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
                 [UIScreen mainScreen].brightness = newVal;
                 // 弹系统亮度 HUD
                 [[%c(SBHUDController) sharedInstance] presentHUDWithIcon:@"Brightness" level:newVal];
-
             } else { // DYEdgeModeVolume
                 // iOS 18 音量控制 + 系统音量 HUD
                 [[objc_getClass("AVSystemController") sharedAVSystemController] setVolumeTo:newVal forCategory:@"Audio/Video"];
@@ -3322,6 +4730,18 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 }
 
 %end
+
+// 关注二次确认：弹窗关闭后再触发原逻辑，且不再传入已失效的手势对象。
+static void DYYYRunDeferredFollowConfirm(void (^action)(void)) {
+    if (!action) {
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            action();
+        });
+    });
+}
 
 %hook AWEPlayInteractionUserAvatarElement
 - (void)onFollowViewClicked:(UITapGestureRecognizer *)gesture {
@@ -3374,7 +4794,9 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
                                    cancelAction:nil
                                     closeAction:nil
                                   confirmAction:^{
-                                    %orig(gesture);
+                                    DYYYRunDeferredFollowConfirm(^{
+                                        %orig(nil);
+                                    });
                                   }];
     } else {
         %orig;
@@ -3434,13 +4856,218 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
                                    cancelAction:nil
                                     closeAction:nil
                                   confirmAction:^{
-                                    %orig(gesture);
+                                    DYYYRunDeferredFollowConfirm(^{
+                                        %orig(nil);
+                                    });
                                   }];
     } else {
         %orig;
     }
 }
 
+%end
+
+static BOOL DYYYIsFollowRelationToastText(NSString *text) {
+    if (![text isKindOfClass:[NSString class]] || text.length == 0) {
+        return NO;
+    }
+    return [text containsString:@"已取消关注"] || [text containsString:@"关注成功"] || [text isEqualToString:@"已关注"] ||
+           [text containsString:@"取消关注成功"];
+}
+
+// 统一到视频页「已取消关注」高度：安全区顶部 + 76pt（对齐用户参考图1）
+static const CGFloat kDYYYFollowToastTopOffset = 76.0;
+
+static UIWindow *DYYYToastReferenceWindow(void) {
+    UIWindow *window = [DYYYUtils getActiveWindow];
+    if (!window) {
+        window = UIApplication.sharedApplication.windows.firstObject;
+    }
+    return window;
+}
+
+static CGPoint DYYYTopToastCenterPointInView(UIView *view) {
+    UIWindow *window = DYYYToastReferenceWindow();
+    if (!window) {
+        return CGPointMake(UIScreen.mainScreen.bounds.size.width / 2.0, kDYYYFollowToastTopOffset);
+    }
+
+    CGFloat safeTop = 0.0;
+    if (@available(iOS 11.0, *)) {
+        safeTop = window.safeAreaInsets.top;
+    }
+    CGPoint windowPoint = CGPointMake(CGRectGetMidX(window.bounds), safeTop + kDYYYFollowToastTopOffset);
+
+    if (view && view != window) {
+        return [view convertPoint:windowPoint fromView:window];
+    }
+    return windowPoint;
+}
+
+%hook DUXToast
++ (void)showText:(NSString *)text {
+    if (DYYYIsFollowRelationToastText(text) && [self respondsToSelector:@selector(showText:withCenterPoint:)]) {
+        [self showText:text withCenterPoint:DYYYTopToastCenterPointInView(nil)];
+        return;
+    }
+    %orig;
+}
+
++ (void)showText:(NSString *)text withCenterPoint:(CGPoint)centerPoint {
+    if (DYYYIsFollowRelationToastText(text)) {
+        centerPoint = DYYYTopToastCenterPointInView(nil);
+    }
+    %orig(text, centerPoint);
+}
+
++ (void)showText:(NSString *)text onView:(UIView *)view {
+    if (DYYYIsFollowRelationToastText(text) && [self respondsToSelector:@selector(showText:onView:withCenterPoint:)]) {
+        [self showText:text onView:view withCenterPoint:DYYYTopToastCenterPointInView(view)];
+        return;
+    }
+    %orig;
+}
+
++ (void)showText:(NSString *)text onView:(UIView *)view withCenterPoint:(CGPoint)centerPoint {
+    if (DYYYIsFollowRelationToastText(text)) {
+        centerPoint = DYYYTopToastCenterPointInView(view);
+    }
+    %orig(text, view, centerPoint);
+}
+
+- (void)show {
+    NSString *text = nil;
+    if ([self respondsToSelector:@selector(text)]) {
+        text = [(id)self text];
+    }
+    if (DYYYIsFollowRelationToastText(text) && [self respondsToSelector:@selector(showWithCenterPoint:)]) {
+        [(id)self showWithCenterPoint:DYYYTopToastCenterPointInView(nil)];
+        return;
+    }
+    %orig;
+}
+
+- (void)showOnView:(UIView *)view {
+    NSString *text = nil;
+    if ([self respondsToSelector:@selector(text)]) {
+        text = [(id)self text];
+    }
+    if (DYYYIsFollowRelationToastText(text) && [self respondsToSelector:@selector(showOnView:withCenterPoint:)]) {
+        [(id)self showOnView:view withCenterPoint:DYYYTopToastCenterPointInView(view)];
+        return;
+    }
+    %orig;
+}
+
+- (void)showWithCenterPoint:(CGPoint)centerPoint {
+    NSString *text = nil;
+    if ([self respondsToSelector:@selector(text)]) {
+        text = [(id)self text];
+    }
+    if (DYYYIsFollowRelationToastText(text)) {
+        centerPoint = DYYYTopToastCenterPointInView(nil);
+    }
+    %orig(centerPoint);
+}
+
+- (void)showOnView:(UIView *)view withCenterPoint:(CGPoint)centerPoint {
+    NSString *text = nil;
+    if ([self respondsToSelector:@selector(text)]) {
+        text = [(id)self text];
+    }
+    if (DYYYIsFollowRelationToastText(text)) {
+        centerPoint = DYYYTopToastCenterPointInView(view);
+    }
+    %orig(view, centerPoint);
+}
+%end
+
+static BOOL DYYYProfileFollowConfirmIsShowing = NO;
+
+static id DYYYUserModelFromProfileHeaderContext(id headerContext) {
+    if (!headerContext) {
+        return nil;
+    }
+    if ([headerContext respondsToSelector:@selector(userModel)]) {
+        return [headerContext userModel];
+    }
+    return nil;
+}
+
+static void DYYYShowProfileFollowGlassConfirm(id user, void (^confirmAction)(void)) {
+    if (!confirmAction || DYYYProfileFollowConfirmIsShowing) {
+        return;
+    }
+
+    NSString *nickname = @"";
+    NSString *signature = @"";
+    if (user) {
+        if ([user respondsToSelector:@selector(nickname)]) {
+            nickname = [user valueForKey:@"nickname"] ?: @"";
+        }
+        if ([user respondsToSelector:@selector(signature)]) {
+            signature = [user valueForKey:@"signature"] ?: @"";
+        }
+    }
+
+    NSString *title = nickname.length > 0 ? nickname : @"关注确认";
+    NSString *message = signature.length > 0 ? signature : @"确定要关注该用户吗？";
+
+    DYYYProfileFollowConfirmIsShowing = YES;
+    [DYYYGlassConfirmView showWithTitle:title
+                                message:message
+                       cancelButtonText:@"取消"
+                      confirmButtonText:@"确定"
+                            cancelAction:^{
+                              DYYYProfileFollowConfirmIsShowing = NO;
+                            }
+                           confirmAction:^{
+                              DYYYProfileFollowConfirmIsShowing = NO;
+                              DYYYRunDeferredFollowConfirm(confirmAction);
+                            }];
+}
+
+%hook AWEProfileFollowAreaFollowComponent
+- (void)handleFollowEventWithHeaderContext:(id)headerContext
+                               enterMethod:(id)enterMethod
+                             fromTopButton:(BOOL)fromTopButton
+                                completion:(id)completion {
+    if (DYYYGetBool(@"DYYYFollowTips")) {
+        id user = DYYYUserModelFromProfileHeaderContext(headerContext);
+        DYYYShowProfileFollowGlassConfirm(user, ^{
+          %orig(headerContext, enterMethod, fromTopButton, completion);
+        });
+        return;
+    }
+
+    %orig;
+}
+%end
+
+%hook AWEProfileHeaderFollowAreaCell
+- (void)p_follow:(id)sender {
+    if (DYYYGetBool(@"DYYYFollowTips")) {
+        id user = DYYYUserModelFromProfileHeaderContext(self.context);
+        DYYYShowProfileFollowGlassConfirm(user, ^{
+          %orig(sender);
+        });
+        return;
+    }
+
+    %orig;
+}
+
+- (void)followUser {
+    if (DYYYGetBool(@"DYYYFollowTips")) {
+        id user = DYYYUserModelFromProfileHeaderContext(self.context);
+        DYYYShowProfileFollowGlassConfirm(user, ^{
+          %orig;
+        });
+        return;
+    }
+
+    %orig;
+}
 %end
 
 %hook AWEFeedTopBarContainer
@@ -3559,12 +5186,96 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 %end
 
+%hook AWEFeedAnchorPOIConfig
+
++ (BOOL)hasAnchorViewDataWithAwemeModelForFeed:(id)awemeModel extraInfo:(id)extraInfo {
+    if (DYYYGetBool(@"DYYYHideLocation")) {
+        return NO;
+    }
+    return %orig(awemeModel, extraInfo);
+}
+
+%end
+
+%hook AWEFeedAnchorPOITradeConfig
+
++ (BOOL)hasAnchorViewDataWithAwemeModelForFeed:(id)awemeModel extraInfo:(id)extraInfo {
+    if (DYYYGetBool(@"DYYYHideLocation")) {
+        return NO;
+    }
+    return %orig(awemeModel, extraInfo);
+}
+
+%end
+
+static char kDYYYFeedLocationContainerManagedHiddenKey;
+static char kDYYYFeedLocationContainerOriginalHiddenKey;
+
+static void DYYYApplyPlayInteractionElementLayout(UIView *view, NSString *fallbackClassName);
+
+%hook AWEFeedAnchorContainerView
+
+- (void)layoutSubviews {
+    %orig;
+
+    BOOL containsLocationAnchor = NO;
+    Class poiEntryClass = NSClassFromString(@"AWEPOIEntryAnchorView");
+    Class poiTradeEntryClass = NSClassFromString(@"AWEPOITradeEntryAnchorView");
+    if ((poiEntryClass && [DYYYUtils containsSubviewOfClass:poiEntryClass inContainer:self]) ||
+        (poiTradeEntryClass && [DYYYUtils containsSubviewOfClass:poiTradeEntryClass inContainer:self])) {
+        containsLocationAnchor = YES;
+    }
+
+    if (!containsLocationAnchor) {
+        Class templateAnchorV2Class = NSClassFromString(@"AWEFeedTemplateAnchorViewV2");
+        NSArray<UIView *> *templateAnchorViews = [DYYYUtils findAllSubviewsOfClass:templateAnchorV2Class inContainer:self];
+        for (AWEFeedTemplateAnchorViewV2 *templateAnchorView in templateAnchorViews) {
+            AWECodeGenCommonAnchorBasicInfoModel *anchorInfo = templateAnchorView.templateAnchorInfo;
+            if ([anchorInfo.name isEqualToString:@"poi_poi"]) {
+                containsLocationAnchor = YES;
+                break;
+            }
+        }
+    }
+
+    NSNumber *managedHidden = objc_getAssociatedObject(self, &kDYYYFeedLocationContainerManagedHiddenKey);
+    if (DYYYGetBool(@"DYYYHideLocation") && containsLocationAnchor) {
+        if (![managedHidden boolValue]) {
+            objc_setAssociatedObject(self, &kDYYYFeedLocationContainerOriginalHiddenKey, @(self.hidden), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(self, &kDYYYFeedLocationContainerManagedHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        self.hidden = YES;
+        return;
+    }
+
+    if ([managedHidden boolValue]) {
+        NSNumber *originalHidden = objc_getAssociatedObject(self, &kDYYYFeedLocationContainerOriginalHiddenKey);
+        objc_setAssociatedObject(self, &kDYYYFeedLocationContainerManagedHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, &kDYYYFeedLocationContainerOriginalHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        self.hidden = originalHidden ? originalHidden.boolValue : NO;
+    }
+
+    // 定位/特效锚点未必是左侧栏的直接子项，这里补一次跟随昵称的缩放与 Y 轴
+    UIViewController *anchorViewController = [DYYYUtils firstAvailableViewControllerFromView:self];
+    if ([anchorViewController isKindOfClass:%c(AWEPlayInteractionViewController)]) {
+        DYYYApplyPlayInteractionElementLayout(self, @"AWEPlayInteractionAnchorElement");
+    }
+}
+
+%end
+
 %hook AWEMarkView
 
 - (void)layoutSubviews {
     %orig;
 
-    if (DYYYGetBool(@"DYYYHideLocation")) {
+    Class poiConfigClass = NSClassFromString(@"AWEFeedAnchorPOIConfig");
+    Class poiTradeConfigClass = NSClassFromString(@"AWEFeedAnchorPOITradeConfig");
+    SEL feedVisibilitySelector = @selector(hasAnchorViewDataWithAwemeModelForFeed:extraInfo:);
+    BOOL supportsPOIConfigVisibility =
+        (poiConfigClass && class_getClassMethod(poiConfigClass, feedVisibilitySelector)) ||
+        (poiTradeConfigClass && class_getClassMethod(poiTradeConfigClass, feedVisibilitySelector));
+    if (DYYYGetBool(@"DYYYHideLocation") && !supportsPOIConfigVisibility) {
         self.hidden = YES;
         return;
     }
@@ -3642,20 +5353,6 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     [button.superview.window.rootViewController dismissViewControllerAnimated:YES completion:nil];
 }
 
-- (void)makeKeyAndVisible {
-    %orig;
-
-    if (!isFloatSpeedButtonEnabled)
-        return;
-
-    if (speedButton && ![speedButton isDescendantOfView:self]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-          [self addSubview:speedButton];
-          [speedButton loadSavedPosition];
-          [speedButton resetFadeTimer];
-        });
-    }
-}
 %end
 
 %end
@@ -3681,13 +5378,207 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 }
 %end
 
+static BOOL DYYYFeedVideoCollectButtonHideEnabled(void) {
+    return DYYYGetBoolCached(@"DYYYHideCollectButton");
+}
+
+static NSString *DYYYObjectStringForSelector(id object, SEL selector) {
+    if (!object || !selector || ![object respondsToSelector:selector]) {
+        return nil;
+    }
+
+    id value = nil;
+    @try {
+        value = ((id (*)(id, SEL))objc_msgSend)(object, selector);
+    } @catch (__unused NSException *exception) {
+        value = nil;
+    }
+
+    return [value isKindOfClass:[NSString class]] ? (NSString *)value : nil;
+}
+
+static BOOL DYYYFeedVideoCollectKeywordMatches(NSString *value) {
+    if (value.length == 0) {
+        return NO;
+    }
+
+    NSString *lowercaseValue = value.lowercaseString;
+    return [value containsString:@"收藏"] ||
+           [lowercaseValue containsString:@"favorite"] ||
+           [lowercaseValue containsString:@"collect"] ||
+           [lowercaseValue containsString:@"collection"];
+}
+
+static BOOL DYYYIsFeedVideoCollectButton(id button) {
+    if (!button) {
+        return NO;
+    }
+
+    Class feedVideoButtonClass = NSClassFromString(@"AWEFeedVideoButton");
+    if (!feedVideoButtonClass || ![button isKindOfClass:feedVideoButtonClass]) {
+        return NO;
+    }
+
+    NSString *accessibilityLabel = DYYYObjectStringForSelector(button, @selector(accessibilityLabel));
+    if (DYYYFeedVideoCollectKeywordMatches(accessibilityLabel)) {
+        return YES;
+    }
+
+    NSString *accessibilityIdentifier = DYYYObjectStringForSelector(button, @selector(accessibilityIdentifier));
+    if (DYYYFeedVideoCollectKeywordMatches(accessibilityIdentifier)) {
+        return YES;
+    }
+
+    NSString *imageNameString = DYYYObjectStringForSelector(button, @selector(imageNameString));
+    return DYYYFeedVideoCollectKeywordMatches(imageNameString);
+}
+
+static void DYYYMarkFeedVideoCollectButtonLayerHidden(CALayer *layer) {
+    if (!layer) {
+        return;
+    }
+
+    objc_setAssociatedObject(layer, &kDYYYFeedVideoCollectButtonHiddenLayerKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    layer.hidden = YES;
+    layer.contents = nil;
+    layer.opacity = 0.0f;
+    layer.backgroundColor = UIColor.clearColor.CGColor;
+    layer.borderWidth = 0.0;
+    layer.borderColor = UIColor.clearColor.CGColor;
+    layer.shadowOpacity = 0.0f;
+    layer.shadowColor = UIColor.clearColor.CGColor;
+    if ([layer isKindOfClass:[CAShapeLayer class]]) {
+        CAShapeLayer *shapeLayer = (CAShapeLayer *)layer;
+        shapeLayer.fillColor = UIColor.clearColor.CGColor;
+        shapeLayer.strokeColor = UIColor.clearColor.CGColor;
+    }
+
+    for (CALayer *sublayer in [layer.sublayers copy]) {
+        DYYYMarkFeedVideoCollectButtonLayerHidden(sublayer);
+    }
+}
+
+// CALayer 的各个 setter 属于渲染最热路径，而关联对象查询需要经过 runtime 全局表。
+// 先判定开关（命中缓存后近乎零开销），关闭时直接短路，避免无谓的关联对象查找。
+static BOOL DYYYShouldForceHideFeedVideoCollectButtonLayer(CALayer *layer) {
+    return layer && DYYYFeedVideoCollectButtonHideEnabled() && objc_getAssociatedObject(layer, &kDYYYFeedVideoCollectButtonHiddenLayerKey);
+}
+
+static BOOL DYYYShouldClearFeedVideoCollectButtonLayer(CALayer *layer) {
+    return DYYYShouldForceHideFeedVideoCollectButtonLayer(layer);
+}
+
+static void DYYYPrepareFeedVideoCollectButtonSublayer(CALayer *parentLayer, CALayer *sublayer) {
+    if (!parentLayer || !sublayer) {
+        return;
+    }
+
+    if (DYYYFeedVideoCollectButtonHideEnabled() && objc_getAssociatedObject(parentLayer, &kDYYYFeedVideoCollectButtonHiddenLayerKey)) {
+        DYYYMarkFeedVideoCollectButtonLayerHidden(sublayer);
+    }
+}
+
+static BOOL DYYYShouldForceHideFeedVideoCollectButtonView(UIView *view) {
+    return view && DYYYFeedVideoCollectButtonHideEnabled() && objc_getAssociatedObject(view, &kDYYYFeedVideoCollectButtonHiddenViewKey);
+}
+
+static void DYYYClearFeedVideoCollectImageView(UIImageView *imageView) {
+    if (!imageView) {
+        return;
+    }
+
+    imageView.image = nil;
+    imageView.highlightedImage = nil;
+    imageView.animationImages = nil;
+    imageView.highlightedAnimationImages = nil;
+}
+
+static void DYYYMarkFeedVideoCollectButtonViewHidden(UIView *view) {
+    if (!view) {
+        return;
+    }
+
+    objc_setAssociatedObject(view, &kDYYYFeedVideoCollectButtonHiddenViewKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    view.hidden = YES;
+    view.alpha = 0.0;
+    view.userInteractionEnabled = NO;
+    view.accessibilityElementsHidden = YES;
+    view.backgroundColor = UIColor.clearColor;
+    if ([view isKindOfClass:[UIImageView class]]) {
+        DYYYClearFeedVideoCollectImageView((UIImageView *)view);
+    }
+    DYYYMarkFeedVideoCollectButtonLayerHidden(view.layer);
+
+    for (UIView *subview in [view.subviews copy]) {
+        DYYYMarkFeedVideoCollectButtonViewHidden(subview);
+    }
+}
+
+static void DYYYSetFeedVideoButtonLabelsHidden(UIView *view, BOOL hidden) {
+    if (!view) {
+        return;
+    }
+
+    if ([view isKindOfClass:[UILabel class]]) {
+        view.hidden = hidden;
+    }
+
+    for (UIView *subview in [view.subviews copy]) {
+        DYYYSetFeedVideoButtonLabelsHidden(subview, hidden);
+    }
+}
+
+static void DYYYApplyFeedVideoCollectButtonSettings(AWEFeedVideoButton *button) {
+    if (!DYYYIsFeedVideoCollectButton(button)) {
+        return;
+    }
+
+    if (DYYYFeedVideoCollectButtonHideEnabled()) {
+        DYYYMarkFeedVideoCollectButtonViewHidden(button);
+        [button removeFromSuperview];
+        return;
+    }
+
+    if (DYYYGetBool(@"DYYYHideCollectLabel")) {
+        DYYYSetFeedVideoButtonLabelsHidden(button, YES);
+    }
+}
+
+static void DYYYApplyFeedVideoCollectButtonSettingsWithRetry(AWEFeedVideoButton *button) {
+    if (!DYYYIsFeedVideoCollectButton(button)) {
+        return;
+    }
+
+    DYYYApplyFeedVideoCollectButtonSettings(button);
+    if (!DYYYFeedVideoCollectButtonHideEnabled() || objc_getAssociatedObject(button, &kDYYYFeedVideoCollectButtonDeferredApplyKey)) {
+        return;
+    }
+
+    objc_setAssociatedObject(button, &kDYYYFeedVideoCollectButtonDeferredApplyKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak AWEFeedVideoButton *weakButton = button;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      AWEFeedVideoButton *strongButton = weakButton;
+      if (!strongButton) {
+          return;
+      }
+      DYYYApplyFeedVideoCollectButtonSettings(strongButton);
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        AWEFeedVideoButton *delayedButton = weakButton;
+        if (!delayedButton) {
+            return;
+        }
+        DYYYApplyFeedVideoCollectButtonSettings(delayedButton);
+        objc_setAssociatedObject(delayedButton, &kDYYYFeedVideoCollectButtonDeferredApplyKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      });
+    });
+}
+
 %hook AWEFeedVideoButton
 - (id)touchUpInsideBlock {
     id r = %orig;
 
     // 只有收藏按钮才显示确认弹窗
-    if (DYYYGetBool(@"DYYYCollectTips") && [self.accessibilityLabel isEqualToString:@"收藏"]) {
-
+    if (DYYYGetBool(@"DYYYCollectTips") && DYYYIsFeedVideoCollectButton(self)) {
         dispatch_async(dispatch_get_main_queue(), ^{
           [DYYYBottomAlertView showAlertWithTitle:@"收藏确认"
                                           message:@"是否确认/取消收藏？"
@@ -3963,6 +5854,844 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 %end
 
+static CGFloat DYYYGetUserVerticalOffsetY(NSString *key) {
+    NSString *value = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    if (value.length == 0) {
+        return 0.0;
+    }
+    // 设置项约定：上移为正数，下移为负数；UIKit 坐标系中 Y 轴向下为正。
+    return -[value floatValue];
+}
+
+static CGFloat DYYYGetNicknameVerticalOffset(void) {
+    return DYYYGetUserVerticalOffsetY(@"DYYYNicknameVerticalOffset");
+}
+
+static CGFloat DYYYGetDescriptionVerticalOffset(void) {
+    return DYYYGetUserVerticalOffsetY(@"DYYYDescriptionVerticalOffset");
+}
+
+static BOOL DYYYStackViewContainsElementClassName(UIView *stackView, NSString *className) {
+    if (!stackView || className.length == 0) {
+        return NO;
+    }
+
+    for (UIView *sub in [stackView.subviews copy]) {
+        if ([sub respondsToSelector:@selector(elementClassName)]) {
+            NSString *elementClassName = [sub performSelector:@selector(elementClassName)];
+            if ([elementClassName isEqualToString:className]) {
+                return YES;
+            }
+        }
+    }
+    return NO;
+}
+
+static CGFloat DYYYScaleValueForKey(NSString *key) {
+    NSString *scaleValue = DYYYUserDefaultsStringValue([[NSUserDefaults standardUserDefaults] objectForKey:key]);
+    if (scaleValue.length == 0) {
+        return 1.0;
+    }
+    CGFloat scale = [scaleValue floatValue];
+    return scale > 0.0 ? scale : 1.0;
+}
+
+static BOOL DYYYIsLeftStackArrangedElementView(UIView *view) {
+    return view.superview != nil && [view.superview isKindOfClass:%c(AWEElementStackView)];
+}
+
+static UIView *DYYYRawElementViewFromElement(id element) {
+    if (!element) {
+        return nil;
+    }
+
+    UIView *elementView = nil;
+    @try {
+        id value = [element valueForKey:@"elementView"];
+        if ([value isKindOfClass:[UIView class]]) {
+            elementView = value;
+        }
+    } @catch (__unused NSException *exception) {
+        elementView = nil;
+    }
+
+    if (!elementView) {
+        @try {
+            id value = [element valueForKey:@"view"];
+            if ([value isKindOfClass:[UIView class]]) {
+                elementView = value;
+            }
+        } @catch (__unused NSException *exception) {
+            elementView = nil;
+        }
+    }
+
+    if (!elementView && [element isKindOfClass:[UIView class]]) {
+        elementView = (UIView *)element;
+    }
+    return elementView;
+}
+
+// transform 的写入必须脱离当前动画上下文，否则锚点展开等动画会把 1.0 -> scale 的变化插值出来，
+// 表现为特效临时由大变小、以及昵称/文案/属地跟着轻微膨胀一下
+static void DYYYSetViewTransformWithoutAnimation(UIView *view, CGAffineTransform transform) {
+    if (!view || CGAffineTransformEqualToTransform(view.transform, transform)) {
+        return;
+    }
+
+    [UIView performWithoutAnimation:^{
+      [CATransaction begin];
+      [CATransaction setDisableActions:YES];
+      view.transform = transform;
+      [CATransaction commit];
+    }];
+}
+
+// 绕左边缘缩放并叠加平移：左缘默认不动，可再叠加受控的 extraTx
+static void DYYYApplyLeftAlignedScaleAndOffsetXY(UIView *view, CGFloat scale, CGFloat extraTx, CGFloat verticalOffset) {
+    if (!view) {
+        return;
+    }
+
+    BOOL shouldScale = scale > 0.0 && fabs(scale - 1.0) > 0.0001;
+    if (!shouldScale) {
+        if (fabs(extraTx) <= 0.0001 && fabs(verticalOffset) <= 0.0001) {
+            DYYYSetViewTransformWithoutAnimation(view, CGAffineTransformIdentity);
+        } else {
+            DYYYSetViewTransformWithoutAnimation(view, CGAffineTransformMakeTranslation(extraTx, verticalOffset));
+        }
+        return;
+    }
+
+    CGFloat width = CGRectGetWidth(view.bounds);
+    if (width <= 0.0) {
+        return;
+    }
+
+    CGFloat leftTx = -width * (1.0 - scale) / 2.0 + extraTx;
+    DYYYSetViewTransformWithoutAnimation(view, CGAffineTransformMake(scale, 0.0, 0.0, scale, leftTx, verticalOffset));
+}
+
+static void DYYYApplyLeftAlignedScaleAndOffset(UIView *view, CGFloat scale, CGFloat verticalOffset) {
+    DYYYApplyLeftAlignedScaleAndOffsetXY(view, scale, 0.0, verticalOffset);
+}
+
+static BOOL DYYYIsNicknameElementClassName(NSString *elementClassName) {
+    return [elementClassName isEqualToString:@"AWEPlayInteractionAuthorElement"] ||
+           [elementClassName isEqualToString:@"AWEPlayInteractionStandardAuthorElement"];
+}
+
+static BOOL DYYYIsDanmakuElementClassName(NSString *elementClassName) {
+    return [elementClassName isEqualToString:@"AWEPlayInteractionDanmakuElement"];
+}
+
+// 仅识别明确的左侧昵称附属块；禁止过宽模糊匹配，避免误伤其它元素导致乱飞
+static BOOL DYYYIsAnchorElementClassName(NSString *elementClassName) {
+    if (elementClassName.length == 0) {
+        return NO;
+    }
+    if (![elementClassName hasPrefix:@"AWEPlayInteraction"]) {
+        return NO;
+    }
+    return [elementClassName containsString:@"Anchor"] || [elementClassName containsString:@"POI"] ||
+           [elementClassName containsString:@"Sticker"] || [elementClassName containsString:@"Chapter"] ||
+           [elementClassName containsString:@"RecommendToFeed"] || [elementClassName containsString:@"MultiQueue"] ||
+           [elementClassName containsString:@"EffectDetail"] || [elementClassName containsString:@"SocialTags"] ||
+           [elementClassName containsString:@"DistanceTag"] || [elementClassName containsString:@"TagsElement"] ||
+           [elementClassName containsString:@"DarenCard"] || [elementClassName containsString:@"ECommerce"] ||
+           [elementClassName containsString:@"GoodsCard"] || [elementClassName containsString:@"GoodsElement"];
+}
+
+static BOOL DYYYIsNicknameFollowElementClassName(NSString *elementClassName) {
+    return DYYYIsAnchorElementClassName(elementClassName) || DYYYIsDanmakuElementClassName(elementClassName);
+}
+
+static BOOL DYYYIsShopFollowElementClassName(NSString *elementClassName) {
+    if (elementClassName.length == 0) {
+        return NO;
+    }
+    return [elementClassName containsString:@"ECommerce"] || [elementClassName containsString:@"DarenCard"] ||
+           [elementClassName containsString:@"GoodsCard"] || [elementClassName containsString:@"GoodsElement"];
+}
+
+static NSArray<NSString *> *DYYYAnchorContentClassNames(void) {
+    static NSArray<NSString *> *names = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      names = @[
+          @"AWEFeedAnchorContainerView", @"AWEPlayInteractionSearchAnchorView", @"AWEFeedTemplateAnchorView",
+          @"AWEFeedTemplateAnchorViewV2", @"AWEPOIEntryAnchorView", @"AWEPOITradeEntryAnchorView"
+      ];
+    });
+    return names;
+}
+
+static NSArray<NSString *> *DYYYShopContentClassNames(void) {
+    static NSArray<NSString *> *names = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      names = @[ @"AWEECommerceEntryView" ];
+    });
+    return names;
+}
+
+static NSArray<UIView *> *DYYYShopContentViewsInContainer(UIView *container) {
+    if (!container) {
+        return @[];
+    }
+    NSMutableArray<UIView *> *shopViews = [NSMutableArray array];
+    for (NSString *className in DYYYShopContentClassNames()) {
+        Class shopClass = NSClassFromString(className);
+        if (!shopClass) {
+            continue;
+        }
+        if ([container isKindOfClass:shopClass]) {
+            [shopViews addObject:container];
+        }
+        [shopViews addObjectsFromArray:[DYYYUtils findAllSubviewsOfClass:shopClass inContainer:container]];
+    }
+    return shopViews;
+}
+
+static NSArray<UIView *> *DYYYAnchorContentViewsInContainer(UIView *container) {
+    if (!container) {
+        return @[];
+    }
+
+    NSMutableArray<UIView *> *anchorViews = [NSMutableArray array];
+    for (NSString *className in DYYYAnchorContentClassNames()) {
+        Class anchorClass = NSClassFromString(className);
+        if (!anchorClass) {
+            continue;
+        }
+        if ([container isKindOfClass:anchorClass]) {
+            [anchorViews addObject:container];
+        }
+        [anchorViews addObjectsFromArray:[DYYYUtils findAllSubviewsOfClass:anchorClass inContainer:container]];
+    }
+    return anchorViews;
+}
+
+// 锚点被隐藏时不跟随（隐藏视频锚点开关、隐藏定位导致容器 hidden、或整体不可见）
+static BOOL DYYYShouldSkipAnchorFollowLayout(UIView *target) {
+    if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+        return YES;
+    }
+    if (!target || target.hidden || target.alpha <= 0.01 || CGRectIsEmpty(target.bounds)) {
+        return YES;
+    }
+
+    NSArray<UIView *> *anchorViews = DYYYAnchorContentViewsInContainer(target);
+    if (anchorViews.count == 0) {
+        return NO;
+    }
+
+    for (UIView *anchorView in anchorViews) {
+        if (!anchorView.hidden && anchorView.alpha > 0.01 && !CGRectIsEmpty(anchorView.bounds)) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
+static BOOL DYYYShouldSkipDanmakuFollowLayout(UIView *target) {
+    if (DYYYGetBool(@"DYYYHideDanmuButton")) {
+        return YES;
+    }
+    return !target || target.hidden || target.alpha <= 0.01 || CGRectIsEmpty(target.bounds);
+}
+
+static UIView *DYYYFindParentElementStackView(UIView *view) {
+    Class stackClass = %c(AWEElementStackView);
+    for (UIView *ancestor = view; ancestor; ancestor = ancestor.superview) {
+        if (stackClass && [ancestor isKindOfClass:stackClass]) {
+            return ancestor;
+        }
+    }
+    return nil;
+}
+
+static NSString *DYYYReportedElementClassName(UIView *view);
+static NSString *DYYYLeftStackElementClassNameForSubview(UIView *sub);
+
+// 截断相邻两项的相对偏移，使缩放后的可视区域不重叠（不额外外推，只削弱相向侵占）
+// minGap：基础 1pt 间隙，随属地缩放变为 1*属地缩放（如 0.8 → 0.8pt）
+static void DYYYClampAdjacentVerticalPair(CGFloat upperMinY, CGFloat upperMaxY, CGFloat upperScale, CGFloat *upperOffset,
+                                          CGFloat lowerMinY, CGFloat lowerMaxY, CGFloat lowerScale, CGFloat *lowerOffset,
+                                          CGFloat minGap) {
+    if (!upperOffset || !lowerOffset) {
+        return;
+    }
+
+    CGFloat upperHeight = upperMaxY - upperMinY;
+    CGFloat lowerHeight = lowerMaxY - lowerMinY;
+    if (upperHeight <= 0.0 || lowerHeight <= 0.0) {
+        return;
+    }
+
+    if (minGap < 0.0) {
+        minGap = 0.0;
+    }
+
+    CGFloat maxUpperMinusLower =
+        (lowerMinY + lowerHeight * (1.0 - lowerScale) / 2.0) - (upperMaxY - upperHeight * (1.0 - upperScale) / 2.0) - minGap;
+    CGFloat excess = (*upperOffset - *lowerOffset) - maxUpperMinusLower;
+    if (excess <= 0.0) {
+        return;
+    }
+
+    BOOL upperMovedDown = *upperOffset > 0.0;
+    BOOL lowerMovedUp = *lowerOffset < 0.0;
+    if (upperMovedDown && lowerMovedUp) {
+        CGFloat upperShare = excess * 0.5;
+        *upperOffset -= upperShare;
+        *lowerOffset += (excess - upperShare);
+    } else if (upperMovedDown) {
+        *upperOffset -= excess;
+    } else if (lowerMovedUp) {
+        *lowerOffset += excess;
+    } else {
+        *upperOffset -= excess;
+    }
+}
+
+static BOOL DYYYLeftStackTextItemIsUsable(UIView *view) {
+    return view && !view.hidden && view.alpha > 0.01 && !CGRectIsEmpty(view.bounds) && CGRectGetHeight(view.frame) > 0.5;
+}
+
+// 基于左侧栏未变换 frame，对昵称/文案/属地的 Y 偏移做自动防重叠截断
+static void DYYYClampLeftTextVerticalOffsets(UIView *stackView, CGFloat *nickOffset, CGFloat *descOffset, CGFloat *ipOffset) {
+    if (nickOffset) {
+        *nickOffset = DYYYGetNicknameVerticalOffset();
+    }
+    if (descOffset) {
+        *descOffset = DYYYGetDescriptionVerticalOffset();
+    }
+    if (ipOffset) {
+        *ipOffset = DYYYGetUserVerticalOffsetY(@"DYYYIPLabelVerticalOffset");
+    }
+    if (!stackView || !nickOffset || !descOffset || !ipOffset) {
+        return;
+    }
+
+    UIView *nicknameView = nil;
+    UIView *descriptionView = nil;
+    UIView *ipView = nil;
+    NSMutableArray<UIView *> *measuredViews = [NSMutableArray array];
+    NSMutableArray<NSValue *> *savedTransforms = [NSMutableArray array];
+
+    for (UIView *sub in [stackView.subviews copy]) {
+        NSString *className = DYYYReportedElementClassName(sub);
+        if (className.length == 0) {
+            className = DYYYLeftStackElementClassNameForSubview(sub);
+        }
+        if (DYYYIsNicknameElementClassName(className)) {
+            nicknameView = sub;
+        } else if ([className isEqualToString:@"AWEPlayInteractionDescriptionElement"]) {
+            descriptionView = sub;
+        } else if ([className isEqualToString:@"AWEPlayInteractionTimestampElement"]) {
+            ipView = sub;
+        }
+    }
+
+    void (^prepareMeasure)(UIView *) = ^(UIView *view) {
+        if (!view) {
+            return;
+        }
+        [measuredViews addObject:view];
+        [savedTransforms addObject:[NSValue valueWithCGAffineTransform:view.transform]];
+        DYYYSetViewTransformWithoutAnimation(view, CGAffineTransformIdentity);
+    };
+    prepareMeasure(nicknameView);
+    prepareMeasure(descriptionView);
+    prepareMeasure(ipView);
+
+    BOOL hasNickname = DYYYLeftStackTextItemIsUsable(nicknameView);
+    BOOL hasDescription = DYYYLeftStackTextItemIsUsable(descriptionView);
+    BOOL hasIP = DYYYLeftStackTextItemIsUsable(ipView);
+
+    CGFloat nickScale = DYYYScaleValueForKey(@"DYYYNicknameScale");
+    CGFloat descScale = DYYYScaleValueForKey(@"DYYYDescriptionScale");
+    CGFloat ipScale = DYYYScaleValueForKey(@"DYYYIPLabelScale");
+    CGFloat minGap = 1.0 * ipScale; // 默认 1pt，随属地缩放（0.8 → 0.8pt）
+
+    for (NSInteger pass = 0; pass < 4; pass++) {
+        if (hasNickname && hasDescription) {
+            if (CGRectGetMinY(nicknameView.frame) <= CGRectGetMinY(descriptionView.frame)) {
+                DYYYClampAdjacentVerticalPair(CGRectGetMinY(nicknameView.frame), CGRectGetMaxY(nicknameView.frame), nickScale, nickOffset,
+                                              CGRectGetMinY(descriptionView.frame), CGRectGetMaxY(descriptionView.frame), descScale, descOffset,
+                                              minGap);
+            } else {
+                DYYYClampAdjacentVerticalPair(CGRectGetMinY(descriptionView.frame), CGRectGetMaxY(descriptionView.frame), descScale, descOffset,
+                                              CGRectGetMinY(nicknameView.frame), CGRectGetMaxY(nicknameView.frame), nickScale, nickOffset,
+                                              minGap);
+            }
+        }
+        if (hasDescription && hasIP) {
+            if (CGRectGetMinY(descriptionView.frame) <= CGRectGetMinY(ipView.frame)) {
+                DYYYClampAdjacentVerticalPair(CGRectGetMinY(descriptionView.frame), CGRectGetMaxY(descriptionView.frame), descScale, descOffset,
+                                              CGRectGetMinY(ipView.frame), CGRectGetMaxY(ipView.frame), ipScale, ipOffset, minGap);
+            } else {
+                DYYYClampAdjacentVerticalPair(CGRectGetMinY(ipView.frame), CGRectGetMaxY(ipView.frame), ipScale, ipOffset,
+                                              CGRectGetMinY(descriptionView.frame), CGRectGetMaxY(descriptionView.frame), descScale, descOffset,
+                                              minGap);
+            }
+        } else if (hasNickname && hasIP) {
+            if (CGRectGetMinY(nicknameView.frame) <= CGRectGetMinY(ipView.frame)) {
+                DYYYClampAdjacentVerticalPair(CGRectGetMinY(nicknameView.frame), CGRectGetMaxY(nicknameView.frame), nickScale, nickOffset,
+                                              CGRectGetMinY(ipView.frame), CGRectGetMaxY(ipView.frame), ipScale, ipOffset, minGap);
+            } else {
+                DYYYClampAdjacentVerticalPair(CGRectGetMinY(ipView.frame), CGRectGetMaxY(ipView.frame), ipScale, ipOffset,
+                                              CGRectGetMinY(nicknameView.frame), CGRectGetMaxY(nicknameView.frame), nickScale, nickOffset,
+                                              minGap);
+            }
+        }
+    }
+
+    for (NSUInteger i = 0; i < measuredViews.count; i++) {
+        DYYYSetViewTransformWithoutAnimation(measuredViews[i], savedTransforms[i].CGAffineTransformValue);
+    }
+}
+
+// Y 轴偏移会把内容移出祖先视图的可视区域，若祖先开启了 clipsToBounds 就会出现“文案消失/被遮挡”
+static void DYYYDisableClippingForElementLayout(UIView *view) {
+    Class stackClass = %c(AWEElementStackView);
+    for (UIView *ancestor = view; ancestor; ancestor = ancestor.superview) {
+        if (ancestor.clipsToBounds) {
+            ancestor.clipsToBounds = NO;
+        }
+        if (stackClass && [ancestor isKindOfClass:stackClass]) {
+            break;
+        }
+    }
+}
+
+static NSString *DYYYReportedElementClassName(UIView *view) {
+    if (![view respondsToSelector:@selector(elementClassName)]) {
+        return nil;
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+    return [view performSelector:@selector(elementClassName)];
+#pragma clang diagnostic pop
+}
+
+// 变换目标优先取左侧栏“元素块”：既不会被内部 ScrollView 裁剪，也能整块左对齐
+static void DYYYResolveElementLayoutTargets(UIView *view, UIView **outArranged, UIView **outElementBlock) {
+    *outArranged = nil;
+    *outElementBlock = nil;
+    if (!view) {
+        return;
+    }
+
+    Class stackClass = %c(AWEElementStackView);
+    Class baseElementClass = %c(AWEBaseElementView);
+
+    for (UIView *ancestor = view; ancestor; ancestor = ancestor.superview) {
+        if (!*outElementBlock && baseElementClass && [ancestor isKindOfClass:baseElementClass]) {
+            *outElementBlock = ancestor;
+        }
+        if (stackClass && [ancestor.superview isKindOfClass:stackClass]) {
+            *outArranged = ancestor;
+            break;
+        }
+        if (stackClass && [ancestor isKindOfClass:stackClass]) {
+            break;
+        }
+    }
+
+    if (!*outElementBlock) {
+        *outElementBlock = *outArranged ?: view;
+    }
+}
+
+// 元素类名 -> 对应的缩放键与 Y 轴偏移；由“元素块自身类名”决定，保证三者互不抢同一容器
+static BOOL DYYYLayoutSettingsForElementClassName(NSString *elementClassName, NSString **outScaleKey, CGFloat *outVerticalOffset) {
+    if (elementClassName.length == 0) {
+        return NO;
+    }
+
+    if (DYYYIsNicknameElementClassName(elementClassName)) {
+        *outScaleKey = @"DYYYNicknameScale";
+        *outVerticalOffset = DYYYGetNicknameVerticalOffset();
+        return YES;
+    }
+    // 锚点/弹幕：共用昵称缩放；最终 Y = 昵称 Y + 默认间距按缩放比例补偿
+    if (DYYYIsNicknameFollowElementClassName(elementClassName)) {
+        *outScaleKey = @"DYYYNicknameScale";
+        *outVerticalOffset = 0.0;
+        return YES;
+    }
+    if ([elementClassName isEqualToString:@"AWEPlayInteractionDescriptionElement"]) {
+        *outScaleKey = @"DYYYDescriptionScale";
+        *outVerticalOffset = DYYYGetDescriptionVerticalOffset();
+        return YES;
+    }
+    if ([elementClassName isEqualToString:@"AWEPlayInteractionTimestampElement"]) {
+        *outScaleKey = @"DYYYIPLabelScale";
+        *outVerticalOffset = DYYYGetUserVerticalOffsetY(@"DYYYIPLabelVerticalOffset");
+        return YES;
+    }
+    return NO;
+}
+
+static UIView *DYYYFindNicknameArrangedViewInStack(UIView *stackView) {
+    if (!stackView) {
+        return nil;
+    }
+
+    Class userNameLabelClass = %c(AWEUserNameLabel);
+    for (UIView *sub in [stackView.subviews copy]) {
+        NSString *className = DYYYReportedElementClassName(sub);
+        if (className.length == 0) {
+            className = DYYYLeftStackElementClassNameForSubview(sub);
+        }
+        if (DYYYIsNicknameElementClassName(className)) {
+            return sub;
+        }
+        if (userNameLabelClass && [DYYYUtils containsSubviewOfClass:userNameLabelClass inContainer:sub]) {
+            return sub;
+        }
+    }
+    return nil;
+}
+
+// 以昵称左上角为组缩放原点：相对位移 * scale → 间距变为默认间距*scale。
+// 宽条（拍同款等）也必须做纵向组缩放；仅横向补偿对小块收紧并加硬帽。
+static void DYYYNicknameFollowGroupTransform(UIView *followView, UIView *nicknameView, CGFloat scale, CGFloat nicknameVerticalOffset,
+                                             CGFloat *outExtraTx, CGFloat *outVerticalOffset) {
+    if (outExtraTx) {
+        *outExtraTx = 0.0;
+    }
+    if (outVerticalOffset) {
+        *outVerticalOffset = nicknameVerticalOffset;
+    }
+    if (!followView || !nicknameView) {
+        return;
+    }
+    if (!(scale > 0.0)) {
+        scale = 1.0;
+    }
+
+    UIView *followStack = DYYYFindParentElementStackView(followView);
+    UIView *nickStack = DYYYFindParentElementStackView(nicknameView);
+    if (!followStack || followStack != nickStack || followView.superview != followStack) {
+        return;
+    }
+
+    CGAffineTransform savedFollow = followView.transform;
+    CGAffineTransform savedNickname = nicknameView.transform;
+    DYYYSetViewTransformWithoutAnimation(followView, CGAffineTransformIdentity);
+    DYYYSetViewTransformWithoutAnimation(nicknameView, CGAffineTransformIdentity);
+
+    CGFloat followMinX = CGRectGetMinX(followView.frame);
+    CGFloat followMinY = CGRectGetMinY(followView.frame);
+    CGFloat followMaxY = CGRectGetMaxY(followView.frame);
+    CGFloat followMidY = CGRectGetMidY(followView.frame);
+    CGFloat followHeight = CGRectGetHeight(followView.frame);
+    CGFloat followWidth = CGRectGetWidth(followView.frame);
+    CGFloat nickMinX = CGRectGetMinX(nicknameView.frame);
+    CGFloat nickMinY = CGRectGetMinY(nicknameView.frame);
+    CGFloat nickMaxY = CGRectGetMaxY(nicknameView.frame);
+    CGFloat nickMidY = CGRectGetMidY(nicknameView.frame);
+    CGFloat nickHeight = CGRectGetHeight(nicknameView.frame);
+
+    DYYYSetViewTransformWithoutAnimation(followView, savedFollow);
+    DYYYSetViewTransformWithoutAnimation(nicknameView, savedNickname);
+
+    if (followHeight <= 0.5 || nickHeight <= 0.5) {
+        return;
+    }
+    // 明确在昵称下方：只跟昵称 Y（店铺等附属锚点在昵称上方，不走下方逻辑）
+    if (followMinY >= nickMaxY - 1.0) {
+        return;
+    }
+    // 高度异常才放弃（宽条如拍同款/店铺必须继续算 Y）
+    if (followHeight > 80.0) {
+        return;
+    }
+
+    CGFloat naturalDx = followMinX - nickMinX;
+    CGFloat naturalDy = followMinY - nickMinY;
+    if (fabs(naturalDy) > 180.0) {
+        return;
+    }
+
+    CGFloat ty = nicknameVerticalOffset;
+    CGFloat extraTx = 0.0;
+
+    // 昵称正上方：默认间距 * scale
+    if (followMaxY <= nickMinY + 1.0) {
+        CGFloat naturalGap = nickMinY - followMaxY;
+        if (naturalGap < 0.0) {
+            naturalGap = 0.0;
+        }
+        if (naturalGap <= 160.0) {
+            CGFloat targetGap = naturalGap * scale;
+            ty = (nickMidY - nickHeight * scale / 2.0 + nicknameVerticalOffset) - targetGap - (followMidY + followHeight * scale / 2.0);
+        }
+    } else {
+        // 同排或轻微相交：组缩放左上
+        CGFloat visualNickMinY = nickMidY - nickHeight * scale / 2.0 + nicknameVerticalOffset;
+        ty = visualNickMinY + naturalDy * scale - (followMidY - followHeight * scale / 2.0);
+    }
+
+    if (fabs(ty - nicknameVerticalOffset) > 120.0) {
+        ty = nicknameVerticalOffset;
+    }
+
+    // 横向：只对昵称左侧的小块（弹幕等）做有限收紧
+    if (followWidth <= 72.0 && naturalDx < 0.0 && fabs(naturalDx) <= 100.0) {
+        extraTx = (1.0 - scale) * (nickMinX - followMinX);
+        if (extraTx < 0.0 || extraTx > 28.0) {
+            extraTx = 0.0;
+        }
+    }
+
+    if (outExtraTx) {
+        *outExtraTx = extraTx;
+    }
+    if (outVerticalOffset) {
+        *outVerticalOffset = ty;
+    }
+}
+
+static void DYYYApplyPlayInteractionElementLayout(UIView *view, NSString *fallbackClassName) {
+    if (!view) {
+        return;
+    }
+
+    UIView *arranged = nil;
+    UIView *elementBlock = nil;
+    DYYYResolveElementLayoutTargets(view, &arranged, &elementBlock);
+
+    NSString *arrangedClassName = DYYYReportedElementClassName(arranged);
+
+    NSString *arrangedScaleKey = nil;
+    CGFloat arrangedOffset = 0.0;
+    BOOL arrangedMapped = DYYYLayoutSettingsForElementClassName(arrangedClassName, &arrangedScaleKey, &arrangedOffset);
+
+    // 定位/特效锚点内容块并入昵称组
+    if (!arrangedMapped && arranged && DYYYAnchorContentViewsInContainer(arranged).count > 0) {
+        arrangedClassName = @"AWEPlayInteractionAnchorElement";
+        arrangedMapped = DYYYLayoutSettingsForElementClassName(arrangedClassName, &arrangedScaleKey, &arrangedOffset);
+    }
+
+    // 弹幕按钮块兜底识别
+    if (!arrangedMapped && arranged) {
+        Class danmakuViewClass = %c(AWEPlayDanmakuInputContainView);
+        if (danmakuViewClass && ([arranged isKindOfClass:danmakuViewClass] ||
+                                 [DYYYUtils containsSubviewOfClass:danmakuViewClass inContainer:arranged])) {
+            arrangedClassName = @"AWEPlayInteractionDanmakuElement";
+            arrangedMapped = DYYYLayoutSettingsForElementClassName(arrangedClassName, &arrangedScaleKey, &arrangedOffset);
+        }
+    }
+
+    // 作者店铺（TA的店铺）兜底识别
+    if (!arrangedMapped && arranged && DYYYShopContentViewsInContainer(arranged).count > 0) {
+        arrangedClassName = @"AWEPlayInteractionECommerceEntryElement";
+        arrangedMapped = DYYYLayoutSettingsForElementClassName(arrangedClassName, &arrangedScaleKey, &arrangedOffset);
+    }
+
+    NSString *fallbackScaleKey = nil;
+    CGFloat fallbackOffset = 0.0;
+    BOOL fallbackMapped = DYYYLayoutSettingsForElementClassName(fallbackClassName, &fallbackScaleKey, &fallbackOffset);
+
+    UIView *target = nil;
+    NSString *scaleKey = nil;
+    NSString *chosenClassName = nil;
+    CGFloat verticalOffset = 0.0;
+
+    if (arrangedMapped && (!fallbackMapped || [arrangedScaleKey isEqualToString:fallbackScaleKey])) {
+        target = arranged;
+        scaleKey = arrangedScaleKey;
+        verticalOffset = arrangedOffset;
+        chosenClassName = arrangedClassName;
+    } else if (fallbackMapped) {
+        target = elementBlock;
+        scaleKey = fallbackScaleKey;
+        verticalOffset = fallbackOffset;
+        chosenClassName = fallbackClassName;
+    } else {
+        return;
+    }
+
+    if (!target) {
+        return;
+    }
+
+    BOOL isNicknameFollow = DYYYIsNicknameFollowElementClassName(chosenClassName) ||
+                            [chosenClassName isEqualToString:@"AWEPlayInteractionAnchorElement"];
+
+    if (DYYYIsDanmakuElementClassName(chosenClassName) && DYYYShouldSkipDanmakuFollowLayout(target)) {
+        DYYYSetViewTransformWithoutAnimation(target, CGAffineTransformIdentity);
+        return;
+    }
+
+    // 隐藏作者店铺时不跟随
+    if (DYYYIsShopFollowElementClassName(chosenClassName) && DYYYGetBool(@"DYYYHideHisShop")) {
+        DYYYSetViewTransformWithoutAnimation(target, CGAffineTransformIdentity);
+        return;
+    }
+
+    // 仅当确认为视频锚点/POI/贴纸内容且应隐藏时跳过；章节/精选/标签/店铺等不受影响
+    if (isNicknameFollow) {
+        BOOL isFeedStyleAnchor = DYYYAnchorContentViewsInContainer(target).count > 0 ||
+                                 [chosenClassName isEqualToString:@"AWEPlayInteractionAnchorElement"] ||
+                                 [chosenClassName containsString:@"POI"] || [chosenClassName containsString:@"Sticker"] ||
+                                 ([chosenClassName containsString:@"Anchor"] && ![chosenClassName containsString:@"Chapter"]);
+        if (isFeedStyleAnchor && DYYYShouldSkipAnchorFollowLayout(target)) {
+            DYYYSetViewTransformWithoutAnimation(target, CGAffineTransformIdentity);
+            return;
+        }
+    }
+
+    // 跟随块必须落在含昵称的左侧 Stack 上，避免误变换其它层级视图
+    if (isNicknameFollow) {
+        UIView *stackView = DYYYFindParentElementStackView(target);
+        UIView *nicknameView = DYYYFindNicknameArrangedViewInStack(stackView);
+        if (!stackView || !nicknameView) {
+            DYYYSetViewTransformWithoutAnimation(target, CGAffineTransformIdentity);
+            return;
+        }
+        if (target.superview != stackView) {
+            UIView *arrangedParent = target;
+            while (arrangedParent && arrangedParent.superview != stackView) {
+                arrangedParent = arrangedParent.superview;
+            }
+            if (!arrangedParent || arrangedParent.superview != stackView) {
+                DYYYSetViewTransformWithoutAnimation(target, CGAffineTransformIdentity);
+                return;
+            }
+            target = arrangedParent;
+        }
+    }
+
+    CGFloat scale = DYYYScaleValueForKey(scaleKey);
+
+    CGFloat clampedNick = DYYYGetNicknameVerticalOffset();
+    CGFloat clampedDesc = DYYYGetDescriptionVerticalOffset();
+    CGFloat clampedIP = DYYYGetUserVerticalOffsetY(@"DYYYIPLabelVerticalOffset");
+    DYYYClampLeftTextVerticalOffsets(DYYYFindParentElementStackView(target), &clampedNick, &clampedDesc, &clampedIP);
+
+    CGFloat extraTx = 0.0;
+    if (isNicknameFollow) {
+        UIView *stackView = DYYYFindParentElementStackView(target);
+        UIView *nicknameView = DYYYFindNicknameArrangedViewInStack(stackView);
+        DYYYNicknameFollowGroupTransform(target, nicknameView, scale, clampedNick, &extraTx, &verticalOffset);
+    } else if ([scaleKey isEqualToString:@"DYYYNicknameScale"]) {
+        verticalOffset = clampedNick;
+    } else if ([scaleKey isEqualToString:@"DYYYDescriptionScale"]) {
+        verticalOffset = clampedDesc;
+    } else if ([scaleKey isEqualToString:@"DYYYIPLabelScale"]) {
+        verticalOffset = clampedIP;
+    }
+
+    if (verticalOffset != 0.0 || fabs(extraTx) > 0.0001 || fabs(scale - 1.0) > 0.0001) {
+        DYYYDisableClippingForElementLayout(target);
+    }
+
+    DYYYApplyLeftAlignedScaleAndOffsetXY(target, scale, extraTx, verticalOffset);
+}
+
+static void DYYYApplyNicknameLayoutToLabel(UIView *label) {
+    if (!label) {
+        return;
+    }
+    UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:label];
+    if (![viewController isKindOfClass:%c(AWEPlayInteractionViewController)]) {
+        return;
+    }
+    DYYYApplyPlayInteractionElementLayout(label, @"AWEPlayInteractionAuthorElement");
+}
+
+static NSString *DYYYLeftStackElementClassNameForSubview(UIView *sub) {
+    NSString *elementClassName = nil;
+    if ([sub respondsToSelector:@selector(elementClassName)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        elementClassName = [sub performSelector:@selector(elementClassName)];
+#pragma clang diagnostic pop
+    }
+
+    if (elementClassName.length > 0) {
+        return elementClassName;
+    }
+
+    Class userNameLabelClass = %c(AWEUserNameLabel);
+    if (userNameLabelClass && [DYYYUtils containsSubviewOfClass:userNameLabelClass inContainer:sub]) {
+        return @"AWEPlayInteractionAuthorElement";
+    }
+
+    Class danmakuViewClass = %c(AWEPlayDanmakuInputContainView);
+    if (danmakuViewClass && ([sub isKindOfClass:danmakuViewClass] || [DYYYUtils containsSubviewOfClass:danmakuViewClass inContainer:sub])) {
+        return @"AWEPlayInteractionDanmakuElement";
+    }
+
+    if (DYYYShopContentViewsInContainer(sub).count > 0) {
+        return @"AWEPlayInteractionECommerceEntryElement";
+    }
+
+    if (DYYYAnchorContentViewsInContainer(sub).count > 0) {
+        return @"AWEPlayInteractionAnchorElement";
+    }
+    return nil;
+}
+
+// Stack 排版会读取子视图 frame，而 frame 受 transform 影响。布局前必须先恢复 Identity，
+// 否则昵称的位移会带动文案/属地，并因反复读取形成上下抖动。
+static void DYYYResetPlayInteractionLeftStackElementTransforms(UIView *stackView) {
+    if (!stackView) {
+        return;
+    }
+
+    Class baseElementClass = %c(AWEBaseElementView);
+    for (UIView *sub in [stackView.subviews copy]) {
+        DYYYSetViewTransformWithoutAnimation(sub, CGAffineTransformIdentity);
+
+        if (!baseElementClass) {
+            continue;
+        }
+        for (UIView *nested in [DYYYUtils findAllSubviewsOfClass:baseElementClass inContainer:sub]) {
+            DYYYSetViewTransformWithoutAnimation(nested, CGAffineTransformIdentity);
+        }
+    }
+}
+
+static void DYYYApplyPlayInteractionLeftStackElementTransforms(UIView *stackView) {
+    if (!stackView) {
+        return;
+    }
+
+    stackView.transform = CGAffineTransformIdentity;
+    for (UIView *sub in [stackView.subviews copy]) {
+        DYYYApplyPlayInteractionElementLayout(sub, DYYYLeftStackElementClassNameForSubview(sub));
+    }
+}
+
+static BOOL DYYYStackViewContainsScalableLeftElement(UIView *stackView) {
+    Class userNameLabelClass = %c(AWEUserNameLabel);
+    Class danmakuViewClass = %c(AWEPlayDanmakuInputContainView);
+    return DYYYStackViewContainsElementClassName(stackView, @"AWEPlayInteractionAuthorElement") ||
+           DYYYStackViewContainsElementClassName(stackView, @"AWEPlayInteractionStandardAuthorElement") ||
+           DYYYStackViewContainsElementClassName(stackView, @"AWEPlayInteractionDescriptionElement") ||
+           DYYYStackViewContainsElementClassName(stackView, @"AWEPlayInteractionTimestampElement") ||
+           DYYYStackViewContainsElementClassName(stackView, @"AWEPlayInteractionDanmakuElement") ||
+           DYYYStackViewContainsElementClassName(stackView, @"AWEPlayInteractionECommerceEntryElement") ||
+           DYYYAnchorContentViewsInContainer(stackView).count > 0 || DYYYShopContentViewsInContainer(stackView).count > 0 ||
+           (danmakuViewClass && [DYYYUtils containsSubviewOfClass:danmakuViewClass inContainer:stackView]) ||
+           (userNameLabelClass && [DYYYUtils containsSubviewOfClass:userNameLabelClass inContainer:stackView]);
+}
+
+static void DYYYApplyPlayInteractionElementLayoutFromElement(id element, NSString *fallbackClassName) {
+    UIView *elementView = DYYYRawElementViewFromElement(element);
+    if (!elementView) {
+        return;
+    }
+
+    DYYYApplyPlayInteractionElementLayout(elementView, fallbackClassName);
+}
+
 %hook AWEPlayInteractionTimestampElement
 
 - (id)timestampLabel {
@@ -4021,6 +6750,7 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
     if (cityCode.length == 0 && regionCode.length == 0) {
         updateLabelWithLocation(label, @"未知地区");
+        DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionTimestampElement");
         return label;
     }
 
@@ -4029,21 +6759,11 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     NSString *cachedLocation = [locationCache objectForKey:cacheKey];
     if (cachedLocation) {
         updateLabelWithLocation(label, cachedLocation);
-
-        NSString *ipScaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameScale"];
-        if (ipScaleValue.length > 0) {
-            UIFont *originalFont = label.font;
-            CGFloat offset = DYYYGetFloat(@"DYYYIPLabelVerticalOffset");
-            if (offset > 0) {
-                label.transform = CGAffineTransformMakeTranslation(0, -offset);
-            } else {
-                label.transform = CGAffineTransformMakeTranslation(0, -3);
-            }
-            label.font = originalFont;
-        }
+        DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionTimestampElement");
         return label;
     }
 
+    __weak __typeof(self) weakSelf = self;
     NSString *displayLocation = nil;
 
     if (cityCode.length > 0) {
@@ -4110,6 +6830,7 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
                             updateLabelWithLocation(label, fallbackCountry);
                         }
                     }
+                    DYYYApplyPlayInteractionElementLayoutFromElement(weakSelf, @"AWEPlayInteractionTimestampElement");
                 });
             }];
 
@@ -4124,24 +6845,19 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     if (!displayLocation) {
         displayLocation = @"未知地区";
         updateLabelWithLocation(label, displayLocation);
+        DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionTimestampElement");
         return label;
     }
 
     [locationCache setObject:displayLocation forKey:cacheKey];
     updateLabelWithLocation(label, displayLocation);
-
-    NSString *ipScaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameScale"];
-    if (ipScaleValue.length > 0) {
-        UIFont *originalFont = label.font;
-        CGFloat offset = DYYYGetFloat(@"DYYYIPLabelVerticalOffset");
-        if (offset > 0) {
-            label.transform = CGAffineTransformMakeTranslation(0, -offset);
-        } else {
-            label.transform = CGAffineTransformMakeTranslation(0, -3);
-        }
-        label.font = originalFont;
-    }
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionTimestampElement");
     return label;
+}
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionTimestampElement");
 }
 
 + (BOOL)shouldActiveWithData:(id)arg1 context:(id)arg2 {
@@ -4209,26 +6925,6 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 - (void)layoutSubviews {
     %orig;
-
-    self.transform = CGAffineTransformIdentity;
-
-    NSString *descriptionOffsetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDescriptionVerticalOffset"];
-    CGFloat verticalOffset = 0;
-    if (descriptionOffsetValue.length > 0) {
-        verticalOffset = [descriptionOffsetValue floatValue];
-    }
-
-    UIView *parentView = self.superview;
-    UIView *grandParentView = nil;
-
-    if (parentView) {
-        grandParentView = parentView.superview;
-    }
-
-    if (grandParentView && verticalOffset != 0) {
-        CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(0, verticalOffset);
-        grandParentView.transform = translationTransform;
-    }
 }
 
 %end
@@ -4296,7 +6992,6 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 %new
 - (void)handleHighPriorityLongPress:(UILongPressGestureRecognizer *)gestureRecognizer {
     if (gestureRecognizer.state == UIGestureRecognizerStateBegan) {
-
         NSString *description = self.text;
 
         if (description.length > 0) {
@@ -4308,26 +7003,6 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 - (void)layoutSubviews {
     %orig;
-
-    self.transform = CGAffineTransformIdentity;
-
-    NSString *descriptionOffsetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDescriptionVerticalOffset"];
-    CGFloat verticalOffset = 0;
-    if (descriptionOffsetValue.length > 0) {
-        verticalOffset = [descriptionOffsetValue floatValue];
-    }
-
-    UIView *parentView = self.superview;
-    UIView *grandParentView = nil;
-
-    if (parentView) {
-        grandParentView = parentView.superview;
-    }
-
-    if (grandParentView && verticalOffset != 0) {
-        CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(0, verticalOffset);
-        grandParentView.transform = translationTransform;
-    }
 }
 
 %end
@@ -4336,30 +7011,154 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 - (void)layoutSubviews {
     %orig;
+    DYYYApplyNicknameLayoutToLabel(self);
+}
 
-    self.transform = CGAffineTransformIdentity;
+%end
 
-    // 添加垂直偏移支持
-    NSString *verticalOffsetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameVerticalOffset"];
-    CGFloat verticalOffset = 0;
-    if (verticalOffsetValue.length > 0) {
-        verticalOffset = [verticalOffsetValue floatValue];
+%hook AWEPlayInteractionStandardAuthorNamePlugin
+
+- (void)authorElement_didLayout {
+    %orig;
+
+    if ([self respondsToSelector:@selector(authorLabel)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        UIView *authorLabel = [self performSelector:@selector(authorLabel)];
+#pragma clang diagnostic pop
+        DYYYApplyNicknameLayoutToLabel(authorLabel);
     }
+}
 
-    UIView *parentView = self.superview;
-    UIView *grandParentView = nil;
+%end
 
-    if (parentView) {
-        grandParentView = parentView.superview;
+%hook AWEPlayInteractionAuthorElement
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionAuthorElement");
+}
+
+%end
+
+%hook AWEPlayInteractionStandardAuthorElement
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionStandardAuthorElement");
+}
+
+%end
+
+%hook AWEPlayInteractionDescriptionElement
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionDescriptionElement");
+}
+
+%end
+
+%hook AWEPlayInteractionDanmakuElement
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionDanmakuElement");
+}
+
+%end
+
+%hook AWEPlayInteractionChapterElement
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionChapterElement");
+}
+
+%end
+
+%hook AWEPlayInteractionRecommendToFeedCardLabelElement
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionRecommendToFeedCardLabelElement");
+}
+
+%end
+
+%hook AWEPlayInteractionTagsElement
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionTagsElement");
+}
+
+%end
+
+%hook AWEPlayInteractionTagsElementV2
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionTagsElementV2");
+}
+
+%end
+
+%hook AWEPlayInteractionMultiQueueLabelElement
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionMultiQueueLabelElement");
+}
+
+%end
+
+%hook AWEPlayInteractionEffectDetailLeftElement
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionEffectDetailLeftElement");
+}
+
+%end
+
+%hook AWEPlayInteractionECommerceEntryElement
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionECommerceEntryElement");
+}
+
+%end
+
+%hook AWEPlayInteractionDarenCardLeftElement
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionDarenCardLeftElement");
+}
+
+%end
+
+%hook AWEPlayInteractionGoodsCardElement
+
+- (void)layoutElementView {
+    %orig;
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionGoodsCardElement");
+}
+
+%end
+
+%hook AWEECommerceEntryView
+
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideHisShop")) {
+        return;
     }
-
-    // 检查祖父视图是否为 AWEBaseElementView 类型
-    if (grandParentView && [grandParentView.superview isKindOfClass:%c(AWEBaseElementView)]) {
-        CGRect scaledFrame = grandParentView.frame;
-        CGFloat translationX = -scaledFrame.origin.x;
-
-        CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(translationX, verticalOffset);
-        grandParentView.transform = translationTransform;
+    UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
+    if ([viewController isKindOfClass:%c(AWEPlayInteractionViewController)]) {
+        DYYYApplyPlayInteractionElementLayout(self, @"AWEPlayInteractionECommerceEntryElement");
     }
 }
 
@@ -4379,6 +7178,13 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
                 nameString = func(self, @selector(imageNameString));
             }
         }
+	}
+
+    BOOL isCollectButton = DYYYIsFeedVideoCollectButton(self) || DYYYFeedVideoCollectKeywordMatches(nameString);
+    if (isCollectButton && DYYYFeedVideoCollectButtonHideEnabled()) {
+        DYYYMarkFeedVideoCollectButtonViewHidden(self);
+        %orig(nil);
+        return;
     }
 
     NSString *customFileName = DYYYCustomIconFileNameForButtonName(nameString);
@@ -4387,16 +7193,18 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
         if (customImage) {
             imageToApply = customImage;
         }
-    }
+	}
 
     %orig(imageToApply);
+    if (isCollectButton) {
+        DYYYApplyFeedVideoCollectButtonSettingsWithRetry(self);
+    }
 }
 
 %end
 
 %hook AWENormalModeTabBarGeneralPlusButton
 - (void)setImage:(UIImage *)image forState:(UIControlState)state {
-
     UIImage *imageToApply = image;
     if ([self.accessibilityLabel isEqualToString:@"拍摄"]) {
         UIImage *customImage = DYYYLoadCustomImage(@"tab_plus.png", CGSizeZero);
@@ -4428,26 +7236,27 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 %end
 
 // 屏蔽版本更新
+%group DYYYLoginBypassVersionUpdateManager
+
 %hook AWEVersionUpdateManager
 
 - (void)startVersionUpdateWorkflow:(id)arg1 completion:(id)arg2 {
-    if (DYYYGetBool(@"DYYYNoUpdates")) {
-        if (arg2) {
-            void (^completionBlock)(void) = arg2;
-            completionBlock();
-        }
+    if (DYYYShouldBlockVersionUpdateWorkflow()) {
+        DYYYLoginBypassInvokeCloseCallback(arg2);
     } else {
         %orig;
     }
 }
 
 - (id)workflow {
-    return DYYYGetBool(@"DYYYNoUpdates") ? nil : %orig;
+    return DYYYShouldBlockVersionUpdateWorkflow() ? nil : %orig;
 }
 
 - (id)badgeModule {
-    return DYYYGetBool(@"DYYYNoUpdates") ? nil : %orig;
+    return DYYYShouldBlockVersionUpdateWorkflow() ? nil : %orig;
 }
+
+%end
 
 %end
 
@@ -4959,150 +7768,410 @@ static NSArray<NSString *> *dyyy_qualityRank = nil;
 
 %end
 
-%hook AWEPlayInteractionSpeedController
+static char kDYYYLongPressVerticalActiveKey;
+static char kDYYYLongPressVerticalInitialYKey;
+static char kDYYYLongPressVerticalCurrentSpeedKey;
+static __thread BOOL dyyyNativeLockCompletionActive = NO;
 
-static CGFloat currentLongPressSpeed = 0;
-static CGFloat initialTouchX = 0;
-static BOOL isGestureActive = NO;
-
-- (CGFloat)longPressFastSpeedValue {
-    float longPressSpeed = DYYYGetFloat(@"DYYYLongPressSpeed");
-    if (longPressSpeed == 0) {
-        longPressSpeed = 2.0;
-    }
-    return longPressSpeed;
+static BOOL DYYYLongPressGestureIsEnding(UIGestureRecognizerState state) {
+    return state == UIGestureRecognizerStateEnded ||
+           state == UIGestureRecognizerStateCancelled ||
+           state == UIGestureRecognizerStateFailed;
 }
 
+static double DYYYConfiguredLongPressPlaybackSpeed(void) {
+    id configuredValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYLongPressSpeed"];
+    double configuredSpeed = [configuredValue doubleValue];
+    return configuredValue && isfinite(configuredSpeed) && configuredSpeed > 0.0
+               ? configuredSpeed
+               : 0.0;
+}
+
+static NSString *DYYYFormattedPlaybackSpeed(double speed) {
+    if (fabs(speed - round(speed)) <= 0.0001) {
+        return [NSString stringWithFormat:@"%.0f", speed];
+    }
+    if (fabs(speed * 10.0 - round(speed * 10.0)) <= 0.0001) {
+        return [NSString stringWithFormat:@"%.1f", speed];
+    }
+    return [NSString stringWithFormat:@"%.2f", speed];
+}
+
+static NSString *DYYYAdjustedNativeLongPressSpeedHint(NSString *text) {
+    if (![text isKindOfClass:[NSString class]] || text.length == 0) {
+        return text;
+    }
+
+    double targetSpeed = 0.0;
+    if ([text containsString:@"锁定"]) {
+        targetSpeed = DYYYConfiguredLongPressPlaybackSpeed();
+    } else if ([text containsString:@"取消"]) {
+        float lockedSpeed = 0.0f;
+        targetSpeed = DYYYNativeLockedPlaybackSpeed(&lockedSpeed)
+                          ? lockedSpeed
+                          : DYYYConfiguredLongPressPlaybackSpeed();
+    } else if ([text containsString:@"恢复"]) {
+        // 与官方下滑取消一致：恢复目标是默认倍速，而不是快捷倍速按钮的非 1x 会话值。
+        targetSpeed = DYYYConfiguredDefaultPlaybackSpeed();
+    }
+    if (!isfinite(targetSpeed) || targetSpeed <= 0.0) {
+        return text;
+    }
+
+    NSRange speedUnitRange = [text rangeOfString:@"倍速" options:NSBackwardsSearch];
+    if (speedUnitRange.location == NSNotFound) {
+        return text;
+    }
+
+    NSUInteger numberEnd = speedUnitRange.location;
+    while (numberEnd > 0 &&
+           [[NSCharacterSet whitespaceCharacterSet] characterIsMember:[text characterAtIndex:numberEnd - 1]]) {
+        numberEnd--;
+    }
+
+    NSUInteger numberStart = numberEnd;
+    while (numberStart > 0) {
+        unichar character = [text characterAtIndex:numberStart - 1];
+        if ((character >= '0' && character <= '9') || character == '.') {
+            numberStart--;
+            continue;
+        }
+        break;
+    }
+    if (numberStart == numberEnd) {
+        return text;
+    }
+
+    NSRange numberRange = NSMakeRange(numberStart, numberEnd - numberStart);
+    return [text stringByReplacingCharactersInRange:numberRange
+                                         withString:DYYYFormattedPlaybackSpeed(targetSpeed)];
+}
+
+static void DYYYTriggerNativeLongPressSpeedHaptic(void) {
+    Class hapticClass = NSClassFromString(@"AFDHaptic");
+    if (!hapticClass || ![hapticClass respondsToSelector:@selector(triggerWithType:)]) {
+        return;
+    }
+
+    @try {
+        [(id)hapticClass triggerWithType:5];
+    } @catch (__unused NSException *exception) {
+    }
+}
+
+static void DYYYBeginLongPressVerticalAdjustment(id owner,
+                                                 UILongPressGestureRecognizer *gesture,
+                                                 double initialSpeed) {
+    if (!owner || !gesture || !isfinite(initialSpeed) || initialSpeed <= 0.0) {
+        return;
+    }
+    CGPoint location = [gesture locationInView:gesture.view];
+    objc_setAssociatedObject(owner, &kDYYYLongPressVerticalActiveKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(owner, &kDYYYLongPressVerticalInitialYKey, @(location.y), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(owner, &kDYYYLongPressVerticalCurrentSpeedKey, @(initialSpeed), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static BOOL DYYYUpdateLongPressVerticalAdjustment(id owner,
+                                                  UILongPressGestureRecognizer *gesture,
+                                                  double *updatedSpeed) {
+    if (!owner ||
+        !gesture ||
+        ![objc_getAssociatedObject(owner, &kDYYYLongPressVerticalActiveKey) boolValue]) {
+        return NO;
+    }
+
+    NSNumber *initialYValue = objc_getAssociatedObject(owner, &kDYYYLongPressVerticalInitialYKey);
+    NSNumber *currentSpeedValue = objc_getAssociatedObject(owner, &kDYYYLongPressVerticalCurrentSpeedKey);
+    if (!initialYValue || !currentSpeedValue) {
+        return NO;
+    }
+
+    CGPoint location = [gesture locationInView:gesture.view];
+    CGFloat deltaY = location.y - initialYValue.doubleValue;
+    static const CGFloat threshold = 30.0;
+    NSInteger steps = (NSInteger)floor(fabs(deltaY) / threshold);
+    if (steps <= 0) {
+        return NO;
+    }
+
+    double currentSpeed = currentSpeedValue.doubleValue;
+    double direction = deltaY > 0.0 ? 1.0 : -1.0;
+    double newSpeed = currentSpeed + direction * 0.25 * steps;
+    newSpeed = MAX(0.5, MIN(3.0, newSpeed));
+    if (fabs(newSpeed - currentSpeed) <= DBL_EPSILON) {
+        objc_setAssociatedObject(owner, &kDYYYLongPressVerticalInitialYKey, @(location.y), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return NO;
+    }
+
+    CGFloat consumedY = initialYValue.doubleValue + direction * threshold * steps;
+    objc_setAssociatedObject(owner, &kDYYYLongPressVerticalInitialYKey, @(consumedY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(owner, &kDYYYLongPressVerticalCurrentSpeedKey, @(newSpeed), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (updatedSpeed) {
+        *updatedSpeed = newSpeed;
+    }
+    return YES;
+}
+
+static void DYYYEndLongPressVerticalAdjustment(id owner) {
+    if (!owner) {
+        return;
+    }
+    objc_setAssociatedObject(owner, &kDYYYLongPressVerticalActiveKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(owner, &kDYYYLongPressVerticalInitialYKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(owner, &kDYYYLongPressVerticalCurrentSpeedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+%hook AWEDSpeedBasicConfig
+
+- (double)longPressSpeed {
+    double configuredSpeed = DYYYConfiguredLongPressPlaybackSpeed();
+    if (configuredSpeed > 0.0) {
+        return configuredSpeed;
+    }
+    return %orig;
+}
+
+%end
+
+%hook AFDLongPressFastSpeedHelper
+
++ (double)longPressFastSpeedValue {
+    double configuredSpeed = DYYYConfiguredLongPressPlaybackSpeed();
+    if (configuredSpeed > 0.0) {
+        return configuredSpeed;
+    }
+    return %orig;
+}
+
+%end
+
+%hook AWEDSpeedLockSpeedContainer
+
+- (BOOL)canShowLockSpeed {
+    if (DYYYGetBool(@"DYYYEnableLongPressSpeedGesture")) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (void)handleLongPressLockedDoubleSpeedEnded:(CGPoint)point
+                                      gesture:(UILongPressGestureRecognizer *)gesture {
+    AFDSpeedManager *speedManager = self.speedManager;
+    if (speedManager) {
+        dyyyActiveNativeSpeedManager = speedManager;
+    }
+
+    BOOL previousCompletionState = dyyyNativeLockCompletionActive;
+    dyyyNativeLockCompletionActive = YES;
+    @try {
+        %orig(point, gesture);
+
+        NSString *lockedAwemeID = speedManager.isLockedSpeedAwemeID;
+        double synchronizedSpeed = 0.0;
+        if (lockedAwemeID.length > 0) {
+            // 官方上滑锁定：同步到配置的长按倍速。
+            synchronizedSpeed = DYYYConfiguredLongPressPlaybackSpeed();
+        } else {
+            // 官方下滑松手取消：必须真正回到默认倍速。
+            // 若此时仍把快捷倍速非 1x 当作“解锁后的正常倍速”，取消会被立刻写回，表现为无法解除。
+            if (isFloatSpeedButtonEnabled) {
+                setCurrentSpeedIndex(0);
+                updateSpeedButtonUI();
+            }
+            synchronizedSpeed = DYYYConfiguredDefaultPlaybackSpeed();
+        }
+        if (isfinite(synchronizedSpeed) && synchronizedSpeed > 0.0) {
+            if ([speedManager respondsToSelector:@selector(setCurrentSpeed:)]) {
+                [speedManager setCurrentSpeed:synchronizedSpeed];
+            }
+            if (lockedAwemeID.length == 0) {
+                DYYYApplyPlaybackSpeedThroughInteractionController(dyyyActivePlaybackInteractionController,
+                                                                   synchronizedSpeed);
+            }
+        }
+    } @finally {
+        dyyyNativeLockCompletionActive = previousCompletionState;
+    }
+}
+
+%end
+
+%hook AWEDSpeedPortraitContainer
+
+- (double)longPressSpeedValue {
+    double configuredSpeed = DYYYConfiguredLongPressPlaybackSpeed();
+    if (configuredSpeed > 0.0) {
+        return configuredSpeed;
+    }
+    return %orig;
+}
+
+- (void)showToastWithText:(NSString *)text {
+    if ([text isKindOfClass:NSString.class] &&
+        [text containsString:@"已取消"] &&
+        [text containsString:@"倍速播放"]) {
+        text = DYYYAdjustedNativeLongPressSpeedHint(text);
+    }
+    %orig(text);
+}
+
+%end
+
+%hook AWEDSpeedCoreContainer
+
 - (void)changeSpeed:(double)speed {
-    float longPressSpeed = DYYYGetFloat(@"DYYYLongPressSpeed");
-
-    if (isGestureActive && currentLongPressSpeed > 0) {
-        %orig(currentLongPressSpeed);
-        return;
+    if (self.speedManager) {
+        dyyyActiveNativeSpeedManager = self.speedManager;
     }
 
-    if (speed == 2.0 && longPressSpeed != 0 && longPressSpeed != 2.0) {
-        %orig(longPressSpeed);
-        return;
-    }
-
-    if (speed <= 1.0 && dyyyLongPressLockedSpeedActive) {
-        DYYYEndLockedLongPressSpeedAndRestoreIfNeeded();
+    if (dyyyNativeLockCompletionActive) {
+        if (fabs(speed - 2.0) <= DBL_EPSILON) {
+            double configuredSpeed = DYYYConfiguredLongPressPlaybackSpeed();
+            if (configuredSpeed > 0.0) {
+                speed = configuredSpeed;
+            }
+        } else if (fabs(speed - 1.0) <= DBL_EPSILON) {
+            // 官方取消路径传入 1.0 时，只能回到默认倍速，不能回写快捷倍速按钮的非 1x 值。
+            speed = DYYYConfiguredDefaultPlaybackSpeed();
+        }
     }
 
     %orig(speed);
 }
 
-- (void)handleLongPressFastSpeed:(UILongPressGestureRecognizer *)gesture {
-    BOOL enableSpeedGesture = DYYYGetBool(@"DYYYEnableLongPressSpeedGesture");
-    CGPoint location = [gesture locationInView:gesture.view];
-    static CGFloat initialTouchY = 0;
-    BOOL isBeginning = gesture.state == UIGestureRecognizerStateBegan;
-    BOOL isEnding = gesture.state == UIGestureRecognizerStateEnded ||
-                    gesture.state == UIGestureRecognizerStateCancelled ||
-                    gesture.state == UIGestureRecognizerStateFailed;
-
-    if (isBeginning) {
-        dyyyLongPressFastSpeedActive = YES;
-        dyyyLongPressLockedSpeedActive = NO;
-    } else if (isEnding) {
-        isGestureActive = NO;
-        currentLongPressSpeed = 0;
-        initialTouchY = 0;
-        dyyyLongPressFastSpeedActive = NO;
+- (void)handleFastSpeed:(UILongPressGestureRecognizer *)gesture {
+    if (self.speedManager) {
+        dyyyActiveNativeSpeedManager = self.speedManager;
     }
 
-    %orig;
-
-    if (isEnding) {
-        DYYYScheduleConfiguredPlaybackSpeedRestore();
+    id playerProvider = self.playerProvider;
+    if (DYYYIsVerifiedNativeDPlayerSpeedController(playerProvider)) {
+        dyyyActiveDPlayerSpeedController = (AWEDPlayerSpeedController *)playerProvider;
     }
 
-    if (!enableSpeedGesture) {
+    UIGestureRecognizerState state = gesture.state;
+    BOOL verticalAdjustmentEnabled = DYYYGetBool(@"DYYYEnableLongPressSpeedGesture");
+    if (verticalAdjustmentEnabled && state == UIGestureRecognizerStateBegan) {
+        DYYYBeginLongPressVerticalAdjustment(self, gesture, [self longPressFastSpeedValue]);
+    }
+
+    %orig(gesture);
+
+    if ((state == UIGestureRecognizerStateBegan || state == UIGestureRecognizerStateChanged) &&
+        self.isInLongPressFastSpeed &&
+        DYYYIsVerifiedNativeDPlayerSpeedController(playerProvider)) {
+        dyyyLongPressDPlayerSpeedController = (AWEDPlayerSpeedController *)playerProvider;
+    }
+
+    if (verticalAdjustmentEnabled &&
+        state == UIGestureRecognizerStateBegan &&
+        !self.isInLongPressFastSpeed) {
+        DYYYEndLongPressVerticalAdjustment(self);
         return;
     }
 
-    if (isBeginning) {
-        initialTouchY = location.y;
-        isGestureActive = YES;
-
-        float longPressSpeed = DYYYGetFloat(@"DYYYLongPressSpeed");
-        if (longPressSpeed == 0) {
-            longPressSpeed = 2.0;
-        }
-        currentLongPressSpeed = longPressSpeed;
-    }
-    else if (gesture.state == UIGestureRecognizerStateChanged && isGestureActive) {
-        CGFloat deltaY = location.y - initialTouchY;
-        CGFloat threshold = 10.0;
-
-        if (fabs(deltaY) > threshold) {
-            CGFloat speedChange;
-            speedChange = (deltaY > 0) ? 0.25 : -0.25;
-
-            CGFloat newSpeed = currentLongPressSpeed + speedChange;
-            newSpeed = MAX(0.5, MIN(3.0, newSpeed));
-
-            if (newSpeed != currentLongPressSpeed) {
-                currentLongPressSpeed = newSpeed;
-                initialTouchY = location.y;
-                [self changeSpeed:currentLongPressSpeed];
+    if (verticalAdjustmentEnabled &&
+        state == UIGestureRecognizerStateChanged &&
+        self.isInLongPressFastSpeed) {
+        double updatedSpeed = 0.0;
+        if (DYYYUpdateLongPressVerticalAdjustment(self, gesture, &updatedSpeed)) {
+            [self changeSpeed:updatedSpeed];
+            AWEDSpeedPortraitContainer *portraitContainer = self.portraitContainer;
+            BOOL nativeViewWillTriggerHaptic = NO;
+            if ([portraitContainer respondsToSelector:@selector(updateFastSpeedView:)]) {
+                @try {
+                    AFDFastSpeedView *speedView = portraitContainer.longPressFastSpeedView;
+                    nativeViewWillTriggerHaptic = speedView && !speedView.superview;
+                    [portraitContainer updateFastSpeedView:updatedSpeed];
+                } @catch (__unused NSException *exception) {
+                }
+            }
+            if (!nativeViewWillTriggerHaptic) {
+                DYYYTriggerNativeLongPressSpeedHaptic();
             }
         }
     }
-}
 
-- (void)handleLongPressLockedSpeedBegan {
-    dyyyLongPressFastSpeedActive = YES;
-    dyyyLongPressLockedSpeedActive = NO;
-    %orig;
-}
-
-- (void)handleLongPressLockedDoubleSpeedChanged:(id)arg1 gesture:(UIGestureRecognizer *)gesture {
-    dyyyLongPressFastSpeedActive = YES;
-    dyyyLongPressLockedSpeedActive = NO;
-    %orig(arg1, gesture);
-}
-
-- (void)handleLongPressLockedDoubleSpeedEnded:(id)arg1 gesture:(UIGestureRecognizer *)gesture {
-    %orig(arg1, gesture);
-    dyyyLongPressFastSpeedActive = NO;
-    dyyyLongPressLockedSpeedActive = YES;
-}
-
-- (void)longPressSpeedControlDidChangeSpeed:(double)speed {
-    %orig(speed);
-    if (speed <= 1.0 && dyyyLongPressLockedSpeedActive) {
-        DYYYEndLockedLongPressSpeedAndRestoreIfNeeded();
+    if (DYYYLongPressGestureIsEnding(state)) {
+        DYYYEndLongPressVerticalAdjustment(self);
+        if (dyyyLongPressDPlayerSpeedController == playerProvider) {
+            dyyyLongPressDPlayerSpeedController = nil;
+        }
     }
 }
+
 %end
 
-%hook UILabel
+%hook AWEDPlayerSpeedController
 
-- (void)setText:(NSString *)text {
-    UIView *superview = self.superview;
+- (void)viewDidLoad {
+    %orig;
+    dyyyActiveDPlayerSpeedController = self;
+    DYYYApplyNormalPlaybackSpeedToNativeDPlayer(self);
+}
 
-    if ([superview isKindOfClass:%c(AFDFastSpeedView)] && text) {
-        CGFloat displaySpeed = isGestureActive && currentLongPressSpeed > 0 ? currentLongPressSpeed : DYYYGetFloat(@"DYYYLongPressSpeed");
-        if (displaySpeed == 0) {
-            displaySpeed = 2.0;
-        }
+- (void)setData:(id)data {
+    %orig(data);
+    dyyyActiveDPlayerSpeedController = self;
+    DYYYApplyNormalPlaybackSpeedToNativeDPlayer(self);
+}
 
-        NSString *speedString = [NSString stringWithFormat:@"%.2f", displaySpeed];
-        if ([speedString hasSuffix:@".00"]) {
-            speedString = [speedString substringToIndex:speedString.length - 3];
-        } else if ([speedString hasSuffix:@"0"] && [speedString containsString:@"."]) {
-            speedString = [speedString substringToIndex:speedString.length - 1];
-        }
+- (void)viewWillAppear {
+    %orig;
+    dyyyActiveDPlayerSpeedController = self;
+    DYYYApplyNormalPlaybackSpeedToNativeDPlayer(self);
+}
 
-        if ([text containsString:@"2"]) {
-            text = [text stringByReplacingOccurrencesOfString:@"2" withString:speedString];
+- (void)onPlayerPlay:(id)player ifPlay:(BOOL)isPlaying {
+    %orig(player, isPlaying);
+    if (isPlaying) {
+        dyyyActiveDPlayerSpeedController = self;
+        DYYYApplyNormalPlaybackSpeedToNativeDPlayer(self);
+    }
+}
+
+%end
+
+%hook AWEPlayInteractionSpeedController
+
+- (CGFloat)longPressFastSpeedValue {
+    double configuredSpeed = DYYYConfiguredLongPressPlaybackSpeed();
+    if (configuredSpeed > 0.0) {
+        return (CGFloat)configuredSpeed;
+    }
+    return %orig;
+}
+
+- (void)showToastWithText:(NSString *)text {
+    if ([text isKindOfClass:NSString.class] &&
+        [text containsString:@"已取消"] &&
+        [text containsString:@"倍速播放"]) {
+        text = DYYYAdjustedNativeLongPressSpeedHint(text);
+    }
+    %orig(text);
+}
+
+- (void)handleLongPressFastSpeed:(UILongPressGestureRecognizer *)gesture {
+    UIGestureRecognizerState state = gesture.state;
+    BOOL verticalAdjustmentEnabled = DYYYGetBool(@"DYYYEnableLongPressSpeedGesture");
+    if (verticalAdjustmentEnabled && state == UIGestureRecognizerStateBegan) {
+        DYYYBeginLongPressVerticalAdjustment(self, gesture, [self longPressFastSpeedValue]);
+    }
+
+    %orig(gesture);
+
+    if (verticalAdjustmentEnabled && state == UIGestureRecognizerStateChanged) {
+        double updatedSpeed = 0.0;
+        if (DYYYUpdateLongPressVerticalAdjustment(self, gesture, &updatedSpeed)) {
+            [self changeSpeed:updatedSpeed];
         }
     }
 
-    %orig(text);
+    if (DYYYLongPressGestureIsEnding(state)) {
+        DYYYEndLongPressVerticalAdjustment(self);
+    }
 }
+
 %end
 
 // 强制启用保存他人头像
@@ -5113,6 +8182,245 @@ static BOOL isGestureActive = NO;
         return YES;
     }
     return %orig;
+}
+%end
+
+static char kDYYYAvatarPreviewSaveLongPressKey;
+
+static id DYYYAvatarPreviewObjectForSelector(id object, NSString *selectorName) {
+    if (!object || selectorName.length == 0) {
+        return nil;
+    }
+
+    SEL selector = NSSelectorFromString(selectorName);
+    if (![object respondsToSelector:selector]) {
+        return nil;
+    }
+
+    return ((id (*)(id, SEL))objc_msgSend)(object, selector);
+}
+
+static NSURL *DYYYAvatarPreviewURLFromString(NSString *urlString) {
+    if (![urlString isKindOfClass:NSString.class] || urlString.length == 0) {
+        return nil;
+    }
+
+    NSString *normalizedURLString = urlString;
+    if ([normalizedURLString hasPrefix:@"//"]) {
+        normalizedURLString = [@"https:" stringByAppendingString:normalizedURLString];
+    }
+
+    NSURL *url = [NSURL URLWithString:normalizedURLString];
+    if (!url.scheme || !url.host) {
+        return nil;
+    }
+
+    return url;
+}
+
+static NSURL *DYYYAvatarPreviewURLFromURLList(NSArray *urlList) {
+    if (![urlList isKindOfClass:NSArray.class] || urlList.count == 0) {
+        return nil;
+    }
+
+    for (id urlValue in urlList) {
+        if ([urlValue isKindOfClass:NSURL.class]) {
+            return urlValue;
+        }
+        NSURL *url = DYYYAvatarPreviewURLFromString(urlValue);
+        if (url) {
+            return url;
+        }
+    }
+
+    return nil;
+}
+
+static NSURL *DYYYAvatarPreviewURLFromObject(id object) {
+    if (!object) {
+        return nil;
+    }
+
+    if ([object isKindOfClass:NSURL.class]) {
+        return object;
+    }
+
+    if ([object isKindOfClass:NSString.class]) {
+        return DYYYAvatarPreviewURLFromString(object);
+    }
+
+    if ([object isKindOfClass:NSArray.class]) {
+        return DYYYAvatarPreviewURLFromURLList(object);
+    }
+
+    NSURL *originURL = DYYYAvatarPreviewURLFromURLList(DYYYAvatarPreviewObjectForSelector(object, @"originURLList"));
+    if (originURL) {
+        return originURL;
+    }
+
+    NSURL *urlListURL = DYYYAvatarPreviewURLFromURLList(DYYYAvatarPreviewObjectForSelector(object, @"URLList"));
+    if (urlListURL) {
+        return urlListURL;
+    }
+
+    id dyyyDownloadURL = DYYYAvatarPreviewObjectForSelector(object, @"getDYYYSrcURLDownload");
+    if ([dyyyDownloadURL isKindOfClass:NSURL.class]) {
+        return dyyyDownloadURL;
+    }
+
+    return nil;
+}
+
+static NSURL *DYYYAvatarPreviewSourceURLForController(id controller) {
+    NSArray<NSString *> *controllerURLSelectors = @[
+        @"avatarImageURL",
+        @"avatarImagePlaceholderURL",
+    ];
+
+    for (NSString *selectorName in controllerURLSelectors) {
+        NSURL *url = DYYYAvatarPreviewURLFromObject(DYYYAvatarPreviewObjectForSelector(controller, selectorName));
+        if (url) {
+            return url;
+        }
+    }
+
+    id user = DYYYAvatarPreviewObjectForSelector(controller, @"user");
+    NSArray<NSString *> *userAvatarSelectors = @[
+        @"avatarLarger",
+        @"avatar300X300",
+        @"avatar300x300",
+        @"avatar168X168",
+        @"avatar168x168",
+        @"avatarMedium",
+        @"avatarThumb",
+    ];
+
+    for (NSString *selectorName in userAvatarSelectors) {
+        NSURL *url = DYYYAvatarPreviewURLFromObject(DYYYAvatarPreviewObjectForSelector(user, selectorName));
+        if (url) {
+            return url;
+        }
+    }
+
+    return nil;
+}
+
+static BOOL DYYYInvokeAvatarPreviewNativeSave(id controller) {
+    id functionManager = DYYYAvatarPreviewObjectForSelector(controller, @"functionManager");
+    if (!functionManager || ![functionManager respondsToSelector:@selector(didClickedSaveAvatar)]) {
+        return NO;
+    }
+
+    ((void (*)(id, SEL))objc_msgSend)(functionManager, @selector(didClickedSaveAvatar));
+    return YES;
+}
+
+static void DYYYAttachAvatarPreviewSaveLongPressToView(id controller, UIView *targetView) {
+    if (!controller || !targetView || objc_getAssociatedObject(targetView, &kDYYYAvatarPreviewSaveLongPressKey)) {
+        return;
+    }
+
+    targetView.userInteractionEnabled = YES;
+    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:controller action:@selector(dyyy_handleAvatarPreviewSaveLongPress:)];
+    longPress.minimumPressDuration = 0.5;
+    longPress.cancelsTouchesInView = NO;
+    [targetView addGestureRecognizer:longPress];
+    objc_setAssociatedObject(targetView, &kDYYYAvatarPreviewSaveLongPressKey, longPress, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(longPress, &kDYYYAvatarPreviewSaveLongPressKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void DYYYAttachAvatarPreviewSaveLongPress(id controller) {
+    if (!controller || !DYYYGetBool(@"DYYYEnableSaveAvatar")) {
+        return;
+    }
+
+    id gestureView = DYYYAvatarPreviewObjectForSelector(controller, @"avatarGestureView");
+    if ([gestureView isKindOfClass:UIView.class]) {
+        DYYYAttachAvatarPreviewSaveLongPressToView(controller, gestureView);
+    }
+
+    id imageView = DYYYAvatarPreviewObjectForSelector(controller, @"avatarImageView");
+    if ([imageView isKindOfClass:UIView.class]) {
+        DYYYAttachAvatarPreviewSaveLongPressToView(controller, imageView);
+    }
+
+    id rootView = DYYYAvatarPreviewObjectForSelector(controller, @"view");
+    if ([rootView isKindOfClass:UIView.class]) {
+        DYYYAttachAvatarPreviewSaveLongPressToView(controller, rootView);
+    }
+}
+
+%hook AWEProfileAvatarViewController
+- (void)viewDidLoad {
+    %orig;
+    DYYYAttachAvatarPreviewSaveLongPress(self);
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig(animated);
+    DYYYAttachAvatarPreviewSaveLongPress(self);
+}
+
+- (void)p_setupViews {
+    %orig;
+    DYYYAttachAvatarPreviewSaveLongPress(self);
+}
+
+%new
+- (void)dyyy_saveAvatarPreviewFromDouyinSource {
+    NSURL *avatarURL = DYYYAvatarPreviewSourceURLForController(self);
+    if (avatarURL) {
+        [DYYYManager downloadMedia:avatarURL
+                         mediaType:MediaTypeImage
+                             audio:nil
+                        completion:^(BOOL success) {
+                          if (!success) {
+                              [DYYYUtils showToast:@"头像下载失败"];
+                          }
+                        }];
+        return;
+    }
+
+    if (DYYYInvokeAvatarPreviewNativeSave(self)) {
+        [DYYYUtils showToast:@"正在保存头像..."];
+        return;
+    }
+
+    [DYYYUtils showToast:@"无法获取头像原始链接"];
+}
+
+%new
+- (void)dyyy_handleAvatarPreviewSaveLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan || !DYYYGetBool(@"DYYYEnableSaveAvatar")) {
+        return;
+    }
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    [alert addAction:[UIAlertAction actionWithTitle:@"保存头像"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(__unused UIAlertAction *action) {
+                                              ((void (*)(id, SEL))objc_msgSend)(self, @selector(dyyy_saveAvatarPreviewFromDouyinSource));
+                                            }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+
+    UIView *sourceView = gesture.view;
+    if (!sourceView) {
+        id rootView = DYYYAvatarPreviewObjectForSelector(self, @"view");
+        if ([rootView isKindOfClass:UIView.class]) {
+            sourceView = rootView;
+        }
+    }
+    if (alert.popoverPresentationController && sourceView) {
+        alert.popoverPresentationController.sourceView = sourceView;
+        CGPoint location = [gesture locationInView:sourceView];
+        alert.popoverPresentationController.sourceRect = CGRectMake(location.x, location.y, 1.0, 1.0);
+    }
+
+    UIViewController *presentingController = (UIViewController *)self;
+    while (presentingController.presentedViewController) {
+        presentingController = presentingController.presentedViewController;
+    }
+    [presentingController presentViewController:alert animated:YES completion:nil];
 }
 %end
 
@@ -5145,7 +8453,6 @@ BOOL commentLivePhotoNotWaterMark = DYYYGetBool(@"DYYYCommentLivePhotoNotWaterMa
 
 %group EnableStickerSaveMenu
 static __weak YYAnimatedImageView *targetStickerView = nil;
-static BOOL dyyyShouldUseLastStickerURL = NO;
 
 %hook _TtCV28AWECommentPanelListSwiftImpl6NEWAPI27CommentCellStickerComponent
 
@@ -5174,9 +8481,8 @@ static BOOL dyyyShouldUseLastStickerURL = NO;
     AWECommentLongPressPanelContext *context = [self commentPageContext];
     AWECommentModel *selected = [context selectdComment] ?: [[context params] selectdComment];
     AWEIMStickerModel *sticker = [selected sticker];
-    NSArray *originURLList = sticker.staticURLModel.originURLList;
-    if (originURLList.count > 0) {
-        return YES;
+    if (sticker && DYYYGetBool(@"DYYYForceDownloadEmotion")) {
+        return NO;
     }
     AWECommentAudioModel *audio = [selected audioModel];
     if (audio && audio.content) {
@@ -5189,44 +8495,28 @@ static BOOL dyyyShouldUseLastStickerURL = NO;
     AWECommentLongPressPanelContext *context = [self commentPageContext];
     AWECommentLongPressPanelParam *params = [context params];
     AWECommentModel *comment = [context selectdComment] ?: [params selectdComment];
-    
+
     // 判断保存类型(表情包/音频/图片)
     AWEIMStickerModel *sticker = [comment sticker];
-    NSArray *stickerURLList = sticker.staticURLModel.originURLList;
-    BOOL hasSticker = (stickerURLList.count > 0);
 
     AWECommentAudioModel *audio = [comment audioModel];
     BOOL hasAudio = (audio && audio.content);
-    
+
     NSArray *imageList = nil;
     if ([comment respondsToSelector:@selector(imageList)]) {
         imageList = [comment imageList];
     }
     BOOL hasImages = (imageList && imageList.count > 0);
-    
-    // 表情包保存逻辑
-    if (hasSticker && DYYYGetBool(@"DYYYForceDownloadEmotion")) {
-        NSString *urlString = dyyyShouldUseLastStickerURL ? stickerURLList.lastObject : stickerURLList.firstObject;
-        dyyyShouldUseLastStickerURL = NO;
-        NSURL *stickerURL = [NSURL URLWithString:urlString];
-        
-        if (stickerURL) {
-            [DYYYManager downloadMedia:stickerURL
-                             mediaType:MediaTypeHeic
-                                 audio:nil
-                            completion:^(BOOL success) {
-                              if (!success && stickerURLList.count > 1) {
-                                  dyyyShouldUseLastStickerURL = YES;
-                              }
-                            }];
-            return;
-        }
+
+    // 整条评论菜单不提供表情保存；表情仅通过直接长按保存
+    if (sticker && DYYYGetBool(@"DYYYForceDownloadEmotion")) {
+        return;
     }
 
     // 音频保存逻辑
     if (hasAudio && DYYYGetBool(@"DYYYForceDownloadCommentAudio")) {
         NSString *audioContent = audio.content;
-        
+
         NSString *userName = @"未知用户";
         if (comment.author && [comment.author respondsToSelector:@selector(nickname)]) {
             NSString *nickname = [comment.author performSelector:@selector(nickname)];
@@ -5234,7 +8524,7 @@ static BOOL dyyyShouldUseLastStickerURL = NO;
                 userName = nickname;
             }
         }
-        
+
         [DYYYManager downloadAndShareCommentAudio:audioContent
                                          userName:userName
                                        createTime:comment.createTime];
@@ -5254,17 +8544,17 @@ static BOOL dyyyShouldUseLastStickerURL = NO;
                 isPicInflow = [isPicInflowValue integerValue] == 1;
             }
         }
-        
+
         NSInteger currentIndex = -1; // -1 表示保存全部
-        
+
         if (isPicInflow) {
             // 使用 DYYYUtils 封装的方法查找目标控制器
             UIViewController *topVC = [DYYYUtils topView];
-            
+
             // 获取 Ivar 定义的类和目标控制器类
             Class ivarClass = NSClassFromString(@"AWECommentMediaFeedSwfitImpl.CommentMediaFeedCellViewController");
             Class targetClass = NSClassFromString(@"AWECommentMediaFeedSwfitImpl.CommentMediaFeedCommonImageCellViewController");
-            
+
             if (ivarClass && targetClass && topVC) {
                 Ivar multiIndexIvar = class_getInstanceVariable(ivarClass, "currentIndexInMultiImageList");
                 if (multiIndexIvar) {
@@ -5277,11 +8567,11 @@ static BOOL dyyyShouldUseLastStickerURL = NO;
                 }
             }
         }
-        
-        NSString *hint = (currentIndex >= 0) ? @"正在保存当前图片..." : 
+
+        NSString *hint = (currentIndex >= 0) ? @"正在保存当前图片..." :
             [NSString stringWithFormat:@"正在保存 %lu 张图片...", (unsigned long)imageList.count];
         [DYYYUtils showToast:hint];
-        
+
         [DYYYManager saveCommentImages:imageList
                             currentIndex:currentIndex
                             completion:^(NSInteger successCount, NSInteger livePhotoCount, NSInteger failedCount) {
@@ -5296,7 +8586,7 @@ static BOOL dyyyShouldUseLastStickerURL = NO;
         }];
         return;
     }
-    
+
     // 默认行为
     %orig;
 }
@@ -5474,17 +8764,25 @@ static NSURL *DYYYIMEmotionDownloadURLFromMessage(AWEIMGiphyMessage *giphyMessag
     return [NSURL URLWithString:urlString];
 }
 
-static AWEIMCustomMenuModel *DYYYIMCreateDownloadMenuItem(AWEIMReusableCommonCell *cell) {
+static AWEIMCustomMenuModel *DYYYIMCreateDownloadMenuItem(AWEIMReusableCommonCell *cell, AWEIMCustomMenuComponent *menuComponent) {
     if (!cell) {
         return nil;
     }
     __weak AWEIMReusableCommonCell *weakCell = cell;
+    __weak AWEIMCustomMenuComponent *weakMenuComponent = menuComponent;
     AWEIMCustomMenuModel *menuItem = [%c(AWEIMCustomMenuModel) new];
     menuItem.title = @"保存表情";
     menuItem.imageName = @"im_emoticon_interactive_tab_new";
     menuItem.trackerName = @"保存表情";
-    menuItem.willPerformMenuActionSelectorBlock = ^(id arg1) {
+    menuItem.willPerformMenuActionSelectorBlock = ^(AWEIMCustomMenuModel *actionItem, NSUInteger actionIndex, BOOL *actionState) {
+      (void)actionItem;
+      (void)actionIndex;
+      (void)actionState;
       AWEIMReusableCommonCell *strongCell = weakCell;
+      AWEIMCustomMenuComponent *strongMenuComponent = weakMenuComponent;
+      if ([strongMenuComponent respondsToSelector:@selector(msg_dismissMenu)]) {
+          [strongMenuComponent msg_dismissMenu];
+      }
       if (!strongCell) {
           [DYYYUtils showToast:@"无法获取表情包信息"];
           return;
@@ -5508,7 +8806,7 @@ static AWEIMCustomMenuModel *DYYYIMCreateDownloadMenuItem(AWEIMReusableCommonCel
     return menuItem;
 }
 
-static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cell) {
+static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cell, AWEIMCustomMenuComponent *menuComponent) {
     if (!DYYYGetBool(@"DYYYForceDownloadIMEmotion")) {
         return menuItems;
     }
@@ -5529,7 +8827,7 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
         }
     }
     NSMutableArray *newMenuItems = [menuItems mutableCopy];
-    AWEIMCustomMenuModel *downloadItem = DYYYIMCreateDownloadMenuItem(commonCell);
+    AWEIMCustomMenuModel *downloadItem = DYYYIMCreateDownloadMenuItem(commonCell, menuComponent);
     if (downloadItem) {
         [newMenuItems addObject:downloadItem];
     }
@@ -5539,7 +8837,7 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 %group DYYYIMMenuLegacyGroup
 %hook AWEIMCustomMenuComponent
 - (void)msg_showMenuForBubbleFrameInScreen:(CGRect)bubbleFrame tapLocationInScreen:(CGPoint)tapLocation menuItemList:(NSArray *)menuItems moreEmoticon:(BOOL)moreEmoticon onCell:(id)cell extra:(id)extra {
-    NSArray *updatedMenuItems = DYYYIMMenuItemsByAddingDownloadAction(menuItems, cell);
+    NSArray *updatedMenuItems = DYYYIMMenuItemsByAddingDownloadAction(menuItems, cell, self);
     %orig(bubbleFrame, tapLocation, updatedMenuItems, moreEmoticon, cell, extra);
 }
 %end
@@ -5548,7 +8846,7 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 %group DYYYIMMenuTapLocationGroup
 %hook AWEIMCustomMenuComponent
 - (void)msg_showMenuForBubbleFrameInScreen:(CGRect)bubbleFrame tapLocationInScreen:(CGPoint)tapLocation menuItemList:(NSArray *)menuItems menuPanelOptions:(unsigned long long)menuPanelOptions moreEmoticon:(BOOL)moreEmoticon onCell:(id)cell extra:(id)extra {
-    NSArray *updatedMenuItems = DYYYIMMenuItemsByAddingDownloadAction(menuItems, cell);
+    NSArray *updatedMenuItems = DYYYIMMenuItemsByAddingDownloadAction(menuItems, cell, self);
     %orig(bubbleFrame, tapLocation, updatedMenuItems, menuPanelOptions, moreEmoticon, cell, extra);
 }
 %end
@@ -5557,7 +8855,7 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 %group DYYYIMMenuHighLowGroup
 %hook AWEIMCustomMenuComponent
 - (void)msg_showMenuForBubbleFrameInScreen:(CGRect)bubbleFrame highLocationInScreen:(CGPoint)highLocation lowLocationInScreen:(CGPoint)lowLocation tryHighLocationFirst:(BOOL)tryHighLocationFirst menuItemList:(NSArray *)menuItems menuPanelOptions:(unsigned long long)menuPanelOptions onCell:(id)cell extra:(id)extra {
-    NSArray *updatedMenuItems = DYYYIMMenuItemsByAddingDownloadAction(menuItems, cell);
+    NSArray *updatedMenuItems = DYYYIMMenuItemsByAddingDownloadAction(menuItems, cell, self);
     %orig(bubbleFrame, highLocation, lowLocation, tryHighLocationFirst, updatedMenuItems, menuPanelOptions, cell, extra);
 }
 %end
@@ -5588,7 +8886,11 @@ static id DYYYAvatarObjectForSelector(id object, SEL selector) {
     }
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-    return [object performSelector:selector];
+    @try {
+        return [object performSelector:selector];
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
 #pragma clang diagnostic pop
 }
 
@@ -5597,6 +8899,7 @@ static UIView *DYYYAvatarViewForSelector(id object, SEL selector) {
     return [value isKindOfClass:[UIView class]] ? value : nil;
 }
 
+static char kDYYYAvatarFollowApplyingKey;
 static char kDYYYAvatarFollowDeferredApplyKey;
 static char kDYYYAvatarFollowScopeViewKey;
 static char kDYYYAvatarActionHiddenViewKey;
@@ -5607,19 +8910,20 @@ static char kDYYYAvatarActionChromeLayerKey;
 static char kDYYYAvatarSurroundingHiddenViewKey;
 
 static BOOL DYYYAvatarFollowOptionsEnabled(void) {
-    return DYYYGetBool(@"DYYYHideLOTAnimationView") || DYYYGetBool(@"DYYYHideFollowPromptView");
+    return DYYYGetBoolCached(@"DYYYHideLOTAnimationView") || DYYYGetBoolCached(@"DYYYHideFollowPromptView");
 }
 
+// 与收藏按钮同理：开关关闭时不再进入 runtime 关联对象表查询。
 static BOOL DYYYShouldForceHideAvatarActionLayer(CALayer *layer) {
-    return layer && objc_getAssociatedObject(layer, &kDYYYAvatarActionHiddenLayerKey) && DYYYAvatarFollowOptionsEnabled();
+    return layer && DYYYAvatarFollowOptionsEnabled() && objc_getAssociatedObject(layer, &kDYYYAvatarActionHiddenLayerKey);
 }
 
 static BOOL DYYYShouldClearAvatarActionLayer(CALayer *layer) {
-    if (!layer || (!objc_getAssociatedObject(layer, &kDYYYAvatarActionChromeLayerKey) &&
-                   !objc_getAssociatedObject(layer, &kDYYYAvatarActionHiddenLayerKey))) {
+    if (!layer || !DYYYAvatarFollowOptionsEnabled()) {
         return NO;
     }
-    return DYYYAvatarFollowOptionsEnabled();
+    return objc_getAssociatedObject(layer, &kDYYYAvatarActionChromeLayerKey) != nil ||
+           objc_getAssociatedObject(layer, &kDYYYAvatarActionHiddenLayerKey) != nil;
 }
 
 static void DYYYMarkAvatarActionLayerHidden(CALayer *layer) {
@@ -5680,20 +8984,22 @@ static void DYYYMarkAvatarActionViewHidden(UIView *view) {
 }
 
 static BOOL DYYYShouldForceAvatarActionViewHidden(UIView *view) {
-    if (!view) {
+    // 两个开关全关时结果必然为 NO，提前返回可省掉后面的关联对象查询。
+    if (!view || !DYYYAvatarFollowOptionsEnabled()) {
         return NO;
     }
 
     BOOL hideVisual = objc_getAssociatedObject(view, &kDYYYAvatarActionHiddenViewKey) != nil;
-    BOOL removeView = objc_getAssociatedObject(view, &kDYYYAvatarActionRemovedViewKey) != nil;
-    if (!hideVisual && !removeView) {
-        return NO;
+    if (hideVisual) {
+        return YES;
     }
-    return (hideVisual && DYYYAvatarFollowOptionsEnabled()) || (removeView && DYYYGetBool(@"DYYYHideFollowPromptView"));
+
+    BOOL removeView = objc_getAssociatedObject(view, &kDYYYAvatarActionRemovedViewKey) != nil;
+    return removeView && DYYYGetBoolCached(@"DYYYHideFollowPromptView");
 }
 
 static BOOL DYYYShouldClearAvatarActionViewChrome(UIView *view) {
-    return view && objc_getAssociatedObject(view, &kDYYYAvatarActionChromeViewKey) && DYYYGetBool(@"DYYYHideLOTAnimationView");
+    return view && DYYYGetBoolCached(@"DYYYHideLOTAnimationView") && objc_getAssociatedObject(view, &kDYYYAvatarActionChromeViewKey);
 }
 
 static void DYYYHideAvatarVisualForSelector(id object, SEL selector) {
@@ -5714,7 +9020,7 @@ static void DYYYMarkAvatarSurroundingViewHidden(UIView *view) {
 }
 
 static BOOL DYYYShouldForceAvatarSurroundingViewHidden(UIView *view) {
-    return view && objc_getAssociatedObject(view, &kDYYYAvatarSurroundingHiddenViewKey) && DYYYGetBool(@"DYYYHideAvatarButton");
+    return view && DYYYGetBoolCached(@"DYYYHideAvatarButton") && objc_getAssociatedObject(view, &kDYYYAvatarSurroundingHiddenViewKey);
 }
 
 static void DYYYHideAvatarSurroundingVisualForSelector(id object, SEL selector) {
@@ -6056,18 +9362,41 @@ static void DYYYApplyAvatarFollowPromptSettings(id owner) {
     DYYYApplyAvatarFollowSettingsForContext(DYYYAvatarObjectForSelector(owner, NSSelectorFromString(@"userAvatarContext")));
 }
 
+static void DYYYApplyAvatarFollowPromptSettingsSafely(id owner) {
+    if (!owner || !DYYYAvatarFollowOptionsEnabled() ||
+        objc_getAssociatedObject(owner, &kDYYYAvatarFollowApplyingKey)) {
+        return;
+    }
+
+    // 必须在任何动态 getter 探测前建立屏障。部分版本的 userAvatarView getter
+    // 会同步回调 controllerStartConfigAvatarView:，若稍后再标记会形成无限递归。
+    objc_setAssociatedObject(owner, &kDYYYAvatarFollowApplyingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    @try {
+        DYYYApplyAvatarFollowPromptSettings(owner);
+    } @catch (__unused NSException *exception) {
+        // 宿主私有 getter 在版本变化时可能抛出异常；头像附加功能失败不应终止主进程。
+    } @finally {
+        objc_setAssociatedObject(owner, &kDYYYAvatarFollowApplyingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
 static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
-    DYYYApplyAvatarFollowPromptSettings(owner);
-    if (!owner || !DYYYAvatarFollowOptionsEnabled() || objc_getAssociatedObject(owner, &kDYYYAvatarFollowDeferredApplyKey)) {
+    if (!owner || !DYYYAvatarFollowOptionsEnabled() ||
+        objc_getAssociatedObject(owner, &kDYYYAvatarFollowApplyingKey)) {
+        return;
+    }
+
+    DYYYApplyAvatarFollowPromptSettingsSafely(owner);
+    if (objc_getAssociatedObject(owner, &kDYYYAvatarFollowDeferredApplyKey)) {
         return;
     }
 
     objc_setAssociatedObject(owner, &kDYYYAvatarFollowDeferredApplyKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     id target = owner;
     dispatch_async(dispatch_get_main_queue(), ^{
-        DYYYApplyAvatarFollowPromptSettings(target);
+        DYYYApplyAvatarFollowPromptSettingsSafely(target);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            DYYYApplyAvatarFollowPromptSettings(target);
+            DYYYApplyAvatarFollowPromptSettingsSafely(target);
             objc_setAssociatedObject(target, &kDYYYAvatarFollowDeferredApplyKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         });
     });
@@ -6142,39 +9471,6 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
 }
 %end
 
-
-// 隐藏右下音乐和取消静音按钮
-%hook AFDCancelMuteAwemeView
-- (void)layoutSubviews {
-    %orig;
-
-    UIView *superview = self.superview;
-    if ([superview isKindOfClass:NSClassFromString(@"AWEBaseElementView")]) {
-        BOOL hideCancelMute = DYYYGetBool(@"DYYYHideCancelMute");
-        BOOL hideMusicButton = DYYYGetBool(@"DYYYHideMusicButton");
-
-        if (hideCancelMute && hideMusicButton) {
-            [superview removeFromSuperview];
-        } else if (hideCancelMute) {
-            self.hidden = YES;
-            return;
-        }
-    }
-}
-
-- (void)willMoveToSuperview:(UIView *)newSuperview {
-    %orig;
-
-    if (newSuperview == nil && DYYYGetBool(@"DYYYHideMusicButton")) {
-        UIView *superview = self.superview;
-        if ([superview isKindOfClass:NSClassFromString(@"AWEBaseElementView")]) {
-            [superview removeFromSuperview];
-            return;
-        }
-    }
-}
-%end
-
 // 隐藏弹幕按钮
 %hook AWEPlayDanmakuInputContainView
 
@@ -6185,19 +9481,239 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
         self.hidden = YES;
         return;
     }
+
+    UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
+    if ([viewController isKindOfClass:%c(AWEPlayInteractionViewController)]) {
+        DYYYApplyPlayInteractionElementLayout(self, @"AWEPlayInteractionDanmakuElement");
+    }
 }
 
 %end
 
-// 隐藏评论区免费去看短剧
-%hook AWEShowPlayletCommentHeaderView
-- (void)layoutSubviews {
-    %orig;
-    if (DYYYGetBool(@"DYYYHideCommentViews")) {
-        self.hidden = YES;
+static char kDYYYCommentSearchAnchorManagedHiddenKey;
+static char kDYYYCommentSearchAnchorPreviousHiddenKey;
+
+static void DYYYApplyCommentSearchAnchorVisibility(UIView *view) {
+    if (!view) {
         return;
     }
+
+    @try {
+        BOOL shouldHide = DYYYGetBool(@"DYYYHideCommentViews");
+        NSNumber *managedHidden = objc_getAssociatedObject(view, &kDYYYCommentSearchAnchorManagedHiddenKey);
+
+        if (shouldHide) {
+            if (![managedHidden boolValue]) {
+                objc_setAssociatedObject(view,
+                                         &kDYYYCommentSearchAnchorPreviousHiddenKey,
+                                         @(view.hidden),
+                                         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                objc_setAssociatedObject(view,
+                                         &kDYYYCommentSearchAnchorManagedHiddenKey,
+                                         @YES,
+                                         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            view.hidden = YES;
+            return;
+        }
+
+        if ([managedHidden boolValue]) {
+            NSNumber *previousHidden = objc_getAssociatedObject(view, &kDYYYCommentSearchAnchorPreviousHiddenKey);
+            view.hidden = previousHidden ? previousHidden.boolValue : NO;
+            objc_setAssociatedObject(view, &kDYYYCommentSearchAnchorManagedHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(view, &kDYYYCommentSearchAnchorPreviousHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    } @catch (NSException *exception) {
+        NSLog(@"[DYYY][CommentSearchAnchor] visibility update failed on %@: %@",
+              NSStringFromClass([view class]),
+              exception.reason);
+    }
 }
+
+static char kDYYYCommentHeaderVerifiedCollapseModelKey;
+
+static BOOL DYYYIsCommentHeaderLeafViewHiddenBySetting(UIView *view) {
+    if (!view || !DYYYGetBool(@"DYYYHideCommentViews")) {
+        return NO;
+    }
+
+    NSString *className = NSStringFromClass([view class]);
+    static NSArray<NSString *> *commentViewsHiddenSuffixes = nil;
+    static dispatch_once_t commentViewsOnceToken;
+    dispatch_once(&commentViewsOnceToken, ^{
+      commentViewsHiddenSuffixes = @[
+          @"AWECommentSearchAnchorView",
+          @"AWEPOIEntryAnchorView",
+          @"AWECommentGuideLunaAnchorView",
+          @"CommentHeaderGeneralView",
+          @"CommentHeaderGoodsView",
+          @"CommentHeaderTemplateAnchorView"
+      ];
+    });
+
+    for (NSString *suffix in commentViewsHiddenSuffixes) {
+        if ([className hasSuffix:suffix]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL DYYYCommentHeaderViewTreeContainsHiddenLeaf(UIView *view, NSUInteger depth) {
+    if (!view || depth > 6) {
+        return NO;
+    }
+    if (DYYYIsCommentHeaderLeafViewHiddenBySetting(view)) {
+        return YES;
+    }
+    for (UIView *subview in view.subviews) {
+        if (DYYYCommentHeaderViewTreeContainsHiddenLeaf(subview, depth + 1)) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL DYYYCommentHeaderCellContainsOnlyHiddenLeaf(UIView *cell) {
+    if (!cell) {
+        return NO;
+    }
+
+    UIView *contentContainer = cell;
+    if ([cell isKindOfClass:[UICollectionViewCell class]]) {
+        contentContainer = ((UICollectionViewCell *)cell).contentView;
+    }
+
+    // 39.7.0 的实机日志显示：产生空行的 Header Cell 只有一个业务叶子分支。
+    // 若 Cell 同时承载其他分支（例如页签），保持宿主原高度，避免再次误伤。
+    if (contentContainer.subviews.count != 1) {
+        return NO;
+    }
+    return DYYYCommentHeaderViewTreeContainsHiddenLeaf(contentContainer.subviews.firstObject, 0);
+}
+
+static BOOL DYYYCommentHeaderCellShouldCollapseForHide(UIView *cell, id model) {
+    if (!DYYYGetBool(@"DYYYHideCommentViews") || !cell) {
+        return NO;
+    }
+
+    if (DYYYCommentHeaderCellContainsOnlyHiddenLeaf(cell)) {
+        return YES;
+    }
+
+    UIView *contentContainer = cell;
+    if ([cell isKindOfClass:[UICollectionViewCell class]]) {
+        contentContainer = ((UICollectionViewCell *)cell).contentView;
+    }
+    if (contentContainer.subviews.count == 1) {
+        UIView *only = contentContainer.subviews.firstObject;
+        if (only.hidden || only.alpha < 0.01 || CGRectGetHeight(only.bounds) < 0.5) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static void DYYYSetCommentHeaderModelVerifiedCollapse(id model, BOOL shouldCollapse) {
+    if (!model) {
+        return;
+    }
+    objc_setAssociatedObject(model,
+                             &kDYYYCommentHeaderVerifiedCollapseModelKey,
+                             @(shouldCollapse),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static BOOL DYYYShouldVerifiedCollapseCommentHeaderModel(id model) {
+    return DYYYGetBool(@"DYYYHideCommentViews") &&
+           [objc_getAssociatedObject(model, &kDYYYCommentHeaderVerifiedCollapseModelKey) boolValue];
+}
+
+%group CommentSearchAnchorGroup
+
+%hook AWECommentSearchAnchorView
+
+- (void)updateWithModel:(id)model {
+    %orig(model);
+    DYYYApplyCommentSearchAnchorVisibility(self);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    DYYYApplyCommentSearchAnchorVisibility(self);
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    DYYYApplyCommentSearchAnchorVisibility(self);
+}
+
+%end
+
+%end
+
+%group CommentPanelHeaderVerifiedCollapseGroup
+
+%hook AWECommentPanelHeaderSwiftImpl_CommentPanelHeaderSectionController
+
+- (CGSize)sizeForItemAtIndex:(NSInteger)index model:(id)model collectionViewSize:(CGSize)collectionViewSize {
+    CGSize originalSize = %orig(index, model, collectionViewSize);
+    if (DYYYShouldVerifiedCollapseCommentHeaderModel(model)) {
+        originalSize.height = 0.0;
+    }
+    return originalSize;
+}
+
+- (double)currentHeight {
+    double originalHeight = %orig;
+
+    id models = DYYYKVCValueIfPossible(self, @"modelsArray");
+    if (![models isKindOfClass:[NSArray class]] || [(NSArray *)models count] == 0) {
+        return originalHeight;
+    }
+
+    BOOL shouldRecalculate = NO;
+    for (id model in (NSArray *)models) {
+        if (DYYYShouldVerifiedCollapseCommentHeaderModel(model)) {
+            shouldRecalculate = YES;
+            break;
+        }
+    }
+    if (!shouldRecalculate) {
+        return originalHeight;
+    }
+
+    double totalHeight = 0.0;
+    CGSize collectionViewSize = CGSizeMake([UIScreen mainScreen].bounds.size.width, 0.0);
+    NSInteger index = 0;
+    SEL sizeSelector = @selector(sizeForItemAtIndex:model:collectionViewSize:);
+    for (id model in (NSArray *)models) {
+        CGSize itemSize = ((CGSize (*)(id, SEL, NSInteger, id, CGSize))objc_msgSend)(self,
+                                                                                       sizeSelector,
+                                                                                       index,
+                                                                                       model,
+                                                                                       collectionViewSize);
+        totalHeight += itemSize.height;
+        index++;
+    }
+    return totalHeight;
+}
+
+- (void)configCell:(id)cell index:(NSInteger)index model:(id)model {
+    %orig(cell, index, model);
+    BOOL shouldCollapse = [cell isKindOfClass:[UIView class]] &&
+                          DYYYCommentHeaderCellShouldCollapseForHide((UIView *)cell, model);
+    BOOL wasCollapsed = DYYYShouldVerifiedCollapseCommentHeaderModel(model);
+    DYYYSetCommentHeaderModelVerifiedCollapse(model, shouldCollapse);
+    if (shouldCollapse && !wasCollapsed) {
+        id didUpdateHeight = DYYYKVCValueIfPossible(self, @"didUpdateHeight");
+        if (didUpdateHeight) {
+            ((void (^)(void))didUpdateHeight)();
+        }
+    }
+}
+
+%end
 
 %end
 
@@ -6305,7 +9821,10 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
 %hook AWESearchAnchorListModel
 
 - (BOOL)hideWords {
-    return DYYYGetBool(@"DYYYHideCommentViews");
+    if (DYYYGetBool(@"DYYYHideCommentViews")) {
+        return YES;
+    }
+    return %orig;
 }
 
 %end
@@ -6337,8 +9856,6 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
 }
 
 %end
-
-
 
 // 隐藏消息页顶栏头像气泡
 %hook AFDSkylightCellBubble
@@ -6392,7 +9909,6 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
 // 隐藏我的添加朋友
 %hook AWEProfileNavigationButton
 - (void)setupUI {
-
     if (DYYYGetBool(@"DYYYHideButton")) {
         return;
     }
@@ -6433,20 +9949,6 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
 }
 
 %end
-
-// 隐藏转发到日常
-%hook AFDShareToDailyBottomButton
-
-- (void)layoutSubviews {
-    %orig;
-    if (DYYYGetBool(@"DYYYHideShareContentView")) {
-        [self removeFromSuperview];
-        return;
-    }
-}
-
-%end
-
 
 %hook AWELeftSideBarEntranceView
 
@@ -6508,6 +10010,7 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
     %orig;
 
     NSString *accessibilityLabel = self.accessibilityLabel;
+    BOOL isCollectButton = DYYYIsFeedVideoCollectButton(self);
 
     BOOL hideBtn = NO;
     BOOL hideLabel = NO;
@@ -6521,7 +10024,7 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
     } else if ([accessibilityLabel isEqualToString:@"分享"]) {
         hideBtn = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideShareButton"];
         hideLabel = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideShareLabel"];
-    } else if ([accessibilityLabel isEqualToString:@"收藏"]) {
+    } else if (isCollectButton) {
         hideBtn = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideCollectButton"];
         hideLabel = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideCollectLabel"];
     }
@@ -6531,7 +10034,16 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
     }
 
     if (hideBtn) {
+        if (isCollectButton) {
+            DYYYApplyFeedVideoCollectButtonSettingsWithRetry(self);
+            return;
+        }
         [self removeFromSuperview];
+        return;
+    }
+
+    if (isCollectButton && hideLabel) {
+        DYYYSetFeedVideoButtonLabelsHidden(self, YES);
         return;
     }
 
@@ -6616,33 +10128,175 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
 }
 %end
 
-// 右下音乐按钮
-%hook AWEMusicCoverButton
+// 隐藏文案下推荐应用下载横幅
+static void DYYYRemoveRecommendAppDownloadView(id viewObject) {
+    if (![viewObject isKindOfClass:[UIView class]]) {
+        return;
+    }
+    UIView *view = (UIView *)viewObject;
+    view.hidden = YES;
+    [view removeFromSuperview];
+}
 
-- (void)layoutSubviews {
+static void DYYYHideRecommendAppDownloadViewForOwner(id owner) {
+    id addFeedMusicView = DYYYKVCValueIfPossible(owner, @"addFeedMusicView");
+    DYYYRemoveRecommendAppDownloadView(addFeedMusicView);
+    DYYYSetKVCValueIfPossible(owner, @"addFeedMusicView", nil);
+}
+
+%hook AWEPlayInteractionMusicAiRefactorListenFeedController
+
+- (BOOL)shouldShowAddFeedMusicView {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (void)showFeedMusicViewIfNeeded {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYHideRecommendAppDownloadViewForOwner(self);
+        return;
+    }
     %orig;
-    NSString *accessibilityLabel = self.accessibilityLabel;
+}
 
-	if ([accessibilityLabel isEqualToString:@"音乐详情"]) {
-		if (DYYYGetBool(@"DYYYHideMusicButton")) {
-			self.alpha = 0;
-			return;
-		}
-	}
+- (void)setAddFeedMusicView:(UIView *)view {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        if ([view isKindOfClass:[UIView class]]) {
+            view.hidden = YES;
+            [view removeFromSuperview];
+        }
+        %orig(nil);
+        return;
+    }
+    %orig;
+}
+
+- (void)updateAddFeedMusicViewLayoutWithShowSpeedControl:(BOOL)showSpeedControl {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYHideRecommendAppDownloadViewForOwner(self);
+        return;
+    }
+    %orig;
 }
 
 %end
 
-// 右下听抖音按钮
-%hook AWEPlayInteractionListenFeedView
+// 39.3.0 的应用推荐已改走通用 Diversion Bar。该视图只承载
+// pkgInfo/appMarket/downloadIntermediatePage 类应用引流，隐藏它不会删除作品文案或普通音乐信息。
+%hook AWEPlayInteractionDiversionBar
 - (void)layoutSubviews {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYRemoveRecommendAppDownloadView(self);
+        return;
+    }
     %orig;
-
-	if (DYYYGetBool(@"DYYYHideMusicButton")) {
-		self.alpha = 0;
-		return;
-	}
 }
+
+- (void)didMoveToWindow {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYRemoveRecommendAppDownloadView(self);
+    }
+}
+
+%end
+
+%hook AWEPlayInteractionNewDiversionBarBottomElement
+
+- (void)setDiversionBarView:(AWEPlayInteractionDiversionBar *)view {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYRemoveRecommendAppDownloadView(view);
+        %orig(nil);
+        return;
+    }
+    %orig;
+}
+
+- (void)layoutElementView {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYRemoveRecommendAppDownloadView(DYYYIvarValueIfPossible(self, "_diversionBarView"));
+        return;
+    }
+    %orig;
+}
+
+%end
+
+// 抖音精选的应用推荐使用独立 Lynx 底栏。只在其自身的
+// canShow/update/add 入口阻断，不移除 feed 容器。
+static void DYYYHideDouYinSelectAppGuideViews(id owner) {
+    DYYYRemoveRecommendAppDownloadView(DYYYIvarValueIfPossible(owner, "_appGuideView"));
+    DYYYRemoveRecommendAppDownloadView(DYYYIvarValueIfPossible(owner, "_appGuideContainer"));
+}
+
+%hook AWEDouYinSelectUGBottomBarController
+
+- (BOOL)canShowBottomBarForAweme:(id)aweme {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (void)updateBottomBarWithAweme:(id)aweme updateTiming:(BOOL)updateTiming {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYHideDouYinSelectAppGuideViews(self);
+        return;
+    }
+    %orig;
+}
+
+- (void)bottomBarAddedToContainer:(id)container {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYHideDouYinSelectAppGuideViews(self);
+        return;
+    }
+    %orig;
+}
+
+- (void)setAppGuideView:(UIView *)view {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYRemoveRecommendAppDownloadView(view);
+        %orig(nil);
+        return;
+    }
+    %orig;
+}
+
+- (void)setAppGuideContainer:(UIView *)view {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYRemoveRecommendAppDownloadView(view);
+        %orig(nil);
+        return;
+    }
+    %orig;
+}
+
+%end
+
+%hook AWEFeedMeetMusicView
+
+- (void)layoutSubviews {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        UIView *view = (UIView *)self;
+        view.hidden = YES;
+        [view removeFromSuperview];
+        return;
+    }
+    %orig;
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        UIView *view = (UIView *)self;
+        view.hidden = YES;
+        [view removeFromSuperview];
+    }
+}
+
 %end
 
 %hook AWEPlayInteractionFollowPromptView
@@ -6754,6 +10408,42 @@ static const void *kDYYYLiveDurationRoomKey = &kDYYYLiveDurationRoomKey;
 static NSString *const kDYYYLiveDurationCenterXPercentKey = @"DYYYLiveDurationCenterXPercent";
 static NSString *const kDYYYLiveDurationCenterYPercentKey = @"DYYYLiveDurationCenterYPercent";
 static NSString *const kDYYYLiveDurationPositionLockedKey = @"DYYYLiveDurationPositionLocked";
+static BOOL dyyyLiveDurationOfficialClearScreenActive = NO;
+
+static void DYYYLiveDurationUpdateView(UIView *root);
+static void DYYYLiveDurationSetOfficialClearScreenActive(BOOL active);
+
+static NSHashTable<UIView *> *DYYYLiveDurationTrackedRoots(void) {
+    static NSHashTable<UIView *> *trackedRoots = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      trackedRoots = [NSHashTable weakObjectsHashTable];
+    });
+    return trackedRoots;
+}
+
+static void DYYYLiveDurationTrackRoot(UIView *root) {
+    if (!root) {
+        return;
+    }
+    [DYYYLiveDurationTrackedRoots() addObject:root];
+}
+
+static void DYYYLiveDurationUntrackRoot(UIView *root) {
+    if (!root) {
+        return;
+    }
+
+    NSHashTable<UIView *> *trackedRoots = DYYYLiveDurationTrackedRoots();
+    [trackedRoots removeObject:root];
+    if (trackedRoots.count == 0) {
+        dyyyLiveDurationOfficialClearScreenActive = NO;
+    }
+}
+
+static BOOL DYYYLiveDurationOfficialClearScreenActive(void) {
+    return dyyyLiveDurationOfficialClearScreenActive;
+}
 
 static UIEdgeInsets DYYYLiveDurationSafeInsets(UIView *root) {
     return [root respondsToSelector:@selector(safeAreaInsets)] ? root.safeAreaInsets : UIEdgeInsetsZero;
@@ -6910,6 +10600,33 @@ static CGPoint DYYYLiveDurationClampedCenter(CGPoint center, CGSize viewSize, UI
 }
 
 @end
+
+static void DYYYLiveDurationSetOfficialClearScreenActive(BOOL active) {
+    void (^applyBlock)(void) = ^{
+      dyyyLiveDurationOfficialClearScreenActive = active;
+      NSArray<UIView *> *roots = [[DYYYLiveDurationTrackedRoots() allObjects] copy];
+      for (UIView *root in roots) {
+          if (!root.window) {
+              DYYYLiveDurationUntrackRoot(root);
+              continue;
+          }
+
+          DYYYLiveDurationView *durationView = objc_getAssociatedObject(root, kDYYYLiveDurationViewKey);
+          if (active) {
+              durationView.dragging = NO;
+              durationView.hidden = YES;
+          } else {
+              DYYYLiveDurationUpdateView(root);
+          }
+      }
+    };
+
+    if ([NSThread isMainThread]) {
+        applyBlock();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), applyBlock);
+    }
+}
 
 static id DYYYLiveDurationSafeValue(id obj, NSString *key) {
     if (!obj || key.length == 0) {
@@ -7144,6 +10861,7 @@ static void DYYYLiveDurationRemoveFromView(UIView *root) {
     [durationView removeFromSuperview];
     objc_setAssociatedObject(root, kDYYYLiveDurationViewKey, nil, OBJC_ASSOCIATION_ASSIGN);
     objc_setAssociatedObject(root, kDYYYLiveDurationRoomKey, nil, OBJC_ASSOCIATION_ASSIGN);
+    DYYYLiveDurationUntrackRoot(root);
 }
 
 static void DYYYLiveDurationUpdateView(UIView *root) {
@@ -7159,6 +10877,12 @@ static void DYYYLiveDurationUpdateView(UIView *root) {
     id roomModel = objc_getAssociatedObject(root, kDYYYLiveDurationRoomKey);
     NSTimeInterval elapsed = DYYYLiveDurationElapsedSeconds(roomModel);
     DYYYLiveDurationView *durationView = objc_getAssociatedObject(root, kDYYYLiveDurationViewKey);
+    if (DYYYLiveDurationOfficialClearScreenActive()) {
+        durationView.dragging = NO;
+        durationView.hidden = YES;
+        return;
+    }
+
     if (elapsed < 0.0) {
         durationView.hidden = YES;
         return;
@@ -7231,6 +10955,8 @@ static void DYYYLiveDurationInstallOnView(UIView *root, id carrier) {
           DYYYLiveDurationRemoveFromView(root);
           return;
       }
+
+      DYYYLiveDurationTrackRoot(root);
 
       id room = DYYYLiveDurationRoomFromCarrier(carrier);
       if (!DYYYLiveDurationHasValidLiveTime(room)) {
@@ -7470,6 +11196,54 @@ static void DYYYLiveDurationInstallFromInnerFeedCell(id cell) {
 
 %end
 
+%hook IESLiveCleanScreenNormalAbility
+
+- (void)switchToCleanScreenModeWithOffset:(double)offset duration:(double)duration completion:(id)completion {
+    DYYYLiveDurationSetOfficialClearScreenActive(YES);
+    %orig;
+}
+
+- (void)p_switchToCleanScreenModeWithOffset:(double)offset duration:(double)duration completion:(id)completion {
+    DYYYLiveDurationSetOfficialClearScreenActive(YES);
+    %orig;
+}
+
+- (void)p_prepareCleanScreenWithMode:(long long)mode type:(long long)type {
+    DYYYLiveDurationSetOfficialClearScreenActive(YES);
+    %orig;
+}
+
+- (void)exitCleanScreenIfNeed {
+    %orig;
+    DYYYLiveDurationSetOfficialClearScreenActive(NO);
+}
+
+- (void)p_exitCleanScreenWithType:(long long)type duration:(double)duration {
+    %orig;
+    DYYYLiveDurationSetOfficialClearScreenActive(NO);
+}
+
+- (void)p_exitCleanScreenWithType:(long long)type {
+    %orig;
+    DYYYLiveDurationSetOfficialClearScreenActive(NO);
+}
+
+%end
+
+%hook IESLiveClearScreenServiceImpl
+
+- (void)switchToCleanScreenModeWithOffset:(double)offset duration:(double)duration completion:(id)completion {
+    DYYYLiveDurationSetOfficialClearScreenActive(YES);
+    %orig;
+}
+
+- (void)exitCleanScreenIfNeed {
+    %orig;
+    DYYYLiveDurationSetOfficialClearScreenActive(NO);
+}
+
+%end
+
 // 直播状态栏
 %hook IESLiveAudienceViewController
 - (BOOL)prefersStatusBarHidden {
@@ -7593,7 +11367,6 @@ static void DYYYLiveDurationInstallFromInnerFeedCell(id cell) {
 }
 %end
 
-
 %hook AWEPlayInteractionSearchAnchorView
 
 - (void)layoutSubviews {
@@ -7605,7 +11378,6 @@ static void DYYYLiveDurationInstallFromInnerFeedCell(id cell) {
 }
 
 %end
-
 
 // 隐藏暂停关键词
 %hook AWEFeedPauseRelatedWordComponent
@@ -7653,7 +11425,6 @@ static void DYYYLiveDurationInstallFromInnerFeedCell(id cell) {
 %hook AWESearchEntranceView
 
 - (void)layoutSubviews {
-
     if (DYYYGetBool(@"DYYYHideSearchEntrance")) {
         self.hidden = YES;
         return;
@@ -7730,8 +11501,6 @@ static void DYYYLiveDurationInstallFromInnerFeedCell(id cell) {
 }
 
 %end
-
-
 
 // 隐藏直播发现
 %hook AWEFeedLiveTabRevisitControlView
@@ -7843,7 +11612,7 @@ static NSHashTable *processedParentViews = nil;
 - (void)layoutSubviews {
     %orig;
 
-    BOOL hideRightLabel = DYYYGetBool(@"DYYYHideRightLabel");
+    BOOL hideRightLabel = DYYYGetBoolCached(@"DYYYHideRightLabel");
     if (!hideRightLabel)
         return;
 
@@ -7883,7 +11652,6 @@ static NSHashTable *processedParentViews = nil;
         UIView *grandparentView = parentView.superview; // 爷爷视图
 
         if (grandparentView) {
-
             dispatch_async(dispatch_get_main_queue(), ^{
               if ([grandparentView isKindOfClass:[UIStackView class]]) {
                   UIStackView *stackView = (UIStackView *)grandparentView;
@@ -7927,6 +11695,25 @@ static NSHashTable *processedParentViews = nil;
 %end
 
 // 隐藏自己无公开作品的视图
+static void DYYYHideProfilePostGuideView(UIView *view) {
+    if (!view) {
+        return;
+    }
+
+    view.hidden = YES;
+    view.alpha = 0.0;
+    view.userInteractionEnabled = NO;
+    view.accessibilityElementsHidden = YES;
+
+    if ([view isKindOfClass:[UICollectionViewCell class]]) {
+        UIView *contentView = ((UICollectionViewCell *)view).contentView;
+        contentView.hidden = YES;
+        contentView.alpha = 0.0;
+        contentView.userInteractionEnabled = NO;
+        contentView.accessibilityElementsHidden = YES;
+    }
+}
+
 %hook AWEProfileMixItemCollectionViewCell
 - (void)layoutSubviews {
     %orig;
@@ -7952,6 +11739,24 @@ static NSHashTable *processedParentViews = nil;
 
 %end
 
+%hook AWEProfilePublishGuideCollectionViewCell
+
+- (void)didMoveToWindow {
+    %orig;
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+        DYYYHideProfilePostGuideView((UIView *)self);
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+        DYYYHideProfilePostGuideView((UIView *)self);
+    }
+}
+
+%end
+
 %hook AWEProfileTaskCardStyleListCollectionViewCell
 - (BOOL)shouldShowPublishGuide {
     if (DYYYGetBool(@"DYYYHidePostView")) {
@@ -7959,6 +11764,101 @@ static NSHashTable *processedParentViews = nil;
     }
     return %orig;
 }
+%end
+
+%hook AWEUserProfileUGCHeaderContributionGuideBannerSectionViewModel
+
+- (CGSize)sectionSize {
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+        return CGSizeZero;
+    }
+    return %orig;
+}
+
+%end
+
+%hook AWEUserProfileUGCHeaderContributionGuideBannerSectionController
+
+- (void)configCell:(UICollectionViewCell *)cell index:(NSInteger)index model:(id)model {
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+        DYYYHideProfilePostGuideView(cell);
+        return;
+    }
+    %orig(cell, index, model);
+}
+
+%end
+
+%hook AWEUserProfileUGCContributionGuideCollectionViewCell
+
+- (void)didMoveToWindow {
+    %orig;
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+        DYYYHideProfilePostGuideView((UIView *)self);
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+        DYYYHideProfilePostGuideView((UIView *)self);
+    }
+}
+
+%end
+
+%hook AWEUserProfileUGCContributionGuideEmptyCollectionViewCell
+
+- (void)didMoveToWindow {
+    %orig;
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+        DYYYHideProfilePostGuideView((UIView *)self);
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+        DYYYHideProfilePostGuideView((UIView *)self);
+    }
+}
+
+%end
+
+%hook AWEUserProfileUGCHeaderContributionGuideBannerSectionCell
+
+- (void)didMoveToWindow {
+    %orig;
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+        DYYYHideProfilePostGuideView((UIView *)self);
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+        DYYYHideProfilePostGuideView((UIView *)self);
+    }
+}
+
+%end
+
+%hook AWEUserProfileUGCTaskCardStyleListCollectionViewCell
+
+- (void)didMoveToWindow {
+    %orig;
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+        DYYYHideProfilePostGuideView((UIView *)self);
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHidePostView")) {
+        DYYYHideProfilePostGuideView((UIView *)self);
+    }
+}
+
 %end
 
 %hook AWEProfileRichEmptyView
@@ -8144,7 +12044,6 @@ static NSHashTable *processedParentViews = nil;
 
 %hook AWELiveFeedLabelTagView
 - (void)layoutSubviews {
-
     if (DYYYGetBool(@"DYYYHideLiveCapsuleView")) {
         UIView *parentView = self.superview;
         if (parentView) {
@@ -8257,8 +12156,16 @@ static NSHashTable *processedParentViews = nil;
 %hook ACCStickerContainerView
 - (void)layoutSubviews {
     %orig;
-    if (DYYYGetBool(@"DYYYHideSearchSame")) {
-        [self removeFromSuperview];
+    if (!DYYYGetBool(@"DYYYHideSearchSame")) {
+        return;
+    }
+
+    // 该容器同时承载暂停态的单击复播手势，不能整体移出视图层级。
+    // 只隐藏并禁用标签内容，保留容器自身的手势识别能力。
+    self.backgroundColor = UIColor.clearColor;
+    for (UIView *contentView in self.subviews) {
+        contentView.hidden = YES;
+        contentView.userInteractionEnabled = NO;
     }
 }
 %end
@@ -8553,7 +12460,6 @@ static NSHashTable *processedParentViews = nil;
 
 %hook IESLiveHotMessageView
 - (void)layoutSubviews {
-
     if (DYYYGetBool(@"DYYYHideLiveHotMessage")) {
         self.hidden = YES;
         return;
@@ -8562,6 +12468,8 @@ static NSHashTable *processedParentViews = nil;
 }
 %end
 
+// 数据源 getter 会在详情/合集滚动枚举期间被频繁读取；过滤只能发生在写入边界，
+// 不能在 getter 内原地修改宿主持有的 NSMutableArray，否则会触发快速枚举突变异常。
 %hook AWEListDataController
 
 - (void)setDataSource:(NSMutableArray *)dataSource {
@@ -8569,31 +12477,9 @@ static NSHashTable *processedParentViews = nil;
     %orig(filtered);
 }
 
-- (NSMutableArray *)dataSource {
-    NSMutableArray *dataSource = %orig;
-    NSArray *filtered = [DYYYUtils arrayByRemovingAdvertisements:dataSource];
-    if (filtered != dataSource && [dataSource isKindOfClass:[NSMutableArray class]]) {
-        [dataSource setArray:filtered];
-    } else if (filtered != dataSource) {
-        return [filtered mutableCopy];
-    }
-    return dataSource;
-}
-
 - (void)setFilteredDataSource:(NSMutableArray *)filteredDataSource {
     NSArray *filtered = [DYYYUtils arrayByRemovingAdvertisements:filteredDataSource];
     %orig(filtered);
-}
-
-- (NSMutableArray *)filteredDataSource {
-    NSMutableArray *filteredDataSource = %orig;
-    NSArray *filtered = [DYYYUtils arrayByRemovingAdvertisements:filteredDataSource];
-    if (filtered != filteredDataSource && [filteredDataSource isKindOfClass:[NSMutableArray class]]) {
-        [filteredDataSource setArray:filtered];
-    } else if (filtered != filteredDataSource) {
-        return [filtered mutableCopy];
-    }
-    return filteredDataSource;
 }
 
 %end
@@ -8603,17 +12489,6 @@ static NSHashTable *processedParentViews = nil;
 - (void)setDataSource:(id)dataSource {
     NSArray *filtered = [DYYYUtils arrayByRemovingAdvertisements:dataSource];
     %orig(filtered);
-}
-
-- (id)dataSource {
-    id dataSource = %orig;
-    NSArray *filtered = [DYYYUtils arrayByRemovingAdvertisements:dataSource];
-    if (filtered != dataSource && [dataSource isKindOfClass:[NSMutableArray class]]) {
-        [dataSource setArray:filtered];
-    } else if (filtered != dataSource) {
-        return filtered;
-    }
-    return dataSource;
 }
 
 %end
@@ -8634,18 +12509,212 @@ static NSHashTable *processedParentViews = nil;
     %orig(filtered);
 }
 
-- (id)dataSource {
-    id dataSource = %orig;
-    NSArray *filtered = [DYYYUtils arrayByRemovingAdvertisements:dataSource];
-    if (filtered != dataSource && [dataSource isKindOfClass:[NSMutableArray class]]) {
-        [dataSource setArray:filtered];
-    } else if (filtered != dataSource) {
-        return filtered;
+%end
+
+static BOOL DYYYAwemeModelIsRecommendFeed(AWEAwemeModel *aweme) {
+    if (![aweme respondsToSelector:@selector(referString)]) {
+        return NO;
     }
-    return dataSource;
+
+    return [aweme.referString isEqualToString:@"homepage_hot"];
 }
 
-%end
+static BOOL DYYYAwemeModelHasLiveSignal(AWEAwemeModel *aweme) {
+    if ([aweme respondsToSelector:@selector(isLive)] && aweme.isLive) {
+        return YES;
+    }
+
+    if ([aweme respondsToSelector:@selector(cellRoom)] && aweme.cellRoom != nil) {
+        return YES;
+    }
+
+    return [aweme respondsToSelector:@selector(videoFeedTag)] && [aweme.videoFeedTag isEqualToString:@"直播中"];
+}
+
+static BOOL DYYYAwemeModelIsFamiliarItem(AWEAwemeModel *aweme) {
+    return [aweme respondsToSelector:@selector(isFamiliarItem)] && aweme.isFamiliarItem;
+}
+
+static BOOL DYYYAwemeModelIsAIInteraction(AWEAwemeModel *aweme) {
+    return [aweme respondsToSelector:@selector(awemeType)] && aweme.awemeType == 162;
+}
+
+@interface DYYYRecommendationFilterConfig : NSObject
+@property(nonatomic) NSUInteger generation;
+@property(nonatomic) BOOL noAds;
+@property(nonatomic) BOOL skipLive;
+@property(nonatomic) BOOL skipAllLive;
+@property(nonatomic) BOOL skipHotSpot;
+@property(nonatomic) BOOL skipPhoto;
+@property(nonatomic) BOOL skipPhotoText;
+@property(nonatomic) BOOL skipFriendsVideo;
+@property(nonatomic) BOOL skipMusic;
+@property(nonatomic) BOOL skipAIInteraction;
+@property(nonatomic) BOOL shouldDisableHDR;
+@property(nonatomic) BOOL filterHDR;
+@property(nonatomic) NSInteger minLikesThreshold;
+@property(nonatomic) NSInteger daysThreshold;
+@property(nonatomic, copy) NSArray<NSString *> *keywords;
+@property(nonatomic, copy) NSArray<NSString *> *propKeywords;
+@property(nonatomic, copy) NSSet<NSString *> *userIDs;
+@property(nonatomic) BOOL hasBatchWork;
+@property(nonatomic) BOOL hasModelFilterWork;
+@end
+
+@implementation DYYYRecommendationFilterConfig
+@end
+
+static os_unfair_lock gDYYYRecommendationFilterConfigLock = OS_UNFAIR_LOCK_INIT;
+static DYYYRecommendationFilterConfig *gDYYYRecommendationFilterConfig = nil;
+static BOOL gDYYYRecommendationFilterConfigDirty = YES;
+static NSUInteger gDYYYRecommendationFilterConfigGeneration = 1;
+static id gDYYYRecommendationFilterDefaultsObserver = nil;
+
+static NSArray<NSString *> *DYYYNormalizedFilterTokens(id rawValue) {
+    if (![rawValue isKindOfClass:[NSString class]] || [(NSString *)rawValue length] == 0) {
+        return @[];
+    }
+
+    NSMutableArray<NSString *> *tokens = [NSMutableArray array];
+    NSCharacterSet *whitespace = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    for (NSString *rawToken in [(NSString *)rawValue componentsSeparatedByString:@","]) {
+        NSString *token = [rawToken stringByTrimmingCharactersInSet:whitespace];
+        if (token.length > 0) {
+            [tokens addObject:token];
+        }
+    }
+    return [tokens copy];
+}
+
+static NSSet<NSString *> *DYYYNormalizedFilterUserIDs(id rawValue) {
+    NSMutableSet<NSString *> *userIDs = [NSMutableSet set];
+    NSCharacterSet *whitespace = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    for (NSString *userInfo in DYYYNormalizedFilterTokens(rawValue)) {
+        NSString *userID = [userInfo stringByTrimmingCharactersInSet:whitespace];
+        NSRange canonicalSeparatorRange = [userID rangeOfString:@"|" options:NSBackwardsSearch];
+        if (canonicalSeparatorRange.location != NSNotFound) {
+            userID = NSMaxRange(canonicalSeparatorRange) < userID.length
+                         ? [[userID substringFromIndex:NSMaxRange(canonicalSeparatorRange)] stringByTrimmingCharactersInSet:whitespace]
+                         : @"";
+        } else {
+            NSRange legacySeparatorRange = [userID rangeOfString:@"-" options:NSBackwardsSearch];
+            if (legacySeparatorRange.location != NSNotFound) {
+                userID = NSMaxRange(legacySeparatorRange) < userID.length
+                             ? [[userID substringFromIndex:NSMaxRange(legacySeparatorRange)] stringByTrimmingCharactersInSet:whitespace]
+                             : @"";
+            }
+        }
+
+        if (userID.length > 0) {
+            [userIDs addObject:userID];
+        }
+    }
+    return [userIDs copy];
+}
+
+static BOOL DYYYRecommendationFilterMatchesAuthor(DYYYRecommendationFilterConfig *config, AWEUserModel *author) {
+    if (config.userIDs.count == 0 || !author) {
+        return NO;
+    }
+
+    NSString *userID = [author.userID stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (userID.length > 0 &&
+        ([config.userIDs containsObject:userID] ||
+         [config.userIDs containsObject:[@"uid:" stringByAppendingString:userID]])) {
+        return YES;
+    }
+
+    NSString *shortID = [author.shortID stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return shortID.length > 0 &&
+           ([config.userIDs containsObject:shortID] ||
+            [config.userIDs containsObject:[@"short:" stringByAppendingString:shortID]]);
+}
+
+static DYYYRecommendationFilterConfig *DYYYBuildRecommendationFilterConfig(NSUInteger generation) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    DYYYRecommendationFilterConfig *config = [DYYYRecommendationFilterConfig new];
+    config.generation = generation;
+    config.noAds = [defaults boolForKey:@"DYYYNoAds"];
+    config.skipLive = [defaults boolForKey:@"DYYYSkipLive"];
+    config.skipAllLive = [defaults boolForKey:@"DYYYSkipAllLive"];
+    config.skipHotSpot = [defaults boolForKey:@"DYYYSkipHotSpot"];
+    config.skipPhoto = [defaults boolForKey:@"DYYYSkipPhoto"];
+    config.skipPhotoText = [defaults boolForKey:@"DYYYSkipPhotoText"];
+    config.skipFriendsVideo = [defaults boolForKey:@"DYYYSkipFriendsVideo"];
+    config.skipMusic = [defaults boolForKey:@"DYYYSkipMusic"];
+    config.skipAIInteraction = [defaults boolForKey:@"DYYYSkipAIInteraction"];
+    config.shouldDisableHDR = DYYYShouldDisableAllHDR();
+    config.filterHDR = DYYYShouldFilterGlobalHDR();
+    config.minLikesThreshold = MAX([defaults integerForKey:@"DYYYFilterLowLikes"], 0);
+    config.daysThreshold = MAX([defaults integerForKey:@"DYYYFilterTimeLimit"], 0);
+    config.keywords = DYYYNormalizedFilterTokens([defaults objectForKey:@"DYYYFilterKeywords"]);
+    config.propKeywords = DYYYNormalizedFilterTokens([defaults objectForKey:@"DYYYFilterProp"]);
+    config.userIDs = DYYYNormalizedFilterUserIDs([defaults objectForKey:@"DYYYFilterUsers"]);
+
+    config.hasBatchWork = config.noAds ||
+                          config.skipLive ||
+                          config.skipAllLive ||
+                          config.skipPhoto ||
+                          config.skipPhotoText ||
+                          config.skipFriendsVideo ||
+                          config.skipMusic ||
+                          config.skipAIInteraction ||
+                          config.shouldDisableHDR ||
+                          config.minLikesThreshold > 0 ||
+                          config.daysThreshold > 0 ||
+                          config.userIDs.count > 0;
+    config.hasModelFilterWork = config.noAds ||
+                                config.skipAllLive ||
+                                config.skipHotSpot ||
+                                config.skipFriendsVideo ||
+                                config.skipMusic ||
+                                config.skipAIInteraction ||
+                                config.shouldDisableHDR ||
+                                config.filterHDR ||
+                                config.keywords.count > 0 ||
+                                config.propKeywords.count > 0 ||
+                                config.userIDs.count > 0;
+    return config;
+}
+
+static DYYYRecommendationFilterConfig *DYYYCurrentRecommendationFilterConfig(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        gDYYYRecommendationFilterDefaultsObserver =
+            [[NSNotificationCenter defaultCenter] addObserverForName:NSUserDefaultsDidChangeNotification
+                                                              object:nil
+                                                               queue:nil
+                                                          usingBlock:^(__unused NSNotification *notification) {
+            os_unfair_lock_lock(&gDYYYRecommendationFilterConfigLock);
+            gDYYYRecommendationFilterConfigDirty = YES;
+            gDYYYRecommendationFilterConfigGeneration += 1;
+            os_unfair_lock_unlock(&gDYYYRecommendationFilterConfigLock);
+        }];
+    });
+
+    os_unfair_lock_lock(&gDYYYRecommendationFilterConfigLock);
+    if (gDYYYRecommendationFilterConfigDirty || !gDYYYRecommendationFilterConfig) {
+        gDYYYRecommendationFilterConfig =
+            DYYYBuildRecommendationFilterConfig(gDYYYRecommendationFilterConfigGeneration);
+        gDYYYRecommendationFilterConfigDirty = NO;
+    }
+    DYYYRecommendationFilterConfig *config = gDYYYRecommendationFilterConfig;
+    os_unfair_lock_unlock(&gDYYYRecommendationFilterConfigLock);
+    return config;
+}
+
+static BOOL DYYYStringContainsAnyFilterToken(NSString *value, NSArray<NSString *> *tokens) {
+    if (value.length == 0 || tokens.count == 0) {
+        return NO;
+    }
+
+    for (NSString *token in tokens) {
+        if ([value containsString:token]) {
+            return YES;
+        }
+    }
+    return NO;
+}
 
 %hook AWEHotListDataController
 
@@ -8701,11 +12770,16 @@ static NSHashTable *processedParentViews = nil;
         return nil;
     }
 
+    // 39.7.0 的稳定原生路径，绝大多数推荐模型可在这里直接命中，避免进入 KVC 兼容探测。
+    NSNumber *directDiggCount = [self dyyy_numberValueForLowLikesFilter:aweme.statistics.diggCount];
+    if (directDiggCount) {
+        return directDiggCount;
+    }
+
     static NSArray<NSString *> *diggKeyPaths = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         diggKeyPaths = @[
-            @"statistics.diggCount",
             @"statistics.digg_count",
             @"diggCount",
             @"digg_count",
@@ -8739,132 +12813,215 @@ static NSHashTable *processedParentViews = nil;
         return orig;
     }
 
-    // --- 配置读取 ---
-    NSInteger daysThreshold = DYYYGetInteger(@"DYYYFilterTimeLimit");
-    BOOL skipLive = DYYYGetBool(@"DYYYSkipLive"); // 读取直播过滤开关
-    NSInteger minLikesThreshold = DYYYGetInteger(@"DYYYFilterLowLikes"); // 读取低赞过滤阈值 (例如: 1000)
-    BOOL skipPhotoText = DYYYGetBool(@"DYYYSkipPhotoText"); // 图文过滤
-    BOOL skipPhoto = DYYYGetBool(@"DYYYSkipPhoto"); // 图集过滤
-    BOOL skipMusic = DYYYGetBool(@"DYYYSkipMusic"); // 音乐过滤
-    BOOL shouldDisableHDR = DYYYShouldDisableAllHDR();
-    BOOL noAds = DYYYGetBool(@"DYYYNoAds");
+    DYYYRecommendationFilterConfig *config = DYYYCurrentRecommendationFilterConfig();
+    if (!config.hasBatchWork) {
+        return orig;
+    }
 
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    NSTimeInterval thresholdInSeconds = MAX(daysThreshold, 0) * 86400.0;
-
-    // 第一阶段：先做稳定字段过滤（直播/时间/类型）
-    NSMutableArray *baseFiltered = [NSMutableArray arrayWithCapacity:orig.count];
+    NSTimeInterval thresholdInSeconds = config.daysThreshold * 86400.0;
+    NSMutableArray *filtered = [NSMutableArray arrayWithCapacity:orig.count];
 
     for (id obj in orig) {
         if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
-            [baseFiltered addObject:obj];
+            [filtered addObject:obj];
             continue;
         }
 
         AWEAwemeModel *m = (AWEAwemeModel *)obj;
+        BOOL isRecommendFeed = DYYYAwemeModelIsRecommendFeed(m);
+        BOOL isLiveAweme = DYYYAwemeModelHasLiveSignal(m);
 
         // 1. 广告过滤：合集、搜索内流、分页追加等旁路也会进入此共享转换。
-        if (noAds && [DYYYUtils isAdvertisementAwemeModel:m]) {
+        if (config.noAds && [DYYYUtils isAdvertisementAwemeModel:m]) {
             continue;
         }
 
-        // 2. 直播过滤逻辑 (仅依赖 cellRoom)
-        if (skipLive && [m respondsToSelector:@selector(cellRoom)] && m.cellRoom != nil) {
-            continue; // 命中直播过滤，跳过
+        // 2. 直播过滤：当前路径是推荐流转换，全部过滤同样覆盖这里。
+        if ((config.skipAllLive || config.skipLive) && isLiveAweme) {
+            continue;
+        }
+
+        if (isLiveAweme) {
+            [filtered addObject:obj];
+            continue;
         }
 
         // 2.1 图文模式过滤逻辑（推荐页）
-        if (skipPhotoText &&
+        if (config.skipPhotoText &&
             [m respondsToSelector:@selector(isNewTextMode)] &&
             m.isNewTextMode &&
-            [m respondsToSelector:@selector(referString)] &&
-            [m.referString isEqualToString:@"homepage_hot"]) {
-            continue; // 图文模式且来自推荐页，跳过
+            isRecommendFeed) {
+            continue;
         }
 
         // 2.2 图集过滤逻辑（推荐页）
-        if (skipPhoto &&
+        if (config.skipPhoto &&
             [m respondsToSelector:@selector(awemeType)] &&
             m.awemeType == 68 &&
-            [m respondsToSelector:@selector(referString)] &&
-            [m.referString isEqualToString:@"homepage_hot"]) {
-            continue; // 图集且来自推荐页，跳过
+            isRecommendFeed) {
+            continue;
         }
 
-        // 2.3 音乐过滤逻辑（推荐页）
-        if (skipMusic &&
-            [m respondsToSelector:@selector(referString)] &&
-            [m.referString isEqualToString:@"homepage_hot"] &&
+        // 2.3 朋友作品过滤逻辑（推荐页）：仅使用宿主原生 isFamiliarItem 标记。
+        if (config.skipFriendsVideo &&
+            isRecommendFeed &&
+            DYYYAwemeModelIsFamiliarItem(m)) {
+            continue;
+        }
+
+        // 2.4 音乐过滤逻辑（推荐页）
+        if (config.skipMusic &&
+            isRecommendFeed &&
             [m respondsToSelector:@selector(musicCard)] &&
             m.musicCard) {
-            continue; // 音乐卡片且来自推荐页，跳过
+            continue;
+        }
+
+        // 2.5 AI 互动过滤逻辑（推荐页）：仅接受宿主 awemeType == 162 的明确类型。
+        if (config.skipAIInteraction &&
+            isRecommendFeed &&
+            DYYYAwemeModelIsAIInteraction(m)) {
+            continue;
+        }
+
+        // 2.6 用户过滤：当前控制器只处理推荐流，模型字段也已在数组转换阶段完整初始化。
+        // 优先匹配稳定 userID，并保留旧版 shortID 配置兼容。
+        if (DYYYRecommendationFilterMatchesAuthor(config, m.author)) {
+            continue;
         }
 
         // 3. 时间限制过滤
-        if (daysThreshold > 0 && [m respondsToSelector:@selector(createTime)]) {
+        if (config.daysThreshold > 0 && [m respondsToSelector:@selector(createTime)]) {
             NSTimeInterval vTs = [m.createTime doubleValue];
             if (vTs > 1e12) {
-                vTs /= 1000.0; // 毫秒转秒
+                vTs /= 1000.0;
             }
 
             if (vTs > 0 && (now - vTs) > thresholdInSeconds) {
-                continue; // 超过设定时限，跳过
+                continue;
             }
         }
 
         // 4. 全局屏蔽 HDR 时，若作品没有 SDR 码率档，直接过滤，避免强播纯 HDR 源导致黑屏或 HDR 漏出。
-        if (shouldDisableHDR &&
+        if (config.shouldDisableHDR &&
             ![m dyyy_shouldExcludeFromGlobalHDRFilter] &&
             DYYYAwemeModelHasOnlyHDRBitrateModels(m)) {
             continue;
         }
 
-        if (shouldDisableHDR) {
+        if (config.shouldDisableHDR) {
             DYYYStripHDRHintsFromAwemeModel(m);
         }
 
-        [baseFiltered addObject:obj];
-    }
-
-    if (minLikesThreshold <= 0 || baseFiltered.count == 0) {
-        return [baseFiltered copy];
-    }
-
-    // 第二阶段：低赞过滤。字段缺失时放行；只要能解析到数值，就严格按阈值过滤。
-    NSMutableArray *lowLikesFiltered = [NSMutableArray arrayWithCapacity:baseFiltered.count];
-
-    for (id obj in baseFiltered) {
-        if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
-            [lowLikesFiltered addObject:obj];
-            continue;
+        // 5. 低赞过滤：字段缺失时放行；可解析到数值时严格按阈值过滤。
+        if (config.minLikesThreshold > 0) {
+            NSNumber *diggCountValue = [self dyyy_resolvedDiggCountForAweme:m];
+            if (diggCountValue && diggCountValue.integerValue < config.minLikesThreshold) {
+                continue;
+            }
         }
 
-        AWEAwemeModel *m = (AWEAwemeModel *)obj;
-        NSNumber *diggCountValue = [self dyyy_resolvedDiggCountForAweme:m];
-
-        if (!diggCountValue) {
-            [lowLikesFiltered addObject:obj];
-            continue;
-        }
-
-        if (diggCountValue.integerValue < minLikesThreshold) {
-            continue;
-        }
-
-        [lowLikesFiltered addObject:obj];
+        [filtered addObject:obj];
     }
 
-    return [lowLikesFiltered copy];
+    return [filtered copy];
 }
 
 %end
+
+static BOOL DYYYShouldHideTemplateVideoForAweme(AWEAwemeModel *aweme) {
+    if (!DYYYGetBool(@"DYYYHideTemplateVideo")) {
+        return NO;
+    }
+
+    if (![aweme respondsToSelector:@selector(referString)]) {
+        return YES;
+    }
+
+    NSString *referString = aweme.referString;
+    return referString.length == 0 || [referString isEqualToString:@"homepage_hot"];
+}
+
+static BOOL DYYYAwemeModelMatchesConfiguredContentFilters(AWEAwemeModel *aweme,
+                                                           DYYYRecommendationFilterConfig *config) {
+    if (!aweme || !config.hasModelFilterWork) {
+        return NO;
+    }
+
+    BOOL shouldFilterAds = config.noAds && [DYYYUtils isAdvertisementAwemeModel:aweme];
+    BOOL shouldFilterHotSpot = config.skipHotSpot && aweme.hotSpotLynxCardModel;
+    BOOL isRecommendFeed = DYYYAwemeModelIsRecommendFeed(aweme);
+    BOOL shouldFilterAllLive = config.skipAllLive && DYYYAwemeModelHasLiveSignal(aweme);
+    BOOL shouldFilterFriendsVideo = config.skipFriendsVideo && isRecommendFeed && DYYYAwemeModelIsFamiliarItem(aweme);
+    BOOL shouldFilterMusic = config.skipMusic && isRecommendFeed && aweme.musicCard;
+    BOOL shouldFilterAIInteraction = config.skipAIInteraction && isRecommendFeed && DYYYAwemeModelIsAIInteraction(aweme);
+    BOOL shouldFilterKeywords = NO;
+    BOOL shouldFilterProp = NO;
+    BOOL shouldFilterUser = NO;
+    BOOL shouldFilterHDR = NO;
+
+    if (isRecommendFeed) {
+        shouldFilterUser = DYYYRecommendationFilterMatchesAuthor(config, aweme.author);
+    }
+
+    if (isRecommendFeed && config.keywords.count > 0) {
+        shouldFilterKeywords = DYYYStringContainsAnyFilterToken(aweme.descriptionString, config.keywords);
+    }
+
+    if (isRecommendFeed && config.propKeywords.count > 0) {
+        shouldFilterProp = DYYYStringContainsAnyFilterToken(aweme.propGuideV2.propName, config.propKeywords);
+    }
+
+    if (config.shouldDisableHDR &&
+        ![aweme dyyy_shouldExcludeFromGlobalHDRFilter] &&
+        DYYYAwemeModelHasOnlyHDRBitrateModels(aweme)) {
+        shouldFilterHDR = YES;
+    }
+
+    if (config.filterHDR && ![aweme dyyy_shouldExcludeFromGlobalHDRFilter] && aweme.video) {
+        AWEVideoModel *video = aweme.video;
+        if ([video respondsToSelector:@selector(isSourceHDR)] && video.isSourceHDR > 0) {
+            shouldFilterHDR = YES;
+        } else if ([video respondsToSelector:@selector(hasFilterHDR)] && video.hasFilterHDR) {
+            shouldFilterHDR = YES;
+        }
+
+        if (!shouldFilterHDR) {
+            for (id bitrateModel in video.bitrateModels) {
+                @try {
+                    NSNumber *hdrType = [bitrateModel valueForKey:@"hdrType"];
+                    NSNumber *hdrBit = [bitrateModel valueForKey:@"hdrBit"];
+                    if ((hdrType && [hdrType integerValue] > 0) ||
+                        (!hdrType && hdrBit && [hdrBit integerValue] >= 10)) {
+                        shouldFilterHDR = YES;
+                        break;
+                    }
+                } @catch (__unused NSException *exception) {
+                }
+            }
+        }
+    }
+
+    return shouldFilterAds ||
+           shouldFilterAllLive ||
+           shouldFilterHotSpot ||
+           shouldFilterFriendsVideo ||
+           shouldFilterMusic ||
+           shouldFilterAIInteraction ||
+           shouldFilterHDR ||
+           shouldFilterKeywords ||
+           shouldFilterProp ||
+           shouldFilterUser;
+}
 
 %hook AWEAwemeModel
 
 - (id)initWithDictionary:(id)arg1 error:(id *)arg2 {
     id orig = %orig;
     if (orig) {
-        BOOL shouldDisableHDR = DYYYShouldDisableAllHDR();
+        DYYYRecommendationFilterConfig *filterConfig = DYYYCurrentRecommendationFilterConfig();
+        BOOL shouldDisableHDR = filterConfig.shouldDisableHDR;
         BOOL shouldFilterOnlyHDRSource = NO;
         if (shouldDisableHDR && ![self dyyy_shouldExcludeFromGlobalHDRFilter]) {
             shouldFilterOnlyHDRSource = DYYYAwemeModelHasOnlyHDRBitrateModels(self);
@@ -8875,15 +13032,14 @@ static NSHashTable *processedParentViews = nil;
                 }
             }
         }
-        BOOL shouldFilter = DYYYGetBool(@"DYYYNoAds") &&
-                            ([DYYYUtils isAdvertisementAwemeModel:self] || [DYYYUtils isAdvertisementRawData:arg1]);
+        BOOL shouldFilter = filterConfig.noAds && [DYYYUtils isAdvertisementRawData:arg1];
         if (!shouldFilter) {
-            shouldFilter = [self contentFilter];
+            shouldFilter = DYYYAwemeModelMatchesConfiguredContentFilters(self, filterConfig);
         }
         if (!shouldFilter && shouldFilterOnlyHDRSource) {
             shouldFilter = YES;
         }
-        if (!shouldFilter && DYYYShouldFilterGlobalHDR() &&
+        if (!shouldFilter && filterConfig.filterHDR &&
             ![self dyyy_shouldExcludeFromGlobalHDRFilter] &&
             [self dyyy_containsHDRMetadataInObject:arg1 depth:0]) {
             shouldFilter = YES;
@@ -8988,140 +13144,7 @@ static NSHashTable *processedParentViews = nil;
 
 %new
 - (BOOL)contentFilter {
-    BOOL noAds = DYYYGetBool(@"DYYYNoAds");
-    BOOL skipAllLive = DYYYGetBool(@"DYYYSkipAllLive");
-    BOOL skipHotSpot = DYYYGetBool(@"DYYYSkipHotSpot");
-    BOOL skipPhoto = DYYYGetBool(@"DYYYSkipPhoto");
-    BOOL skipPhotoText = DYYYGetBool(@"DYYYSkipPhotoText");
-    BOOL skipMusic = DYYYGetBool(@"DYYYSkipMusic");
-    BOOL skipAIInteraction = DYYYGetBool(@"DYYYSkipAIInteraction");
-    BOOL filterHDR = DYYYShouldFilterGlobalHDR();
-
-    BOOL shouldFilterAds = noAds && [DYYYUtils isAdvertisementAwemeModel:self];
-    BOOL shouldFilterHotSpot = skipHotSpot && self.hotSpotLynxCardModel;
-    BOOL shouldFilterAllLive = skipAllLive && [self.videoFeedTag isEqualToString:@"直播中"];
-    BOOL isRecommendFeed = [self.referString isEqualToString:@"homepage_hot"];
-    BOOL shouldskipPhoto = skipPhoto && (self.awemeType == 68) && isRecommendFeed;
-    BOOL shouldskipPhotoText = skipPhotoText && self.isNewTextMode && isRecommendFeed;
-    BOOL shouldFilterMusic = skipMusic && self.musicCard && isRecommendFeed;
-    BOOL shouldFilterAIInteraction = skipAIInteraction && (self.awemeType == 162) && isRecommendFeed;
-    BOOL shouldFilterHDR = NO;
-    BOOL shouldFilterLowLikes = NO;
-    BOOL shouldFilterKeywords = NO;
-    BOOL shouldFilterProp = NO;
-    BOOL shouldFilterTime = NO;
-    BOOL shouldFilterUser = NO;
-
-    // 获取用户设置的需要过滤的关键词
-    NSString *filterKeywords = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYFilterKeywords"];
-    NSArray *keywordsList = nil;
-
-    if (filterKeywords.length > 0) {
-        keywordsList = [filterKeywords componentsSeparatedByString:@","];
-    }
-
-    // 过滤包含指定拍同款的视频
-    NSString *filterProp = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYFilterProp"];
-    NSArray *propKeywordsList = nil;
-
-    if (filterProp.length > 0) {
-        propKeywordsList = [filterProp componentsSeparatedByString:@","];
-    }
-
-    // 获取需要过滤的用户列表
-    NSString *filterUsers = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYFilterUsers"];
-    BOOL disableHDR = DYYYShouldDisableAllHDR();
-
-    // 检查是否需要过滤特定用户
-    if (isRecommendFeed && filterUsers.length > 0 && self.author) {
-        NSArray *usersList = [filterUsers componentsSeparatedByString:@","];
-        NSString *currentShortID = self.author.shortID;
-        NSString *currentNickname = self.author.nickname;
-
-        if (currentShortID.length > 0) {
-            for (NSString *userInfo in usersList) {
-                // 解析"昵称-id"格式
-                NSArray *components = [userInfo componentsSeparatedByString:@"-"];
-                if (components.count >= 2) {
-                    NSString *userId = [components lastObject];
-                    NSString *userNickname = [[components subarrayWithRange:NSMakeRange(0, components.count - 1)] componentsJoinedByString:@"-"];
-
-                    if ([userId isEqualToString:currentShortID]) {
-                        shouldFilterUser = YES;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    // 仅在推荐页过滤关键词和道具
-    if (isRecommendFeed) {
-        // 过滤包含特定关键词的视频
-        if (keywordsList.count > 0) {
-            // 检查视频标题
-            if (self.descriptionString.length > 0) {
-                for (NSString *keyword in keywordsList) {
-                    NSString *trimmedKeyword = [keyword stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-                    if (trimmedKeyword.length > 0 && [self.descriptionString containsString:trimmedKeyword]) {
-                        shouldFilterKeywords = YES;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // 过滤包含特定道具的视频
-        if (propKeywordsList.count > 0 && self.propGuideV2) {
-            NSString *propName = self.propGuideV2.propName;
-            if (propName.length > 0) {
-                for (NSString *propKeyword in propKeywordsList) {
-                    NSString *trimmedKeyword = [propKeyword stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-                    if (trimmedKeyword.length > 0 && [propName containsString:trimmedKeyword]) {
-                        shouldFilterProp = YES;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    // 全局屏蔽 HDR 时，仍允许有 SDR 档的作品降档播放；纯 HDR 档作品直接过滤，避免黑屏或 HDR 漏出。
-    if (disableHDR &&
-        ![self dyyy_shouldExcludeFromGlobalHDRFilter] &&
-        DYYYAwemeModelHasOnlyHDRBitrateModels(self)) {
-        shouldFilterHDR = YES;
-    }
-
-    // 全场景过滤 HDR 作品，但保留私信、消息详情和转发链路。
-    if (filterHDR && ![self dyyy_shouldExcludeFromGlobalHDRFilter] && self.video) {
-        AWEVideoModel *video = self.video;
-        if ([video respondsToSelector:@selector(isSourceHDR)] && video.isSourceHDR > 0) {
-            shouldFilterHDR = YES;
-        } else if ([video respondsToSelector:@selector(hasFilterHDR)] && video.hasFilterHDR) {
-            shouldFilterHDR = YES;
-        }
-
-        if (!shouldFilterHDR) {
-            for (id bitrateModel in video.bitrateModels) {
-                @try {
-                    NSNumber *hdrType = [bitrateModel valueForKey:@"hdrType"];
-                    NSNumber *hdrBit = [bitrateModel valueForKey:@"hdrBit"];
-
-                    // hdrType 覆盖 HDR10、HLG、HDR Vivid 等类型；无类型字段时保留 10bit 兜底。
-                    if ((hdrType && [hdrType integerValue] > 0) ||
-                        (!hdrType && hdrBit && [hdrBit integerValue] >= 10)) {
-                        shouldFilterHDR = YES;
-                        break;
-                    }
-                } @catch (__unused NSException *exception) {
-                }
-            }
-        }
-    }
-
-    return shouldFilterAds || shouldFilterAllLive || shouldFilterHotSpot || shouldFilterMusic || shouldFilterHDR || shouldFilterKeywords || shouldFilterProp ||
-           shouldFilterTime || shouldFilterUser;
+    return DYYYAwemeModelMatchesConfiguredContentFilters(self, DYYYCurrentRecommendationFilterConfig());
 }
 
 - (AWEECommerceLabel *)ecommerceBelowLabel {
@@ -9246,7 +13269,6 @@ static NSHashTable *processedParentViews = nil;
 	return %orig;
 }
 
-
 // 屏蔽相关视频推荐
 - (id)relatedVideoExtra {
 	BOOL DYYYHideBottomRelated = DYYYGetBool(@"DYYYHideBottomRelated");
@@ -9360,16 +13382,23 @@ static NSHashTable *processedParentViews = nil;
 	%orig;
 }
 
-// 屏蔽底部合集（只对推荐页生效）
+// 屏蔽底部合集
 - (id)mixInfo {
-	BOOL DYYYHideTemplateVideo = DYYYGetBool(@"DYYYHideTemplateVideo");
-	if (DYYYHideTemplateVideo && [self.referString isEqualToString:@"homepage_hot"]) {
+	if (DYYYShouldHideTemplateVideoForAweme(self)) {
 		return nil;
 	}
 	return %orig;
 }
 
-// 屏蔽短剧信息（复用屏蔽合集开关，只对推荐页生效）
+- (void)setMixInfo:(id)info {
+	if (DYYYShouldHideTemplateVideoForAweme(self)) {
+		%orig(nil);
+		return;
+	}
+	%orig;
+}
+
+// 屏蔽短剧信息（只对推荐页生效）
 - (id)playletInfoModel {
 	BOOL DYYYHideTemplatePlaylet = DYYYGetBool(@"DYYYHideTemplatePlaylet");
 	if (DYYYHideTemplatePlaylet && [self.referString isEqualToString:@"homepage_hot"]) {
@@ -9450,7 +13479,7 @@ static NSHashTable *processedParentViews = nil;
 // 屏蔽通用锚点（合并到锚点信息）
 - (id)commonAnchor {
 	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) { 
+	if (DYYYHideFeedAnchorContainer) {
 		return nil;
 	}
 	return %orig;
@@ -9485,8 +13514,6 @@ static NSHashTable *processedParentViews = nil;
 
 %end
 
-
-
 //以下部分为新增
 // 屏蔽头像直播
 %hook AWEUserModel
@@ -9500,7 +13527,6 @@ static NSHashTable *processedParentViews = nil;
 }
 
 %end
-
 
 // 屏蔽头像光圈
 %hook AWEUserModel
@@ -9603,7 +13629,6 @@ static NSHashTable *processedParentViews = nil;
 
 %end
 
-
 // 隐藏下面底部热点框
 %hook AWEHotSpotListModel
 
@@ -9689,6 +13714,25 @@ static NSHashTable *processedParentViews = nil;
 
 %end
 
+%hook AWESearchMixVideoModel
+
+- (id)mixInfo {
+	if (DYYYGetBool(@"DYYYHideTemplateVideo")) {
+		return nil;
+	}
+	return %orig;
+}
+
+- (void)setMixInfo:(id)info {
+	if (DYYYGetBool(@"DYYYHideTemplateVideo")) {
+		%orig(nil);
+		return;
+	}
+	%orig;
+}
+
+%end
+
 // 屏蔽精选标签
 %hook AWETemplateStaticLabelInfoModel
 
@@ -9765,7 +13809,6 @@ static NSHashTable *processedParentViews = nil;
 
 %end
 
-
 // 拦截开屏广告 - hook TTAdSplashModel，直接返回 nil
 %hook TTAdSplashModel
 
@@ -9800,16 +13843,16 @@ static NSHashTable *processedParentViews = nil;
 %hook AWEGeneralSearchModel
 - (instancetype)initWithDictionary:(id)dict error:(NSError **)error {
 	id orig = %orig;
-	
+
 	BOOL noAds = DYYYGetBool(@"DYYYNoAds");
 	if (!noAds || !orig) {
 		return orig;
 	}
-	
+
 	if ([DYYYUtils isAdvertisementContainerModel:orig] || [DYYYUtils isAdvertisementRawData:dict]) {
 		return nil;
 	}
-	
+
 	return orig;
 }
 %end
@@ -9848,18 +13891,6 @@ static NSHashTable *processedParentViews = nil;
 	return %orig;
 }
 %end
-
-
-
-
-
-
-
-
-
-
-
-
 
 %hook AWEFeedCommentConfigModel
 - (void)setCommentInputConfigText:(NSString *)text {
@@ -9997,7 +14028,9 @@ static NSHashTable *processedParentViews = nil;
                                    cancelAction:nil
                                     closeAction:nil
                                   confirmAction:^{
-                                    %orig(gesture);
+                                    DYYYRunDeferredFollowConfirm(^{
+                                        %orig(nil);
+                                    });
                                   }];
     } else {
         %orig;
@@ -10464,7 +14497,6 @@ static NSHashTable *processedParentViews = nil;
 
         // 添加下载选项
         if (DYYYGetBool(@"DYYYDoubleTapDownload") || ![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDoubleTapDownload"]) {
-
             AWEUserSheetAction *downloadAction = [NSClassFromString(@"AWEUserSheetAction")
                 actionWithTitle:downloadTitle
                         imgName:nil
@@ -10612,7 +14644,6 @@ static NSHashTable *processedParentViews = nil;
 
         // 添加下载音频选项
         if (DYYYGetBool(@"DYYYDoubleTapDownloadAudio") || ![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDoubleTapDownloadAudio"]) {
-
             AWEUserSheetAction *downloadAudioAction = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:@"保存音频"
                                                                                                         imgName:nil
                                                                                                         handler:^{
@@ -10712,7 +14743,6 @@ static NSHashTable *processedParentViews = nil;
 
         // 添加复制文案选项
         if (DYYYGetBool(@"DYYYDoubleTapCopyDesc") || ![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDoubleTapCopyDesc"]) {
-
             AWEUserSheetAction *copyTextAction = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:@"复制文案"
                                                                                                    imgName:nil
                                                                                                    handler:^{
@@ -10725,7 +14755,6 @@ static NSHashTable *processedParentViews = nil;
 
         // 添加打开评论区选项
         if (DYYYGetBool(@"DYYYDoubleTapComment") || ![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDoubleTapComment"]) {
-
             AWEUserSheetAction *openCommentAction = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:@"打开评论"
                                                                                                       imgName:nil
                                                                                                       handler:^{
@@ -10736,7 +14765,6 @@ static NSHashTable *processedParentViews = nil;
 
         // 添加分享选项
         if (DYYYGetBool(@"DYYYDoubleTapshowSharePanel") || ![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDoubleTapshowSharePanel"]) {
-
             AWEUserSheetAction *showSharePanel = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:@"分享视频"
                                                                                                    imgName:nil
                                                                                                    handler:^{
@@ -10747,7 +14775,6 @@ static NSHashTable *processedParentViews = nil;
 
         // 添加点赞视频选项
         if (DYYYGetBool(@"DYYYDoubleTapLike") || ![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDoubleTapLike"]) {
-
             AWEUserSheetAction *likeAction = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:@"点赞视频"
                                                                                                imgName:nil
                                                                                                handler:^{
@@ -10758,7 +14785,6 @@ static NSHashTable *processedParentViews = nil;
 
         // 添加长按面板
         if (DYYYGetBool(@"DYYYDoubleTapshowDislikeOnVideo") || ![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDoubleTapshowDislikeOnVideo"]) {
-
             AWEUserSheetAction *showDislikeOnVideo = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:@"长按面板"
                                                                                                        imgName:nil
                                                                                                        handler:^{
@@ -10780,13 +14806,10 @@ static NSHashTable *processedParentViews = nil;
 
 %end
 
-%hook AFDPrivacyHalfScreenViewController
-
-%new
-- (void)updateDarkModeAppearance {
+static void DYYYUpdateManagedPrivacyHalfScreenAppearance(AFDPrivacyHalfScreenViewController *viewController) {
     BOOL isDarkMode = [DYYYUtils isDarkMode];
 
-    UIView *contentView = self.view.subviews.count > 1 ? self.view.subviews[1] : nil;
+    UIView *contentView = viewController.view.subviews.count > 1 ? viewController.view.subviews[1] : nil;
     if (contentView) {
         if (isDarkMode) {
             contentView.backgroundColor = [UIColor colorWithRed:0.13 green:0.13 blue:0.13 alpha:1.0];
@@ -10796,43 +14819,49 @@ static NSHashTable *processedParentViews = nil;
     }
 
     // 修改标题文本颜色
-    if (self.titleLabel) {
+    if (viewController.titleLabel) {
         if (isDarkMode) {
-            self.titleLabel.textColor = [UIColor whiteColor];
+            viewController.titleLabel.textColor = [UIColor whiteColor];
         } else {
-            self.titleLabel.textColor = [UIColor blackColor];
+            viewController.titleLabel.textColor = [UIColor blackColor];
         }
     }
 
     // 修改内容文本颜色
-    if (self.contentLabel) {
+    if (viewController.contentLabel) {
         if (isDarkMode) {
-            self.contentLabel.textColor = [UIColor lightGrayColor];
+            viewController.contentLabel.textColor = [UIColor lightGrayColor];
         } else {
-            self.contentLabel.textColor = [UIColor darkGrayColor];
+            viewController.contentLabel.textColor = [UIColor darkGrayColor];
         }
     }
 
     // 修改左侧按钮颜色和文字颜色
-    if (self.leftCancelButton) {
+    if (viewController.leftCancelButton) {
         if (isDarkMode) {
-            [self.leftCancelButton setBackgroundColor:[UIColor colorWithRed:0.25 green:0.25 blue:0.25 alpha:1.0]]; // 暗色模式按钮背景色
-            [self.leftCancelButton setTitleColor:[UIColor lightGrayColor] forState:UIControlStateNormal];          // 暗色模式文字颜色
+            [viewController.leftCancelButton setBackgroundColor:[UIColor colorWithRed:0.25 green:0.25 blue:0.25 alpha:1.0]];
+            [viewController.leftCancelButton setTitleColor:[UIColor lightGrayColor] forState:UIControlStateNormal];
         } else {
-            [self.leftCancelButton setBackgroundColor:[UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0]]; // 默认按钮背景色
-            [self.leftCancelButton setTitleColor:[UIColor darkTextColor] forState:UIControlStateNormal];        // 默认文字颜色
+            [viewController.leftCancelButton setBackgroundColor:[UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0]];
+            [viewController.leftCancelButton setTitleColor:[UIColor darkTextColor] forState:UIControlStateNormal];
         }
     }
 }
 
+%hook AFDPrivacyHalfScreenViewController
+
 - (void)viewDidLoad {
     %orig;
-    [self updateDarkModeAppearance];
+    if ([DYYYBottomAlertView isManagedHalfScreenViewController:self]) {
+        DYYYUpdateManagedPrivacyHalfScreenAppearance(self);
+    }
 }
 
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
-    [self updateDarkModeAppearance];
+    if ([DYYYBottomAlertView isManagedHalfScreenViewController:self]) {
+        DYYYUpdateManagedPrivacyHalfScreenAppearance(self);
+    }
 }
 
 - (void)configWithImageView:(UIImageView *)imageView
@@ -10844,9 +14873,10 @@ static NSHashTable *processedParentViews = nil;
      rightConfirmButtonText:(NSString *)rightButtonText
        rightBtnClickedBlock:(void (^)(void))rightBtnBlock
      leftButtonClickedBlock:(void (^)(void))leftBtnBlock {
-
     %orig;
-    [self updateDarkModeAppearance];
+    if ([DYYYBottomAlertView isManagedHalfScreenViewController:self]) {
+        DYYYUpdateManagedPrivacyHalfScreenAppearance(self);
+    }
 }
 
 %end
@@ -10929,7 +14959,6 @@ static Class plusContainerButtonClass = nil;
 static Class plusButtonClass = nil;
 static Class plusInnerButtonClass = nil;
 static Class tabBarButtonClass = nil;
-
 + (void)initialize {
     if (self == [%c(AWENormalModeTabBar) class]) {
         barBackgroundClass = NSClassFromString(@"_UIBarBackground");
@@ -11329,7 +15358,6 @@ static Class tabBarButtonClass = nil;
                 });
             }
         }
-
     } @catch (NSException *exception) {
         return;
     }
@@ -11428,7 +15456,6 @@ static Class tabBarButtonClass = nil;
                 });
             }
         }
-
     } @catch (NSException *exception) {
         return;
     }
@@ -11466,18 +15493,77 @@ static Class tabBarButtonClass = nil;
 }
 %end
 
+%hook AWECommentMediaFeedParams
+
+- (BOOL (^)(void))panelVideoHasPausedByComment {
+    BOOL (^originalBlock)(void) = %orig;
+    if (!DYYYCommentPauseOwnsPlayback()) {
+        return originalBlock;
+    }
+
+    return ^BOOL {
+      if (DYYYCommentPauseOwnsPlayback()) {
+          return YES;
+      }
+      return originalBlock ? originalBlock() : NO;
+    };
+}
+
+- (BOOL (^)(void))fullPanelShouldPreventPlay {
+    BOOL (^originalBlock)(void) = %orig;
+    if (!DYYYCommentPauseOwnsPlayback()) {
+        return originalBlock;
+    }
+
+    return ^BOOL {
+      if (DYYYCommentPauseOwnsPlayback()) {
+          return YES;
+      }
+      return originalBlock ? originalBlock() : NO;
+    };
+}
+
+%end
+
+%hook _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel
+
+- (instancetype)init {
+    id viewModel = %orig;
+    DYYYRegisterCommentPauseViewModel(viewModel);
+    return viewModel;
+}
+
+- (void)setTabManager:(id)tabManager {
+    %orig(tabManager);
+    DYYYRegisterCommentPauseViewModel(self);
+    if (dyyyCommentViewVisible && DYYYGetBool(@"DYYYCommentPausePlayback")) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          DYYYCommentPausePlaybackIfNeeded();
+        });
+    }
+}
+
+%end
+
 %hook AWECommentContainerViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig(animated);
+    dyyyCommentViewVisible = YES;
+    updateSpeedButtonVisibility();
+    DYYYCommentPausePlaybackIfNeeded();
+}
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     dyyyCommentViewVisible = YES;
     updateSpeedButtonVisibility();
     updateClearButtonVisibility();
+    DYYYCommentPausePlaybackIfNeeded();
     NSString *transparentValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYTopBarTransparent"];
     if (transparentValue && transparentValue.length > 0) {
         CGFloat alphaValue = [transparentValue floatValue];
         if (alphaValue >= 0.0 && alphaValue <= 1.0) {
-
             UIView *parentView = self.view.superview;
             if (parentView) {
                 for (UIView *subview in parentView.subviews) {
@@ -11492,10 +15578,24 @@ static Class tabBarButtonClass = nil;
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
+    BOOL skipsPanelLifecycle = DYYYCommentContainerSkipsPanelLifecycle(self);
+    _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *pausedViewModel = dyyyLastCommentPauseViewModel;
     %orig;
+
+    // Comment media preview temporarily drives this lifecycle callback while
+    // the comment panel is still active. Mirror the host's lifecycle gate so
+    // opening an image cannot release the comment-owned playback pause.
+    if (skipsPanelLifecycle) {
+        dyyyCommentViewVisible = YES;
+        updateSpeedButtonVisibility();
+        updateClearButtonVisibility();
+        return;
+    }
+
     dyyyCommentViewVisible = NO;
     updateSpeedButtonVisibility();
     updateClearButtonVisibility();
+    DYYYCommentRecoverPlaybackIfNeeded(pausedViewModel);
 }
 
 - (void)viewDidLayoutSubviews {
@@ -11589,7 +15689,9 @@ static Class tabBarButtonClass = nil;
 %hook UIView
 
 - (void)setHidden:(BOOL)hidden {
-    BOOL shouldForceHidden = DYYYShouldForceAvatarActionViewHidden(self) || DYYYShouldForceAvatarSurroundingViewHidden(self);
+    BOOL shouldForceHidden = DYYYShouldForceAvatarActionViewHidden(self) ||
+                             DYYYShouldForceAvatarSurroundingViewHidden(self) ||
+                             DYYYShouldForceHideFeedVideoCollectButtonView(self);
     %orig(shouldForceHidden ? YES : hidden);
 }
 
@@ -11598,6 +15700,10 @@ static Class tabBarButtonClass = nil;
 
     if (!subview) {
         return;
+    }
+
+    if (DYYYShouldForceHideFeedVideoCollectButtonView(self)) {
+        DYYYMarkFeedVideoCollectButtonViewHidden(subview);
     }
 
     BOOL hasSuppressedChrome = objc_getAssociatedObject(self, &kDYYYAvatarActionChromeViewKey) != nil;
@@ -11653,12 +15759,17 @@ static Class tabBarButtonClass = nil;
         return;
     }
 
+    if (DYYYShouldForceHideFeedVideoCollectButtonView(self)) {
+        %orig([UIColor clearColor]);
+        return;
+    }
+
     if (DYYYShouldClearAvatarActionViewChrome(self)) {
         %orig([UIColor clearColor]);
         return;
     }
 
-    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
+    if (DYYYGetBoolCached(@"DYYYEnableFullScreen")) {
         UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
         if ([vc isKindOfClass:%c(AWEAwemeDetailTableViewController)] ||
             [vc isKindOfClass:%c(AWEAwemeDetailCellViewController)]) {
@@ -11673,28 +15784,33 @@ static Class tabBarButtonClass = nil;
 - (void)layoutSubviews {
     %orig;
 
-    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
+    BOOL enableFS = DYYYGetBoolCached(@"DYYYEnableFullScreen");
+    BOOL enableBlur = DYYYGetBoolCached(@"DYYYEnableCommentBlur");
+
+    // 全局 -layoutSubviews 会覆盖到界面上的每一个视图，两项开关都关闭时不必回溯响应链。
+    if (!enableFS && !enableBlur) {
+        return;
+    }
+
+    // 同一次布局里最多只回溯一次响应链，下面两段判定共用结果。
+    UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
+
+    if (enableFS) {
         if (DYYYIsVideoRenderRelatedView(self)) {
-            UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
             DYYYRelaxRichContentAncestorClippingIfNeeded(self, vc, CGRectGetHeight(self.frame));
         }
-
         if (self.frame.size.height == originalTabBarHeight && originalTabBarHeight > 0) {
-            UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
-            if ([vc isKindOfClass:NSClassFromString(@"AWEMixVideoPanelDetailTableViewController")] || [vc isKindOfClass:NSClassFromString(@"AWECommentInputViewController")] ||
-                [vc isKindOfClass:NSClassFromString(@"AWEAwemeDetailTableViewController")]) {
+            if ([vc isKindOfClass:%c(AWEMixVideoPanelDetailTableViewController)] || [vc isKindOfClass:%c(AWECommentInputViewController)] ||
+                [vc isKindOfClass:%c(AWEAwemeDetailTableViewController)]) {
                 self.backgroundColor = [UIColor clearColor];
             }
         }
     }
 
-    if (DYYYGetBool(@"DYYYEnableFullScreen") || DYYYGetBool(@"DYYYEnableCommentBlur")) {
-        UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
-        if ([vc isKindOfClass:%c(AWEPlayInteractionViewController)]) {
-            for (UIView *subview in self.subviews) {
-                if ([subview isKindOfClass:[UIView class]] && subview.backgroundColor && CGColorEqualToColor(subview.backgroundColor.CGColor, [UIColor blackColor].CGColor)) {
-                    subview.hidden = YES;
-                }
+    if ([vc isKindOfClass:%c(AWEPlayInteractionViewController)]) {
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UIView class]] && subview.backgroundColor && CGColorEqualToColor(subview.backgroundColor.CGColor, [UIColor blackColor].CGColor)) {
+                subview.hidden = YES;
             }
         }
     }
@@ -11708,16 +15824,21 @@ static Class tabBarButtonClass = nil;
         return;
     }
 
-    BOOL enableBlur = DYYYGetBool(@"DYYYEnableCommentBlur");
-    BOOL enableFS = DYYYGetBool(@"DYYYEnableFullScreen");
+    BOOL enableBlur = DYYYGetBoolCached(@"DYYYEnableCommentBlur");
+    BOOL enableFS = DYYYGetBoolCached(@"DYYYEnableFullScreen");
+
+    // -setFrame: 在滚动时每帧会被调用上千次，而下面的响应链回溯与类查找只有
+    // 毛玻璃或全屏开启时才会用到。两者都关闭时直接放行，行为与未 Hook 时一致。
+    if (!enableBlur && !enableFS) {
+        %orig(frame);
+        return;
+    }
 
     UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
-    Class DetailVCClass = NSClassFromString(@"AWEMixVideoPanelDetailTableViewController");
-    Class PlayVCClass1 = NSClassFromString(@"AWEAwemePlayVideoViewController");
-    Class PlayVCClass2 = NSClassFromString(@"AWEDPlayerFeedPlayerViewController");
-    Class PlayVCClass3 = NSClassFromString(@"AWEDPlayerViewController_Merge");
+    Class PlayVCClass1 = %c(AWEAwemePlayVideoViewController);
+    Class PlayVCClass2 = %c(AWEDPlayerFeedPlayerViewController);
+    Class PlayVCClass3 = %c(AWEDPlayerViewController_Merge);
 
-    BOOL isDetailVC = (DetailVCClass && [vc isKindOfClass:DetailVCClass]);
     BOOL isPlayVC = ((PlayVCClass1 && [vc isKindOfClass:PlayVCClass1]) ||
                      (PlayVCClass2 && [vc isKindOfClass:PlayVCClass2]) ||
                      (PlayVCClass3 && [vc isKindOfClass:PlayVCClass3]));
@@ -11844,20 +15965,30 @@ static Class tabBarButtonClass = nil;
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
     isInPlayInteractionVC = YES;
-    dyyyCurrentSpeedAweme = self.model;
-    DYYYRestoreFloatSpeedButtonForAwemeIfNeeded(self.model);
+    dyyyInteractionViewVisible = YES;
+    dyyyActivePlaybackInteractionController = self;
+    DYYYScheduleCurrentAwemeTracking(self, self.model);
     DYYYEnsureFloatSpeedButton(self);
     reloadClearButtonConfiguration();
+}
+
+- (void)setModel:(AWEAwemeModel *)model {
+    %orig(model);
+    if (self.view.window && !self.view.hidden) {
+        DYYYScheduleCurrentAwemeTracking(self, model);
+    }
 }
 
 - (void)viewDidLayoutSubviews {
     %orig;
 
     if (self.view.window && !self.view.hidden) {
+        dyyyInteractionViewVisible = YES;
+        dyyyActivePlaybackInteractionController = self;
         DYYYEnsureFloatSpeedButton(self);
         reloadClearButtonConfiguration();
     } else {
-        [FloatingSpeedButton reloadConfiguration];
+        updateSpeedButtonVisibility();
         updateClearButtonVisibility();
     }
 
@@ -11883,6 +16014,19 @@ static Class tabBarButtonClass = nil;
         count++;
     }
 
+    BOOL isShowingRelatedMixViewController = NO;
+    UIViewController *sceneParentVC = directParentVC;
+    int sceneDepth = 0;
+    while (sceneParentVC && sceneDepth < 8) {
+        if ([sceneParentVC isKindOfClass:%c(AWEMixVideoPanelDetailTableViewController)]) {
+            AWEMixVideoPanelDetailTableViewController *mixDetailVC = (AWEMixVideoPanelDetailTableViewController *)sceneParentVC;
+            isShowingRelatedMixViewController = mixDetailVC.isShowingRelatedMixViewController;
+            break;
+        }
+        sceneParentVC = sceneParentVC.parentViewController;
+        sceneDepth++;
+    }
+
     if (!self.view.superview) {
         return;
     }
@@ -11898,7 +16042,7 @@ static Class tabBarButtonClass = nil;
 
     BOOL useFullHeight = [currentReferString isEqualToString:@"general_search"] || [currentReferString isEqualToString:@"search_result"] || [currentReferString isEqualToString:@"search_ecommerce"] ||
                          [currentReferString isEqualToString:@"close_friends_moment"] || [currentReferString isEqualToString:@"offline_mode"] || [currentReferString isEqualToString:@"challenge"] ||
-                         [currentReferString isEqualToString:@"general_search_scan"] || currentReferString == nil;
+                         [currentReferString isEqualToString:@"general_search_scan"] || currentReferString == nil || isShowingRelatedMixViewController;
 
     if (!useFullHeight && [currentReferString isEqualToString:@"co_play_watch"]) {
         Class richContentVCClass = NSClassFromString(@"AWEFriendsImpl.RichContentNewListViewController");
@@ -11912,19 +16056,13 @@ static Class tabBarButtonClass = nil;
     }
 
     if (!useFullHeight && [currentReferString isEqualToString:@"chat"]) {
-        NSString *currentVersion = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
-        if (currentVersion.length == 0) {
-            Class managerClass = %c(AWEVersionUpdateManager);
-            if (managerClass && [managerClass respondsToSelector:@selector(sharedInstance)]) {
-                AWEVersionUpdateManager *manager = [managerClass sharedInstance];
-                if ([manager respondsToSelector:@selector(currentVersion)]) {
-                    currentVersion = manager.currentVersion;
-                }
-            }
-        }
+        AWEAwemeModel *currentModel = self.model;
+        BOOL isLiveModel = currentModel && (([currentModel respondsToSelector:@selector(isLive)] && currentModel.isLive) ||
+                                            ([currentModel respondsToSelector:@selector(cellRoom)] && currentModel.cellRoom != nil) ||
+                                            ([currentModel respondsToSelector:@selector(videoFeedTag)] && [currentModel.videoFeedTag isEqualToString:@"直播中"]));
 
-        // 39.2.0 及更早版本的私信播放页以完整高度布局信息区，否则底部约束会整体上移。 （靠版本号判断不靠谱，这个是 abtest 的）
-        if (currentVersion.length > 0 && [DYYYUtils compareVersion:currentVersion toVersion:@"39.2.0"] != NSOrderedDescending) {
+        // 私信视频的信息区依赖完整高度；直播内容保持原布局，避免影响直播文案位置。
+        if (!isLiveModel) {
             useFullHeight = YES;
         }
     }
@@ -11949,20 +16087,23 @@ static Class tabBarButtonClass = nil;
 
 - (void)viewDidDisappear:(BOOL)animated {
     %orig;
-    if (dyyyActiveSpeedInteractionController == self) {
-        AWEPlayInteractionViewController *replacementController = DYYYResolveCurrentSpeedInteractionController(nil);
-        if (replacementController && replacementController != self) {
-            DYYYEnsureFloatSpeedButton(replacementController);
-        } else {
-            dyyyActiveSpeedInteractionController = nil;
-            dyyyInteractionViewVisible = NO;
-            dyyyCommentViewVisible = self.isCommentVCShowing;
-            updateSpeedButtonVisibility();
-            dispatch_async(dispatch_get_main_queue(), ^{
-              DYYYEnsureFloatSpeedButton(nil);
-            });
-        }
-        updateClearButtonVisibility();
+    if (dyyyActivePlaybackInteractionController == self) {
+        __weak AWEPlayInteractionViewController *weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+          AWEPlayInteractionViewController *strongSelf = weakSelf;
+          AWEPlayInteractionViewController *replacementController =
+              DYYYResolvePlaybackInteractionController(nil, dyyyCurrentSpeedAweme, YES);
+          if (replacementController == strongSelf) {
+              replacementController = nil;
+          }
+          dyyyActivePlaybackInteractionController = replacementController;
+          BOOL hasVisibleInteractionController = replacementController != nil;
+          isInPlayInteractionVC = hasVisibleInteractionController;
+          dyyyInteractionViewVisible = hasVisibleInteractionController;
+          dyyyCommentViewVisible = strongSelf.isCommentVCShowing;
+          updateSpeedButtonVisibility();
+          updateClearButtonVisibility();
+        });
     }
 }
 
@@ -11970,39 +16111,19 @@ static Class tabBarButtonClass = nil;
 - (void)speedButtonTapped:(UIButton *)sender {
     [(FloatingSpeedButton *)sender resetFadeTimer];
     NSArray *speeds = getSpeedOptions();
-    if (speeds.count == 0)
+    if (speeds.count == 0) {
         return;
-
-    NSInteger currentIndex = getCurrentSpeedIndex();
-    NSInteger newIndex = (currentIndex + 1) % speeds.count;
-
-    setCurrentSpeedIndex(newIndex);
-
-    float newSpeed = [speeds[newIndex] floatValue];
-    updateSpeedButtonUI();
-    DYYYClearLongPressSpeedState();
-
-    [UIView animateWithDuration:0.1
-        delay:0
-        options:UIViewAnimationOptionCurveEaseOut
-        animations:^{
-          sender.transform = CGAffineTransformMakeScale(1.1, 1.1);
-        }
-        completion:^(BOOL finished) {
-          [UIView animateWithDuration:0.1
-                                delay:0
-                              options:UIViewAnimationOptionCurveEaseIn
-                           animations:^{
-                             sender.transform = CGAffineTransformIdentity;
-                           }
-                           completion:nil];
-        }];
-
-    AWEPlayInteractionViewController *currentController = DYYYResolveCurrentSpeedInteractionController(self);
-    if (currentController) {
-        speedButton.interactionController = currentController;
     }
-    if (!DYYYApplyPlaybackSpeed(currentController, newSpeed)) {
+
+    NSInteger newIndex = (getCurrentSpeedIndex() + 1) % speeds.count;
+    setCurrentSpeedIndex(newIndex);
+    float newSpeed = [speeds[(NSUInteger)newIndex] floatValue];
+    if (!isfinite(newSpeed) || newSpeed <= 0.0f) {
+        newSpeed = 1.0f;
+    }
+    updateSpeedButtonUI();
+
+    if (!DYYYApplyPlaybackSpeedThroughInteractionController(self, newSpeed)) {
         [DYYYUtils showToast:@"无法找到视频控制器"];
     }
 }
@@ -12049,7 +16170,7 @@ static Class tabBarButtonClass = nil;
 
 - (void)setIsAutoPlay:(BOOL)arg0 {
     %orig(arg0);
-    DYYYApplyPreparedPlaybackSpeedToPlayer(self);
+    DYYYApplyNormalPlaybackSpeedToPlayerFallback(self);
 }
 
 - (void)prepareForDisplay {
@@ -12058,13 +16179,12 @@ static Class tabBarButtonClass = nil;
         return;
     }
 
-    DYYYApplyPreparedPlaybackSpeedToPlayer(self);
+    BOOL autoRestoreSpeed = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAutoRestoreSpeed"];
+    if (isFloatSpeedButtonEnabled && autoRestoreSpeed) {
+        setCurrentSpeedIndex(0);
+    }
+    DYYYApplyNormalPlaybackSpeedToPlayerFallback(self);
     updateSpeedButtonUI();
-}
-
-%new
-- (void)adjustPlaybackSpeed:(float)speed {
-    [self setVideoControllerPlaybackRate:speed];
 }
 
 %end
@@ -12114,7 +16234,7 @@ static Class tabBarButtonClass = nil;
 
 - (void)setIsAutoPlay:(BOOL)arg0 {
     %orig(arg0);
-    DYYYApplyPreparedPlaybackSpeedToPlayer(self);
+    DYYYApplyNormalPlaybackSpeedToPlayerFallback(self);
 }
 
 - (void)prepareForDisplay {
@@ -12122,13 +16242,12 @@ static Class tabBarButtonClass = nil;
     if (!DYYYShouldHandleSpeedFeatures()) {
         return;
     }
-    DYYYApplyPreparedPlaybackSpeedToPlayer(self);
+    BOOL autoRestoreSpeed = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAutoRestoreSpeed"];
+    if (isFloatSpeedButtonEnabled && autoRestoreSpeed) {
+        setCurrentSpeedIndex(0);
+    }
+    DYYYApplyNormalPlaybackSpeedToPlayerFallback(self);
     updateSpeedButtonUI();
-}
-
-%new
-- (void)adjustPlaybackSpeed:(float)speed {
-    [self setVideoControllerPlaybackRate:speed];
 }
 
 %end
@@ -12178,7 +16297,7 @@ static Class tabBarButtonClass = nil;
 
 - (void)setIsAutoPlay:(BOOL)arg0 {
     %orig(arg0);
-    DYYYApplyPreparedPlaybackSpeedToPlayer(self);
+    DYYYApplyNormalPlaybackSpeedToPlayerFallback(self);
 }
 
 - (void)prepareForDisplay {
@@ -12186,33 +16305,57 @@ static Class tabBarButtonClass = nil;
     if (!DYYYShouldHandleSpeedFeatures()) {
         return;
     }
-    DYYYApplyPreparedPlaybackSpeedToPlayer(self);
+    BOOL autoRestoreSpeed = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAutoRestoreSpeed"];
+    if (isFloatSpeedButtonEnabled && autoRestoreSpeed) {
+        setCurrentSpeedIndex(0);
+    }
+    DYYYApplyNormalPlaybackSpeedToPlayerFallback(self);
     updateSpeedButtonUI();
 }
 
-%new
-- (void)adjustPlaybackSpeed:(float)speed {
-    [self setVideoControllerPlaybackRate:speed];
-}
-
 %end
+
+static char kDYYYFeedTableOriginalHeightGapKey;
+static char kDYYYFeedTableFullScreenAppliedKey;
 
 %hook AWEFeedTableView
 - (void)layoutSubviews {
     %orig;
 
-    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
-        CGRect frame = self.frame;
-        frame.size.height = self.superview.frame.size.height;
-        self.frame = frame;
-    } else if (gCurrentTabBarHeight > 0) {
-        UIWindow *keyWindow = [DYYYUtils getActiveWindow];
-        if (keyWindow && keyWindow.safeAreaInsets.bottom == 0) {
-            return;
-        }
+    UIView *superview = self.superview;
+    if (!superview) {
+        return;
+    }
 
+    BOOL enableFullScreen = DYYYGetBool(@"DYYYEnableFullScreen");
+    BOOL fullScreenApplied = [objc_getAssociatedObject(self, &kDYYYFeedTableFullScreenAppliedKey) boolValue];
+    CGFloat superviewHeight = CGRectGetHeight(superview.bounds);
+
+    if (!enableFullScreen) {
+        if (fullScreenApplied) {
+            NSNumber *storedGap = objc_getAssociatedObject(self, &kDYYYFeedTableOriginalHeightGapKey);
+            CGFloat originalHeightGap = storedGap ? MAX(storedGap.doubleValue, 0.0) : 0.0;
+            CGFloat restoredHeight = MAX(superviewHeight - originalHeightGap, 0.0);
+            CGRect frame = self.frame;
+            if (fabs(CGRectGetHeight(frame) - restoredHeight) > 0.5) {
+                frame.size.height = restoredHeight;
+                self.frame = frame;
+            }
+            objc_setAssociatedObject(self, &kDYYYFeedTableOriginalHeightGapKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(self, &kDYYYFeedTableFullScreenAppliedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        return;
+    }
+
+    if (!fullScreenApplied) {
+        CGFloat originalHeightGap = MAX(superviewHeight - CGRectGetHeight(self.frame), 0.0);
+        objc_setAssociatedObject(self, &kDYYYFeedTableOriginalHeightGapKey, @(originalHeightGap), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, &kDYYYFeedTableFullScreenAppliedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    if (fabs(CGRectGetHeight(self.frame) - superviewHeight) > 0.5) {
         CGRect frame = self.frame;
-        frame.size.height = self.superview.frame.size.height - gCurrentTabBarHeight;
+        frame.size.height = superviewHeight;
         self.frame = frame;
     }
 }
@@ -12298,7 +16441,10 @@ static Class tabBarButtonClass = nil;
         [hideButton hideUIElements];
     }
     %orig;
-    DYYYHandleCurrentSpeedAwemeChanged(arg1);
+    // This callback is the feed's committed index transition. Do not validate it
+    // against the controller hierarchy: old/new controllers can overlap briefly
+    // after a real switch, causing the old controller to win the visibility score.
+    DYYYHandleCurrentAwemeChanged(arg1);
 }
 
 - (void)viewWillLayoutSubviews {
@@ -12309,10 +16455,28 @@ static Class tabBarButtonClass = nil;
 }
 %end
 
+%hook AWEFeedTableViewController
+
+- (void)setCurrentPlayIndex:(NSInteger)index {
+    %orig(index);
+    DYYYHandleCommittedSpeedAwemeChanged([self currentAweme]);
+}
+
+- (void)playVideo:(id)video {
+    %orig(video);
+    DYYYHandleCommittedSpeedAwemeChanged([self currentAweme] ?: video);
+}
+
+- (void)playVideoOnScrollDidEnd {
+    %orig;
+    DYYYHandleCommittedSpeedAwemeChanged([self currentAweme]);
+}
+
+%end
+
 static id dyyyWindowKeyObserverToken = nil;
 static id dyyyDidBecomeActiveToken = nil;
 static id dyyyWillResignActiveToken = nil;
-static id dyyyKeyboardWillShowToken = nil;
 static void *DYYYGlobalTransparencyContext = &DYYYGlobalTransparencyContext;
 
 static void DYYYRemoveAppLifecycleObservers(void) {
@@ -12328,13 +16492,6 @@ static void DYYYRemoveAppLifecycleObservers(void) {
     if (dyyyWillResignActiveToken) {
         [center removeObserver:dyyyWillResignActiveToken];
         dyyyWillResignActiveToken = nil;
-    }
-}
-
-static void DYYYRemoveKeyboardObserver(void) {
-    if (dyyyKeyboardWillShowToken) {
-        [[NSNotificationCenter defaultCenter] removeObserver:dyyyKeyboardWillShowToken];
-        dyyyKeyboardWillShowToken = nil;
     }
 }
 
@@ -12379,18 +16536,16 @@ static void DYYYRemoveKeyboardObserver(void) {
 
 - (void)applicationWillTerminate:(UIApplication *)application {
     DYYYRemoveAppLifecycleObservers();
-    DYYYRemoveKeyboardObserver();
     %orig;
 }
 
 - (void)dealloc {
     DYYYRemoveAppLifecycleObservers();
-    DYYYRemoveKeyboardObserver();
     @try {
         [[NSUserDefaults standardUserDefaults] removeObserver:(NSObject *)self forKeyPath:kDYYYGlobalTransparencyKey context:DYYYGlobalTransparencyContext];
     } @catch (NSException *exception) {
         NSLog(@"[DYYY] KVO removeObserver failed: %@", exception);
-    } 
+    }
     %orig;
 }
 
@@ -12407,9 +16562,29 @@ static void DYYYRemoveKeyboardObserver(void) {
 
 %end
 
-static Class GuideViewClass = nil;
-static Class MuteViewClass = nil;
-static Class TagViewClass = nil;
+%hook AWELiveNewPreStreamViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    [DYYYLivePreStreamLayoutCoordinator activateLayoutForController:self];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    [DYYYLivePreStreamLayoutCoordinator activateLayoutForController:self];
+}
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    [DYYYLivePreStreamLayoutCoordinator scheduleUpdateForController:self];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    [DYYYLivePreStreamLayoutCoordinator restoreLayoutForController:self];
+}
+
+%end
 
 %hook AWEElementStackView
 
@@ -12423,6 +16598,8 @@ static Class TagViewClass = nil;
     static AWMSafeDispatchTimer *pureModeTimer = nil;
     static int attempts = 0;
     static BOOL pureModeSet = NO;
+    static BOOL pureModeTimerStarted = NO;
+    static NSUInteger pureModeGeneration = 0;
     if (DYYYGetBool(@"DYYYEnablePure")) {
         %orig(0.0);
         if (pureModeSet) {
@@ -12431,15 +16608,26 @@ static Class TagViewClass = nil;
         if (!pureModeTimer) {
             pureModeTimer = [[AWMSafeDispatchTimer alloc] init];
         }
-        if (!pureModeTimer.isRunning) {
+        // Guard before isRunning: startWithInterval schedules asynchronously, so
+        // repeated setAlpha (fullscreen/status-bar layout churn) can otherwise
+        // enqueue many overlapping starts while running is still NO.
+        if (!pureModeTimerStarted) {
+            pureModeTimerStarted = YES;
             attempts = 0;
+            NSUInteger generation = ++pureModeGeneration;
             __weak AWMSafeDispatchTimer *weakTimer = pureModeTimer;
             [pureModeTimer startWithInterval:0.5
                                       leeway:0.1
                                        queue:dispatch_get_main_queue()
                                      repeats:YES
                                      handler:^{
+                                       if (generation != pureModeGeneration) {
+                                           return;
+                                       }
                                        AWMSafeDispatchTimer *strongTimer = weakTimer;
+                                       if (!strongTimer) {
+                                           return;
+                                       }
                                        UIWindow *keyWindow = [DYYYUtils getActiveWindow];
                                        if (keyWindow && keyWindow.rootViewController) {
                                            UIViewController *feedVC = [DYYYUtils findViewControllerOfClass:NSClassFromString(@"AWEFeedTableViewController")
@@ -12447,17 +16635,25 @@ static Class TagViewClass = nil;
                                            if (feedVC) {
                                                [feedVC setValue:@YES forKey:@"pureMode"];
                                                pureModeSet = YES;
-                                               [strongTimer cancel];
-                                               pureModeTimer = nil;
                                                attempts = 0;
+                                               pureModeGeneration++;
+                                               pureModeTimerStarted = NO;
+                                               if (pureModeTimer == strongTimer) {
+                                                   pureModeTimer = nil;
+                                               }
+                                               [strongTimer cancel];
                                                return;
                                            }
                                        }
                                        attempts++;
                                        if (attempts >= 10) {
-                                           [strongTimer cancel];
-                                           pureModeTimer = nil;
                                            attempts = 0;
+                                           pureModeGeneration++;
+                                           pureModeTimerStarted = NO;
+                                           if (pureModeTimer == strongTimer) {
+                                               pureModeTimer = nil;
+                                           }
+                                           [strongTimer cancel];
                                        }
                                      }];
         }
@@ -12466,24 +16662,14 @@ static Class TagViewClass = nil;
 
     // 清理纯净模式的残留状态
     if (pureModeTimer) {
-        [pureModeTimer cancel];
+        AWMSafeDispatchTimer *timer = pureModeTimer;
         pureModeTimer = nil;
+        pureModeTimerStarted = NO;
+        pureModeGeneration++;
+        [timer cancel];
     }
     attempts = 0;
     pureModeSet = NO;
-
-    // 倍速和清屏按钮的状态控制
-    BOOL hasFloatingButtons = (speedButton && isFloatSpeedButtonEnabled) || hideButton;
-    if (!isApplyingGlobal && hasFloatingButtons && !dyyyIsPerformingFloatClearOperation) {
-        const CGFloat threshold = 0.01f;
-        if (alpha <= threshold) {
-            dyyyCommentViewVisible = YES;
-        } else if (alpha >= (1.0f - threshold)) {
-            dyyyCommentViewVisible = NO;
-        }
-        updateSpeedButtonVisibility();
-        updateClearButtonVisibility();
-    }
 
     // 值守全局透明度
     CGFloat finalAlpha = alpha;
@@ -12498,26 +16684,6 @@ static Class TagViewClass = nil;
     }
 }
 
-+ (void)initialize {
-    GuideViewClass = NSClassFromString(@"AWELivePrestreamGuideView");
-    MuteViewClass = NSClassFromString(@"AFDCancelMuteAwemeView");
-    TagViewClass = NSClassFromString(@"AWELiveFeedLabelTagView");
-}
-
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    dyyyCommentViewVisible = NO;
-    updateSpeedButtonVisibility();
-    updateClearButtonVisibility();
-}
-
-- (void)viewDidDisappear:(BOOL)animated {
-    %orig;
-    dyyyCommentViewVisible = YES;
-    updateSpeedButtonVisibility();
-    updateClearButtonVisibility();
-}
-
 - (void)didMoveToWindow {
     %orig;
     if (self.window) {
@@ -12526,6 +16692,17 @@ static Class TagViewClass = nil;
     } else {
         [[NSNotificationCenter defaultCenter] removeObserver:self name:kDYYYGlobalTransparencyDidChangeNotification object:nil];
     }
+    [DYYYLivePreStreamLayoutCoordinator scheduleUpdateForView:self];
+}
+
+- (void)didAddSubview:(UIView *)subview {
+    %orig(subview);
+    [DYYYLivePreStreamLayoutCoordinator scheduleUpdateForView:self];
+}
+
+- (void)willRemoveSubview:(UIView *)subview {
+    %orig(subview);
+    [DYYYLivePreStreamLayoutCoordinator scheduleUpdateForView:self];
 }
 
 - (void)dealloc {
@@ -12534,54 +16711,15 @@ static Class TagViewClass = nil;
 }
 
 - (void)layoutSubviews {
+    // 先清掉子元素上的 transform，让原始排版基于未变换的 frame 计算
+    DYYYResetPlayInteractionLeftStackElementTransforms(self);
+
     %orig;
 
     UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
 
     if ([viewController isKindOfClass:%c(AWELiveNewPreStreamViewController)]) {
-        const BOOL shouldShiftUp = DYYYGetBool(@"DYYYEnableFullScreen");
-        const CGFloat labelScaleValue = DYYYGetFloat(@"DYYYNicknameScale");
-        const CGFloat targetLabelScale = (labelScaleValue != 0.0) ? MAX(0.01, labelScaleValue) : 1.0;
-        const CGFloat elementScaleValue = DYYYGetFloat(@"DYYYElementScale");
-        const CGFloat targetElementScale = (elementScaleValue != 0.0) ? MAX(0.01, elementScaleValue) : 1.0;
-
-        CGAffineTransform targetTransform = CGAffineTransformIdentity;
-        CGFloat boundsWidth = self.bounds.size.width;
-        CGFloat currentScale = 1.0;
-        CGFloat targetHeight, tx, ty = 0;
-        UIWindow *keyWindow = [DYYYUtils getActiveWindow];
-        if (keyWindow && keyWindow.safeAreaInsets.bottom == 0) {
-            targetHeight = gCurrentTabBarHeight - originalTabBarHeight;
-        } else {
-            targetHeight = gCurrentTabBarHeight;
-        }
-
-        if ([DYYYUtils containsSubviewOfClass:GuideViewClass inContainer:self]) {
-            currentScale = targetLabelScale;
-            tx = 0; // 中对齐
-        } else if ([DYYYUtils containsSubviewOfClass:MuteViewClass inContainer:self]) {
-            currentScale = targetElementScale;
-            tx = (boundsWidth - boundsWidth * currentScale) / 2; // 右对齐
-        } else if ([DYYYUtils containsSubviewOfClass:TagViewClass inContainer:self]) {
-            currentScale = targetLabelScale;
-            tx = (boundsWidth - boundsWidth * currentScale) / -2; // 左对齐
-        }
-
-        NSArray *subviews = [self.subviews copy];
-        for (UIView *view in subviews) {
-            CGFloat viewHeight = view.bounds.size.height;
-            ty += (viewHeight - viewHeight * currentScale) / 2;
-        }
-
-        if (shouldShiftUp) {
-            ty -= targetHeight;
-        }
-
-        targetTransform = CGAffineTransformMake(currentScale, 0, 0, currentScale, tx, ty);
-
-        if (!CGAffineTransformEqualToTransform(self.transform, targetTransform)) {
-            self.transform = targetTransform;
-        }
+        [DYYYLivePreStreamLayoutCoordinator scheduleUpdateForController:viewController];
     }
 
     if ([viewController isKindOfClass:%c(AWEPlayInteractionViewController)]) {
@@ -12604,20 +16742,7 @@ static Class TagViewClass = nil;
             }
         }
 
-        BOOL isLeftStack = ([label isEqualToString:@"left"] || hasAnchor);
-        if (!isLeftStack) {
-            NSArray *subviews = [self.subviews copy];
-            for (NSInteger i = (NSInteger)subviews.count - 1; i >= 0; i--) {
-                UIView *sub = subviews[i];
-                if ([sub respondsToSelector:@selector(elementClassName)]) {
-                    NSString *elementClassName = [sub performSelector:@selector(elementClassName)];
-                    if ([elementClassName isEqualToString:@"AWEPlayInteractionDescriptionElement"]) {
-                        isLeftStack = YES;
-                        break;
-                    }
-                }
-            }
-        }
+        BOOL hasScalableLeftElement = DYYYStackViewContainsScalableLeftElement(self);
 
         // 右侧元素的处理逻辑
         if (isRightStack) {
@@ -12640,57 +16765,14 @@ static Class TagViewClass = nil;
                 }
             }
         }
-        // 左侧元素的处理逻辑
-        else if (isLeftStack) {
-            NSString *scaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameScale"];
-            if (scaleValue.length > 0) {
-                CGFloat scale = [scaleValue floatValue];
-                self.transform = CGAffineTransformIdentity;
-                if (scale > 0 && scale != 1.0) {
-                    NSArray *subviews = [self.subviews copy];
-                    CGFloat ty = 0;
-                    for (UIView *view in subviews) {
-                        CGFloat viewHeight = view.frame.size.height;
-                        ty += (viewHeight - viewHeight * scale) / 2;
-                    }
-                    CGFloat frameWidth = self.frame.size.width;
-                    CGFloat left_tx = (frameWidth - frameWidth * scale) / 2 - frameWidth * (1 - scale);
-                    CGAffineTransform newTransform = CGAffineTransformMakeScale(scale, scale);
-                    newTransform = CGAffineTransformTranslate(newTransform, left_tx / scale, ty / scale);
-                    self.transform = newTransform;
-                }
-            }
+        // 左侧昵称/文案元素按子元素分别缩放
+        else if (hasScalableLeftElement) {
+            DYYYApplyPlayInteractionLeftStackElementTransforms(self);
         }
     }
 }
 
 - (NSArray<__kindof UIView *> *)arrangedSubviews {
-
-    UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
-    if ([viewController isKindOfClass:%c(AWEPlayInteractionViewController)]) {
-
-        if ([self.accessibilityLabel isEqualToString:@"left"] || [DYYYUtils containsSubviewOfClass:NSClassFromString(@"AWEFeedAnchorContainerView") inContainer:self]) {
-            NSString *scaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameScale"];
-            if (scaleValue.length > 0) {
-                CGFloat scale = [scaleValue floatValue];
-                self.transform = CGAffineTransformIdentity;
-                if (scale > 0 && scale != 1.0) {
-                    NSArray *subviews = [self.subviews copy];
-                    CGFloat ty = 0;
-                    for (UIView *view in subviews) {
-                        CGFloat viewHeight = view.frame.size.height;
-                        ty += (viewHeight - viewHeight * scale) / 2;
-                    }
-                    CGFloat frameWidth = self.frame.size.width;
-                    CGFloat left_tx = (frameWidth - frameWidth * scale) / 2 - frameWidth * (1 - scale);
-                    CGAffineTransform newTransform = CGAffineTransformMakeScale(scale, scale);
-                    newTransform = CGAffineTransformTranslate(newTransform, left_tx / scale, ty / scale);
-                    self.transform = newTransform;
-                }
-            }
-        }
-    }
-
     NSArray *originalSubviews = %orig;
     return originalSubviews;
 }
@@ -12699,26 +16781,10 @@ static Class TagViewClass = nil;
 
 %hook IESLiveStackView
 
-+ (void)initialize {
-    GuideViewClass = NSClassFromString(@"AWELivePrestreamGuideView");
-    MuteViewClass = NSClassFromString(@"AFDCancelMuteAwemeView");
-    TagViewClass = NSClassFromString(@"AWELiveFeedLabelTagView");
-}
-
 - (void)setAlpha:(CGFloat)alpha {
     BOOL isApplyingGlobal = (dyyyGlobalTransparencyMutationDepth > 0);
     if (!isApplyingGlobal) {
         objc_setAssociatedObject(self, &kDYYYGlobalTransparencyBaseAlphaKey, @(alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-
-    if (!isApplyingGlobal && speedButton && isFloatSpeedButtonEnabled) {
-        if (alpha == 0) {
-            dyyyCommentViewVisible = YES;
-        } else if (alpha == 1) {
-            dyyyCommentViewVisible = NO;
-        }
-        updateSpeedButtonVisibility();
-        updateClearButtonVisibility();
     }
 
     CGFloat finalAlpha = alpha;
@@ -12740,6 +16806,17 @@ static Class TagViewClass = nil;
     } else {
         [[NSNotificationCenter defaultCenter] removeObserver:self name:kDYYYGlobalTransparencyDidChangeNotification object:nil];
     }
+    [DYYYLivePreStreamLayoutCoordinator scheduleUpdateForView:self];
+}
+
+- (void)didAddSubview:(UIView *)subview {
+    %orig(subview);
+    [DYYYLivePreStreamLayoutCoordinator scheduleUpdateForView:self];
+}
+
+- (void)willRemoveSubview:(UIView *)subview {
+    %orig(subview);
+    [DYYYLivePreStreamLayoutCoordinator scheduleUpdateForView:self];
 }
 
 - (void)dealloc {
@@ -12753,48 +16830,7 @@ static Class TagViewClass = nil;
     UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
 
     if ([viewController isKindOfClass:%c(AWELiveNewPreStreamViewController)]) {
-        const BOOL shouldShiftUp = DYYYGetBool(@"DYYYEnableFullScreen");
-        const CGFloat labelScaleValue = DYYYGetFloat(@"DYYYNicknameScale");
-        const CGFloat targetLabelScale = (labelScaleValue != 0.0) ? MAX(0.01, labelScaleValue) : 1.0;
-        const CGFloat elementScaleValue = DYYYGetFloat(@"DYYYElementScale");
-        const CGFloat targetElementScale = (elementScaleValue != 0.0) ? MAX(0.01, elementScaleValue) : 1.0;
-
-        CGAffineTransform targetTransform = CGAffineTransformIdentity;
-        CGFloat boundsWidth = self.bounds.size.width;
-        CGFloat currentScale = 1.0;
-        CGFloat targetHeight, tx, ty = 0;
-        UIWindow *keyWindow = [DYYYUtils getActiveWindow];
-        if (keyWindow && keyWindow.safeAreaInsets.bottom == 0) {
-            targetHeight = gCurrentTabBarHeight - originalTabBarHeight;
-        } else {
-            targetHeight = gCurrentTabBarHeight;
-        }
-
-        if ([DYYYUtils containsSubviewOfClass:GuideViewClass inContainer:self]) {
-            currentScale = targetLabelScale;
-            tx = 0; // 中对齐
-        } else if ([DYYYUtils containsSubviewOfClass:MuteViewClass inContainer:self]) {
-            currentScale = targetElementScale;
-            tx = (boundsWidth - boundsWidth * currentScale) / 2; // 右对齐
-        } else if ([DYYYUtils containsSubviewOfClass:TagViewClass inContainer:self]) {
-            currentScale = targetLabelScale;
-            tx = (boundsWidth - boundsWidth * currentScale) / -2; // 左对齐
-        }
-
-        NSArray *subviews = [self.subviews copy];
-        for (UIView *view in subviews) {
-            CGFloat viewHeight = view.bounds.size.height;
-            ty += (viewHeight - viewHeight * currentScale) / 2;
-        }
-
-        if (shouldShiftUp) {
-            ty -= targetHeight;
-        }
-        targetTransform = CGAffineTransformMakeTranslation(0, -20);
-
-        if (!CGAffineTransformEqualToTransform(self.transform, targetTransform)) {
-            self.transform = targetTransform;
-        }
+        [DYYYLivePreStreamLayoutCoordinator scheduleUpdateForController:viewController];
     }
 }
 
@@ -12867,6 +16903,11 @@ static Class TagViewClass = nil;
 %end
 
 %hook AFDFastSpeedView
+
+- (void)updateSpeedLockBottomWithText:(NSString *)text Type:(NSInteger)type {
+    %orig(DYYYAdjustedNativeLongPressSpeedHint(text), type);
+}
+
 - (void)layoutSubviews {
     %orig;
 
@@ -13002,8 +17043,13 @@ static Class TagViewClass = nil;
 %hook AWEStoryProgressContainerView
 - (void)setCenter:(CGPoint)center {
     UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
-    if ([vc isKindOfClass:NSClassFromString(@"AWEFeedPlayControlImpl.PureModePageCellViewController")] && DYYYGetBool(@"DYYYEnableFullScreen")) {
-        center.y -= gCurrentTabBarHeight;
+    BOOL isPureModeImageBrowser = [vc isKindOfClass:NSClassFromString(@"AWEFeedPlayControlImpl.PureModePageCellViewController")];
+    if (isPureModeImageBrowser && DYYYGetBool(@"DYYYEnableFullScreen")) {
+        NSString *appVersion = [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"];
+        BOOL needsLegacyOffset = appVersion.length == 0 || [DYYYUtils compareVersion:appVersion toVersion:@"37.2.0"] == NSOrderedAscending;
+        if (needsLegacyOffset && gCurrentTabBarHeight > 0) {
+            center.y -= gCurrentTabBarHeight;
+        }
     }
     %orig(center);
 }
@@ -13101,6 +17147,12 @@ static Class TagViewClass = nil;
 %hook AWEMixVideoPanelMoreView
 
 - (void)setFrame:(CGRect)frame {
+    if (DYYYGetBool(@"DYYYHideTemplateVideo")) {
+        self.hidden = YES;
+        %orig(frame);
+        return;
+    }
+
     if (DYYYGetBool(@"DYYYEnableFullScreen")) {
         CGFloat targetY = frame.origin.y - gCurrentTabBarHeight;
         CGFloat screenHeightMinusGDiff = [UIScreen mainScreen].bounds.size.height - gCurrentTabBarHeight;
@@ -13117,12 +17169,19 @@ static Class TagViewClass = nil;
 - (void)layoutSubviews {
     %orig;
 
+    if (DYYYGetBool(@"DYYYHideTemplateVideo")) {
+        self.hidden = YES;
+        return;
+    }
+
     if (DYYYGetBool(@"DYYYEnableFullScreen")) {
         self.backgroundColor = [UIColor clearColor];
     }
 }
 
 %end
+
+%group DYYYCommentInputContainerGroup
 
 %hook CommentInputContainerView
 
@@ -13153,6 +17212,8 @@ static Class TagViewClass = nil;
         }
     }
 }
+
+%end
 
 %end
 
@@ -13216,24 +17277,44 @@ static Class TagViewClass = nil;
 
 %hook UIImageView
 - (void)setImage:(UIImage *)image {
+    if (DYYYShouldForceHideFeedVideoCollectButtonView(self)) {
+        %orig(nil);
+        return;
+    }
+
     DYYYApplySDRDynamicRangeToImageView(self);
     %orig;
     DYYYApplySDRDynamicRangeToImageView(self);
 }
 
 - (void)setHighlightedImage:(UIImage *)highlightedImage {
+    if (DYYYShouldForceHideFeedVideoCollectButtonView(self)) {
+        %orig(nil);
+        return;
+    }
+
     DYYYApplySDRDynamicRangeToImageView(self);
     %orig;
     DYYYApplySDRDynamicRangeToImageView(self);
 }
 
 - (void)setAnimationImages:(NSArray<UIImage *> *)animationImages {
+    if (DYYYShouldForceHideFeedVideoCollectButtonView(self)) {
+        %orig(nil);
+        return;
+    }
+
     DYYYApplySDRDynamicRangeToImageView(self);
     %orig;
     DYYYApplySDRDynamicRangeToImageView(self);
 }
 
 - (void)setHighlightedAnimationImages:(NSArray<UIImage *> *)highlightedAnimationImages {
+    if (DYYYShouldForceHideFeedVideoCollectButtonView(self)) {
+        %orig(nil);
+        return;
+    }
+
     DYYYApplySDRDynamicRangeToImageView(self);
     %orig;
     DYYYApplySDRDynamicRangeToImageView(self);
@@ -13241,8 +17322,14 @@ static Class TagViewClass = nil;
 
 - (void)layoutSubviews {
     %orig;
+    if (DYYYShouldForceHideFeedVideoCollectButtonView(self)) {
+        DYYYClearFeedVideoCollectImageView(self);
+        self.hidden = YES;
+        return;
+    }
+
     DYYYApplySDRDynamicRangeToImageView(self);
-    if (DYYYGetBool(@"DYYYHideCommentDiscover")) {
+    if (DYYYGetBoolCached(@"DYYYHideCommentDiscover")) {
         if (!self.accessibilityLabel) {
             UIView *parentView = self.superview;
 
@@ -13349,46 +17436,11 @@ static NSString *const kHideRecentUsersKey = @"DYYYHideSidebarRecentUsers";
 
 %end
 
-@interface UIDropShadowView : UIView
-@end
-
-// 修复 ios26 模态透明效果
-// %hook UIDropShadowView
-
-// - (void)didMoveToSuperview {
-//     %orig;
-
-//     if (@available(iOS 26.0, *)) {
-//         self.backgroundColor = UIColor.clearColor;
-//         self.opaque = NO;
-//     }
-// }
-
-// - (void)layoutSubviews {
-//     %orig;
-
-//     if (@available(iOS 26.0, *)) {
-//         self.backgroundColor = UIColor.clearColor;
-//         self.opaque = NO;
-//     }
-// }
-
-// - (void)setBackgroundColor:(UIColor *)color {
-//     if (@available(iOS 26.0, *)) {
-//         %orig(UIColor.clearColor);
-//         return;
-//     }
-//     %orig;
-// }
-
-// %end
-
 %hook AFDViewedBottomView
 - (void)layoutSubviews {
     %orig;
 
     if (DYYYGetBool(@"DYYYEnableFullScreen")) {
-
         self.backgroundColor = [UIColor clearColor];
 
         self.effectView.hidden = YES;
@@ -13462,54 +17514,56 @@ static NSString *const kHideRecentUsersKey = @"DYYYHideSidebarRecentUsers";
 
 %end
 
-
-// 隐藏键盘 AI
-static __weak UIView *cachedHideView = nil;
-static void hideParentViewsSubviews(UIView *view) {
-    if (!view)
-        return;
-    UIView *parentView = [view superview];
-    if (!parentView)
-        return;
-    UIView *grandParentView = [parentView superview];
-    if (!grandParentView)
-        return;
-    UIView *greatGrandParentView = [grandParentView superview];
-    if (!greatGrandParentView)
-        return;
-    cachedHideView = greatGrandParentView;
-    for (UIView *subview in greatGrandParentView.subviews) {
-        subview.hidden = YES;
-    }
-}
-
-// 递归查找目标视图
-static void findTargetViewInView(UIView *view) {
-    if (cachedHideView)
-        return;
-    if ([view isKindOfClass:NSClassFromString(@"AWESearchKeyboardVoiceSearchEntranceView")]) {
-        hideParentViewsSubviews(view);
-        return;
-    }
-    for (UIView *subview in view.subviews) {
-        findTargetViewInView(subview);
-        if (cachedHideView)
-            break;
-    }
-}
-
 %ctor {
+    [DYYYLoginBypassManager configureInitialStateIfNeeded];
+
     [[NSUserDefaults standardUserDefaults] registerDefaults:@{
-        @"DYYYDisableFeedNowPlayingInfo" : @YES
+        DYYY_DISABLE_FEED_NOW_PLAYING_INFO_KEY : @NO,
+        @"DYYYSpeedSettings" : @"1.0,1.25,1.5,2.0",
+        @"DYYYSpeedButtonSize" : @35.0,
+        @"DYYYAutoHideSpeedButtonTime" : @30.0,
+        kDYYYEnableLoginBypassKey : @YES
     }];
 
     DYYYMigrateCombinedHDRModeIfNeeded();
+    DYYYMigrateScaleAndSizeSettingsIfNeeded();
+    DYYYMigrateScaleAndSizeSettingsV2IfNeeded();
+
+    // 尽早安装 HighFPS（含 ProMotion Info.plist 门闩），避免 CA 先按 60Hz 缓存策略。
+    DYYYStartHighFPSHooks();
+
+    %init(DYYYLoginBypassCore);
+
+    Class loginListenerClass = objc_getClass("AWEUserServiceListener");
+    if (loginListenerClass && class_getInstanceMethod(loginListenerClass, @selector(didFinishLoginWithUid:))) {
+        %init(DYYYLoginBypassAccountLifecycle);
+    }
+    Class accountMulticastClass = objc_getClass("TTAccountMulticast");
+    if (accountMulticastClass &&
+        class_getInstanceMethod(accountMulticastClass, @selector(broadcastLoginSuccess:platform:reason:))) {
+        %init(DYYYLoginBypassAccountMulticast);
+    }
+    if (objc_getClass("AWEVersionUpdateManager")) {
+        %init(DYYYLoginBypassVersionUpdateManager);
+    }
+    if (objc_getClass("AWEVersionUpdateAlert")) {
+        %init(DYYYLoginBypassVersionUpdateAlert);
+    }
+    if (objc_getClass("AWEVersionUpdatePopup")) {
+        %init(DYYYLoginBypassVersionUpdatePopup);
+    }
+    if (objc_getClass("AWEVersionUpdateWorkflow")) {
+        %init(DYYYLoginBypassVersionUpdateWorkflow);
+    }
+    if (objc_getClass("AWETeenVersionUpdateManager")) {
+        %init(DYYYLoginBypassTeenVersionUpdateManager);
+    }
 
     Class interactionBaseLabelClass = objc_getClass("AWECommentSwiftBizUI.CommentInteractionBaseLabel");
     if (interactionBaseLabelClass) {
         %init(DYYYCommentExactTimeGroup, AWECommentSwiftBizUI_CommentInteractionBaseLabel = interactionBaseLabelClass);
     }
-    
+
     Class imMenuComponentClass = objc_getClass("AWEIMCustomMenuComponent");
     if (imMenuComponentClass) {
         SEL legacySelector = NSSelectorFromString(@"msg_showMenuForBubbleFrameInScreen:tapLocationInScreen:menuItemList:moreEmoticon:onCell:extra:");
@@ -13530,10 +17584,19 @@ static void findTargetViewInView(UIView *view) {
         %init(DYYYSettingsGesture);
     }
     if (DYYYGetBool(@"DYYYUserAgreementAccepted")) {
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        isFloatSpeedButtonEnabled = [defaults boolForKey:@"DYYYEnableFloatSpeedButton"];
+        showSpeedX = [defaults boolForKey:@"DYYYSpeedButtonShowX"];
+        CGFloat configuredSpeedButtonSize = [defaults floatForKey:@"DYYYSpeedButtonSize"];
+        speedButtonSize = configuredSpeedButtonSize > 0.0 ? configuredSpeedButtonSize : 35.0;
+
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{
+          %init;
           Class wSwiftImpl = objc_getClass("AWECommentInputViewSwiftImpl.CommentInputContainerView");
-          %init(CommentInputContainerView = wSwiftImpl);
+          if (wSwiftImpl) {
+              %init(DYYYCommentInputContainerGroup, CommentInputContainerView = wSwiftImpl);
+          }
         });
         BOOL isAutoPlayEnabled = DYYYGetBool(@"DYYYEnableAutoPlay");
         if (isAutoPlayEnabled) {
@@ -13544,7 +17607,13 @@ static void findTargetViewInView(UIView *view) {
             DYYYGetBool(@"DYYYForceDownloadCommentImage")) {
             %init(EnableStickerSaveMenu);
         }
-        [FloatingSpeedButton reloadConfiguration];
+        DYYYStartMiniProgramRewardBypassInstaller();
+        DYYYStartHideMusicButtonHooks();
+        DYYYStartHideMessageAndMinePageHooks();
+        DYYYStartHideCommentAIAnalysisHooks();
+        DYYYStartHideTemplateCollectionHooks();
+        DYYYStartSearchKeyboardVoiceHooks();
+        DYYYStartFPSOverlay();
 
         // 初始化红包激励挂件容器视图类组
         Class incentivePendantClass = objc_getClass("AWEIncentiveSwiftImplDOUYINLite.IncentivePendantContainerView");
@@ -13557,12 +17626,38 @@ static void findTargetViewInView(UIView *view) {
         }
 
         // 动态获取 Swift 类并初始化对应的组
-        Class commentHeaderGeneralClass = objc_getClass("AWECommentPanelHeaderSwiftImpl.CommentHeaderGeneralView");
+        Class commentSearchAnchorViewClass = objc_getClass("AWECommentSearchAnchorView");
+        if (commentSearchAnchorViewClass) {
+            %init(CommentSearchAnchorGroup, AWECommentSearchAnchorView = commentSearchAnchorViewClass);
+        }
+
+        Class commentHeaderSectionControllerClass =
+            NSClassFromString(@"AWECommentPanelHeaderSwiftImpl.CommentPanelHeaderSectionController");
+        if (!commentHeaderSectionControllerClass) {
+            commentHeaderSectionControllerClass =
+                objc_getClass("_TtC30AWECommentPanelHeaderSwiftImpl40CommentPanelHeaderSectionController");
+        }
+        if (!commentHeaderSectionControllerClass) {
+            commentHeaderSectionControllerClass =
+                objc_getClass("AWECommentPanelHeaderSwiftImpl.CommentPanelHeaderSectionController");
+        }
+        if (commentHeaderSectionControllerClass) {
+            %init(CommentPanelHeaderVerifiedCollapseGroup,
+                  AWECommentPanelHeaderSwiftImpl_CommentPanelHeaderSectionController = commentHeaderSectionControllerClass);
+        }
+
+        Class commentHeaderGeneralClass = objc_getClass("AWECommentCommerceSwiftImpl.CommentHeaderGeneralView");
+        if (!commentHeaderGeneralClass) {
+            commentHeaderGeneralClass = objc_getClass("AWECommentPanelHeaderSwiftImpl.CommentHeaderGeneralView");
+        }
         if (commentHeaderGeneralClass) {
             %init(CommentHeaderGeneralGroup, AWECommentPanelHeaderSwiftImpl_CommentHeaderGeneralView = commentHeaderGeneralClass);
         }
 
-        Class commentHeaderGoodsClass = objc_getClass("AWECommentPanelHeaderSwiftImpl.CommentHeaderGoodsView");
+        Class commentHeaderGoodsClass = objc_getClass("AWECommentCommerceSwiftImpl.CommentHeaderGoodsView");
+        if (!commentHeaderGoodsClass) {
+            commentHeaderGoodsClass = objc_getClass("AWECommentPanelHeaderSwiftImpl.CommentHeaderGoodsView");
+        }
         if (commentHeaderGoodsClass) {
             %init(CommentHeaderGoodsGroup, AWECommentPanelHeaderSwiftImpl_CommentHeaderGoodsView = commentHeaderGoodsClass);
         }
@@ -13576,25 +17671,5 @@ static void findTargetViewInView(UIView *view) {
             %init(CommentBottomTipsVCGroup, AWECommentPanelListSwiftImpl_CommentBottomTipsContainerViewController = tipsVCClass);
         }
 
-        NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
-        DYYYRemoveKeyboardObserver();
-        dyyyKeyboardWillShowToken = [center addObserverForName:UIKeyboardWillShowNotification
-                                                        object:nil
-                                                         queue:[NSOperationQueue mainQueue]
-                                                    usingBlock:^(NSNotification *notification) {
-                                                      if (DYYYGetBool(@"DYYYHideKeyboardAI")) {
-                                                          if (cachedHideView) {
-                                                              for (UIView *subview in cachedHideView.subviews) {
-                                                                  subview.hidden = YES;
-                                                              }
-                                                          } else {
-                                                              for (UIWindow *window in [UIApplication sharedApplication].windows) {
-                                                                  findTargetViewInView(window);
-                                                                  if (cachedHideView)
-                                                                      break;
-                                                              }
-                                                          }
-                                                      }
-                                                    }];
     }
 }
