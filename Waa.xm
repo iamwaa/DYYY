@@ -369,12 +369,27 @@ static BOOL WaaPureModeEnabledForController(id controller) {
     return YES;
 }
 
+static char kWaaDanmakuForceStateCapturedKey;
+static char kWaaDanmakuOriginalHiddenKey;
+static char kWaaDanmakuOriginalAlphaKey;
+static char kWaaDanmakuOriginalLayerOpacityKey;
+
+static BOOL WaaFloatClearHidesDanmaku(void) {
+    return hideButton.isElementsHidden && DYYYGetBool(@"DYYYHideDanmaku");
+}
+
 static BOOL WaaShouldHidePureModeDanmaku(void) {
-    BOOL floatClearHidesDanmaku = hideButton.isElementsHidden && DYYYGetBool(@"DYYYHideDanmaku");
     BOOL pureModePlusHidesDanmaku = dyyyPureModePlusActive &&
                                       DYYYGetBool(@"WaaEnablePureModePlus") &&
                                       !DYYYGetBool(@"WaaPureModePlusShowDanmaku");
-    return floatClearHidesDanmaku || pureModePlusHidesDanmaku;
+    return WaaFloatClearHidesDanmaku() || pureModePlusHidesDanmaku;
+}
+
+static BOOL WaaShouldForceShowPureModeDanmaku(void) {
+    return dyyyPureModePlusActive &&
+           DYYYGetBool(@"WaaEnablePureModePlus") &&
+           DYYYGetBool(@"WaaPureModePlusShowDanmaku") &&
+           !WaaFloatClearHidesDanmaku();
 }
 
 static BOOL WaaIsDanmakuContainerView(UIView *view) {
@@ -384,14 +399,59 @@ static BOOL WaaIsDanmakuContainerView(UIView *view) {
            (danmakuClass && [view isKindOfClass:danmakuClass]);
 }
 
+static void WaaCaptureDanmakuStateIfNeeded(UIView *view) {
+    if (!view || objc_getAssociatedObject(view, &kWaaDanmakuForceStateCapturedKey)) {
+        return;
+    }
+    objc_setAssociatedObject(view, &kWaaDanmakuForceStateCapturedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, &kWaaDanmakuOriginalHiddenKey, @(view.hidden), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, &kWaaDanmakuOriginalAlphaKey, @(view.alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, &kWaaDanmakuOriginalLayerOpacityKey, @(view.layer.opacity), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void WaaRestoreDanmakuStateIfNeeded(UIView *view) {
+    if (!view || !objc_getAssociatedObject(view, &kWaaDanmakuForceStateCapturedKey)) {
+        return;
+    }
+
+    NSNumber *originalHidden = objc_getAssociatedObject(view, &kWaaDanmakuOriginalHiddenKey);
+    NSNumber *originalAlpha = objc_getAssociatedObject(view, &kWaaDanmakuOriginalAlphaKey);
+    NSNumber *originalLayerOpacity = objc_getAssociatedObject(view, &kWaaDanmakuOriginalLayerOpacityKey);
+    objc_setAssociatedObject(view, &kWaaDanmakuForceStateCapturedKey, nil, OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(view, &kWaaDanmakuOriginalHiddenKey, nil, OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(view, &kWaaDanmakuOriginalAlphaKey, nil, OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(view, &kWaaDanmakuOriginalLayerOpacityKey, nil, OBJC_ASSOCIATION_ASSIGN);
+
+    if (originalHidden) {
+        view.hidden = originalHidden.boolValue;
+    }
+    if (originalAlpha) {
+        view.alpha = originalAlpha.floatValue;
+    }
+    if (originalLayerOpacity) {
+        view.layer.opacity = originalLayerOpacity.floatValue;
+    }
+}
+
 static void WaaApplyPureModeDanmakuStateToView(UIView *view) {
     if (!view || !WaaIsDanmakuContainerView(view)) {
         return;
     }
+
     if (WaaShouldHidePureModeDanmaku()) {
+        WaaRestoreDanmakuStateIfNeeded(view);
         DYYYApplyClearTargetViewHiddenState(view);
+        return;
+    }
+
+    DYYYRestoreClearTargetViewStateIfNeeded(view);
+    if (WaaShouldForceShowPureModeDanmaku()) {
+        WaaCaptureDanmakuStateIfNeeded(view);
+        view.hidden = NO;
+        view.alpha = 1.0;
+        view.layer.opacity = 1.0f;
     } else {
-        DYYYRestoreClearTargetViewStateIfNeeded(view);
+        WaaRestoreDanmakuStateIfNeeded(view);
     }
 }
 
@@ -449,6 +509,13 @@ static void removeTargetSubviews(UIView *view) {
     }
 }
 
+- (void)viewWillAppear:(BOOL)animated {
+    BOOL active = WaaPureModeEnabledForController(self);
+    WaaRefreshPureModePlusState(active);
+    %orig;
+    WaaRefreshPureModePlusState(active);
+}
+
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
 
@@ -462,6 +529,11 @@ static void removeTargetSubviews(UIView *view) {
     if ([mainView isKindOfClass:[UIView class]]) {
         removeTargetSubviews(mainView);
     }
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    WaaRefreshPureModePlusState(NO);
+    %orig;
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
@@ -478,6 +550,24 @@ static void removeTargetSubviews(UIView *view) {
     WaaApplyPureModeDanmakuStateToView(self);
 }
 
+- (void)setHidden:(BOOL)hidden {
+    if (WaaShouldForceShowPureModeDanmaku()) {
+        WaaCaptureDanmakuStateIfNeeded(self);
+        %orig(NO);
+        return;
+    }
+    %orig(hidden);
+}
+
+- (void)setAlpha:(CGFloat)alpha {
+    if (WaaShouldForceShowPureModeDanmaku()) {
+        WaaCaptureDanmakuStateIfNeeded(self);
+        %orig(1.0);
+        return;
+    }
+    %orig(alpha);
+}
+
 %end
 
 %hook AWEDanmakuContainerView
@@ -485,6 +575,24 @@ static void removeTargetSubviews(UIView *view) {
 - (void)layoutSubviews {
     %orig;
     WaaApplyPureModeDanmakuStateToView(self);
+}
+
+- (void)setHidden:(BOOL)hidden {
+    if (WaaShouldForceShowPureModeDanmaku()) {
+        WaaCaptureDanmakuStateIfNeeded(self);
+        %orig(NO);
+        return;
+    }
+    %orig(hidden);
+}
+
+- (void)setAlpha:(CGFloat)alpha {
+    if (WaaShouldForceShowPureModeDanmaku()) {
+        WaaCaptureDanmakuStateIfNeeded(self);
+        %orig(1.0);
+        return;
+    }
+    %orig(alpha);
 }
 
 %end

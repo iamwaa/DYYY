@@ -606,6 +606,7 @@ static NSSet<NSString *> *DYYYInlineTextInputIdentifiers(void) {
           @"DYYYSelfTitle",
           @"DYYYSheetBlurTransparent", @"DYYYTabBarHeight", @"DYYYTimelineVerticalPosition", @"DYYYTopBarTransparent",
           @"DYYYVideoBGColor", @"DYYYDanmuColor", @"DYYYLabelColor", @"DYYYProgressLabelColor",
+          @"WaaCommentColor", @"WaaCommentTransparency", @"WaaInputBoxTransparency",
           @"DYYYEnableFloatClearButtonSize", @"DYYYSpeedButtonSize", @"DYYYSpeedSettings", @"DYYYAutoHideSpeedButtonTime"
       ]];
     });
@@ -621,6 +622,9 @@ static NSString *DYYYInlineTextInputPlaceholder(NSString *identifier) {
         @"DYYYSpeedSettings" : @"逗号分隔",
         @"DYYYAutoHideSpeedButtonTime" : @"s",
         @"DYYYCommentContent" : @"不填则默认",
+        @"WaaCommentColor" : @"十六进制",
+        @"WaaCommentTransparency" : @"0-1小数",
+        @"WaaInputBoxTransparency" : @"0-1小数",
         @"DYYYVideoBGColor" : @"十六进制", @"DYYYDanmuColor" : @"十六进制或 random",
         @"DYYYLabelColor" : @"十六进制", @"DYYYProgressLabelColor" : @"十六进制"
     };
@@ -646,7 +650,7 @@ static UIKeyboardType DYYYInlineTextInputKeyboardType(NSString *identifier) {
     NSSet<NSString *> *decimalIdentifiers = [NSSet setWithArray:@[
         @"DYYYAvatarViewTransparency", @"DYYYCommentBlurTransparent", @"DYYYGlobalTransparency", @"DYYYNotificationCornerRadius",
         @"DYYYSheetBlurTransparent", @"DYYYTimelineVerticalPosition", @"DYYYTopBarTransparent", @"DYYYEnableFloatClearButtonSize",
-        @"DYYYSpeedButtonSize", @"DYYYAutoHideSpeedButtonTime"
+        @"DYYYSpeedButtonSize", @"DYYYAutoHideSpeedButtonTime", @"WaaCommentTransparency", @"WaaInputBoxTransparency"
     ]];
     if ([identifier isEqualToString:@"DYYYFilterLowLikes"] || [identifier isEqualToString:@"DYYYFilterTimeLimit"]) {
         return UIKeyboardTypeNumberPad;
@@ -690,7 +694,8 @@ static CGFloat DYYYInlineTextInputPreferredWidth(NSString *identifier, CGFloat c
         @"DYYYElementScale", @"DYYYEnableFloatClearButtonSize", @"DYYYSpeedButtonSize", @"DYYYAutoHideSpeedButtonTime",
         @"DYYYFilterLowLikes", @"DYYYFilterTimeLimit", @"DYYYGlobalTransparency",
         @"DYYYIPLabelScale", @"DYYYIPLabelVerticalOffset", @"DYYYNicknameScale", @"DYYYNicknameVerticalOffset", @"DYYYNotificationCornerRadius",
-        @"DYYYSheetBlurTransparent", @"DYYYTabBarHeight", @"DYYYTimelineVerticalPosition", @"DYYYTopBarTransparent"
+        @"DYYYSheetBlurTransparent", @"DYYYTabBarHeight", @"DYYYTimelineVerticalPosition", @"DYYYTopBarTransparent",
+        @"WaaCommentTransparency", @"WaaInputBoxTransparency"
     ]];
     NSSet<NSString *> *longIdentifiers = [NSSet setWithArray:@[
         @"DYYYCommentContent", @"DYYYInterfaceDownload", @"DYYYRemoteConfigURL", @"DYYYSpeedSettings"
