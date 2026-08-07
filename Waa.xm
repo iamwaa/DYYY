@@ -4,7 +4,9 @@
 #import "Sources/Features/DYYYFloatClearButton.h"
 #import "Sources/UI/DYYYBottomAlertView.h"
 #import <UIKit/UIKit.h>
+#import <math.h>
 #import <objc/runtime.h>
+#import <string.h>
 
 #pragma mark - 外观功能
 
@@ -698,6 +700,65 @@ static void WaaLayoutMigratedDanmakuPlayer(UIViewController *controller) {
     }
 }
 
+static double WaaDanmakuPlayerDoubleValue(id player, SEL selector) {
+    Method method = class_getInstanceMethod([player class], selector);
+    if (!method || strcmp(method_getTypeEncoding(method), "d16@0:8") != 0) {
+        return NAN;
+    }
+    double (*implementation)(id, SEL) = (double (*)(id, SEL))[player methodForSelector:selector];
+    return implementation ? implementation(player, selector) : NAN;
+}
+
+static unsigned long long WaaDanmakuPlayerUnsignedValue(id player, SEL selector) {
+    Method method = class_getInstanceMethod([player class], selector);
+    if (!method || strcmp(method_getTypeEncoding(method), "Q16@0:8") != 0) {
+        return 0;
+    }
+    unsigned long long (*implementation)(id, SEL) =
+        (unsigned long long (*)(id, SEL))[player methodForSelector:selector];
+    return implementation ? implementation(player, selector) : 0;
+}
+
+static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
+    if (!WaaShouldForceShowPureModeDanmaku()) {
+        return;
+    }
+
+    WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
+    UIView *playerView = state.player;
+    if (!playerView || playerView.superview != controller.view || !playerView.window ||
+        ![playerView respondsToSelector:@selector(delegate)]) {
+        return;
+    }
+
+    id (*delegateImplementation)(id, SEL) =
+        (id (*)(id, SEL))[playerView methodForSelector:@selector(delegate)];
+    id danmakuPlayer = delegateImplementation ? delegateImplementation(playerView, @selector(delegate)) : nil;
+    Class danmakuPlayerClass = NSClassFromString(@"DDanmakuPlayer");
+    Method playMethod = danmakuPlayer ? class_getInstanceMethod([danmakuPlayer class], @selector(play)) : NULL;
+    if (!danmakuPlayerClass || ![danmakuPlayer isKindOfClass:danmakuPlayerClass] || !playMethod ||
+        strcmp(method_getTypeEncoding(playMethod), "v16@0:8") != 0) {
+        NSLog(@"[WaaPMDanmaku] event=resumeSkipped player=%@ delegate=%@",
+              WaaDanmakuObjectDescription(playerView), WaaDanmakuObjectDescription(danmakuPlayer));
+        return;
+    }
+
+    double currentTimeBefore = WaaDanmakuPlayerDoubleValue(danmakuPlayer, @selector(currentTime));
+    double playbackTimeBefore = WaaDanmakuPlayerDoubleValue(danmakuPlayer, @selector(playbackTime));
+    unsigned long long clockStepBefore = WaaDanmakuPlayerUnsignedValue(danmakuPlayer, @selector(clockStepCount));
+    void (*playImplementation)(id, SEL) = (void (*)(id, SEL))[danmakuPlayer methodForSelector:@selector(play)];
+    if (playImplementation) {
+        playImplementation(danmakuPlayer, @selector(play));
+    }
+    double currentTimeAfter = WaaDanmakuPlayerDoubleValue(danmakuPlayer, @selector(currentTime));
+    double playbackTimeAfter = WaaDanmakuPlayerDoubleValue(danmakuPlayer, @selector(playbackTime));
+    unsigned long long clockStepAfter = WaaDanmakuPlayerUnsignedValue(danmakuPlayer, @selector(clockStepCount));
+    NSLog(@"[WaaPMDanmaku] event=resumePlay player=%@ delegate=%@ currentTime=%.3f->%.3f playbackTime=%.3f->%.3f clockStep=%llu->%llu",
+          WaaDanmakuObjectDescription(playerView), WaaDanmakuObjectDescription(danmakuPlayer),
+          currentTimeBefore, currentTimeAfter, playbackTimeBefore, playbackTimeAfter,
+          clockStepBefore, clockStepAfter);
+}
+
 static void WaaRestoreMigratedDanmakuPlayer(UIViewController *controller) {
     WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
     if (!state) {
@@ -894,6 +955,8 @@ static void removeTargetSubviews(UIView *view) {
         removeTargetSubviews(mainView);
         WaaLogDanmakuHierarchySnapshot(@"viewDidAppear.afterRemoveTargets");
     }
+    WaaLayoutMigratedDanmakuPlayer(self);
+    WaaResumeMigratedDanmakuPlayer(self);
     WaaLogDanmakuHierarchySnapshot(@"viewDidAppear.after");
 }
 
