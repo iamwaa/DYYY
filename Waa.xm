@@ -373,6 +373,27 @@ static char kWaaDanmakuForceStateCapturedKey;
 static char kWaaDanmakuOriginalHiddenKey;
 static char kWaaDanmakuOriginalAlphaKey;
 static char kWaaDanmakuOriginalLayerOpacityKey;
+static char kWaaDanmakuMigrationStateKey;
+
+static BOOL WaaShouldForceShowPureModeDanmaku(void);
+
+@interface WaaDanmakuMigrationState : NSObject
+@property(nonatomic, strong) UIView *player;
+@property(nonatomic, strong) UIView *originalSuperview;
+@property(nonatomic, assign) NSUInteger originalIndex;
+@property(nonatomic, assign) CGRect originalBounds;
+@property(nonatomic, assign) CGPoint originalCenter;
+@property(nonatomic, assign) CGAffineTransform originalTransform;
+@property(nonatomic, assign) BOOL originalHidden;
+@property(nonatomic, assign) CGFloat originalAlpha;
+@property(nonatomic, assign) float originalLayerOpacity;
+@property(nonatomic, assign) BOOL originalTranslatesAutoresizingMaskIntoConstraints;
+@property(nonatomic, assign) UIViewAutoresizing originalAutoresizingMask;
+@property(nonatomic, strong) NSArray<NSLayoutConstraint *> *activeExternalConstraints;
+@end
+
+@implementation WaaDanmakuMigrationState
+@end
 
 static BOOL WaaDanmakuTraceEnabled(void) {
     return DYYYGetBool(@"WaaEnablePureModePlus") && DYYYGetBool(@"WaaPureModePlusShowDanmaku");
@@ -437,6 +458,185 @@ static void WaaLogDanmakuHierarchySnapshot(NSString *phase) {
     for (UIView *player in players) {
         WaaLogDanmakuPlayerState([@"snapshot." stringByAppendingString:phase], player, nil);
     }
+}
+
+static BOOL WaaViewAndAncestorsAreVisible(UIView *view) {
+    for (UIView *candidate = view; candidate; candidate = candidate.superview) {
+        if (candidate.hidden || candidate.alpha <= 0.01 || candidate.layer.opacity <= 0.01) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
+static UIView *WaaCurrentVisibleDanmakuPlayer(void) {
+    UIView *bestPlayer = nil;
+    CGFloat bestArea = 0.0;
+    CGFloat secondBestArea = 0.0;
+
+    for (UIWindow *window in UIApplication.sharedApplication.windows) {
+        NSMutableArray<UIView *> *players = [NSMutableArray array];
+        WaaCollectDanmakuPlayerViews(window, players);
+        for (UIView *player in players) {
+            if (!player.window || !player.superview || !WaaViewAndAncestorsAreVisible(player)) {
+                continue;
+            }
+            CGRect windowRect = [player convertRect:player.bounds toView:window];
+            CGRect visibleRect = CGRectIntersection(windowRect, window.bounds);
+            CGFloat area = CGRectIsNull(visibleRect) ? 0.0 : CGRectGetWidth(visibleRect) * CGRectGetHeight(visibleRect);
+            NSLog(@"[WaaPMDanmaku] event=migrationCandidate obj=%@ rect=%@ area=%.1f",
+                  WaaDanmakuObjectDescription(player), NSStringFromCGRect(windowRect), area);
+            if (area > bestArea) {
+                secondBestArea = bestArea;
+                bestArea = area;
+                bestPlayer = player;
+            } else if (area > secondBestArea) {
+                secondBestArea = area;
+            }
+        }
+    }
+
+    if (!bestPlayer || bestArea < 100.0 || fabs(bestArea - secondBestArea) < 1.0) {
+        NSLog(@"[WaaPMDanmaku] event=migrationSelection result=none bestArea=%.1f secondArea=%.1f", bestArea, secondBestArea);
+        return nil;
+    }
+    NSLog(@"[WaaPMDanmaku] event=migrationSelection result=%@ bestArea=%.1f secondArea=%.1f",
+          WaaDanmakuObjectDescription(bestPlayer), bestArea, secondBestArea);
+    return bestPlayer;
+}
+
+static NSArray<NSLayoutConstraint *> *WaaActiveExternalConstraintsForView(UIView *view) {
+    NSMutableArray<NSLayoutConstraint *> *constraints = [NSMutableArray array];
+    for (UIView *ancestor = view.superview; ancestor; ancestor = ancestor.superview) {
+        for (NSLayoutConstraint *constraint in ancestor.constraints) {
+            id firstItem = constraint.firstItem;
+            id secondItem = constraint.secondItem;
+            BOOL firstReferencesView = firstItem == view ||
+                                       ([firstItem isKindOfClass:UILayoutGuide.class] && ((UILayoutGuide *)firstItem).owningView == view);
+            BOOL secondReferencesView = secondItem == view ||
+                                        ([secondItem isKindOfClass:UILayoutGuide.class] && ((UILayoutGuide *)secondItem).owningView == view);
+            if (constraint.active && (firstReferencesView || secondReferencesView)) {
+                [constraints addObject:constraint];
+            }
+        }
+    }
+    return constraints;
+}
+
+static UIView *WaaConstraintItemView(id item) {
+    if ([item isKindOfClass:UIView.class]) {
+        return (UIView *)item;
+    }
+    if ([item isKindOfClass:UILayoutGuide.class]) {
+        return ((UILayoutGuide *)item).owningView;
+    }
+    return nil;
+}
+
+static BOOL WaaViewsShareAncestor(UIView *firstView, UIView *secondView) {
+    if (!firstView || !secondView) {
+        return YES;
+    }
+    NSHashTable<UIView *> *firstAncestors = [NSHashTable weakObjectsHashTable];
+    for (UIView *view = firstView; view; view = view.superview) {
+        [firstAncestors addObject:view];
+    }
+    for (UIView *view = secondView; view; view = view.superview) {
+        if ([firstAncestors containsObject:view]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static NSArray<NSLayoutConstraint *> *WaaValidConstraintsForActivation(NSArray<NSLayoutConstraint *> *constraints) {
+    NSMutableArray<NSLayoutConstraint *> *validConstraints = [NSMutableArray array];
+    for (NSLayoutConstraint *constraint in constraints) {
+        UIView *firstView = WaaConstraintItemView(constraint.firstItem);
+        UIView *secondView = WaaConstraintItemView(constraint.secondItem);
+        if (WaaViewsShareAncestor(firstView, secondView)) {
+            [validConstraints addObject:constraint];
+        }
+    }
+    return validConstraints;
+}
+
+static void WaaAttachDanmakuPlayerToPureModeController(UIViewController *controller) {
+    if (!WaaShouldForceShowPureModeDanmaku() || objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey)) {
+        return;
+    }
+
+    UIView *player = WaaCurrentVisibleDanmakuPlayer();
+    UIView *originalSuperview = player.superview;
+    UIView *targetView = controller.view;
+    if (!player || !originalSuperview || !targetView) {
+        return;
+    }
+
+    WaaDanmakuMigrationState *state = [WaaDanmakuMigrationState new];
+    state.player = player;
+    state.originalSuperview = originalSuperview;
+    state.originalIndex = [originalSuperview.subviews indexOfObject:player];
+    state.originalBounds = player.bounds;
+    state.originalCenter = player.center;
+    state.originalTransform = player.transform;
+    state.originalHidden = player.hidden;
+    state.originalAlpha = player.alpha;
+    state.originalLayerOpacity = player.layer.opacity;
+    state.originalTranslatesAutoresizingMaskIntoConstraints = player.translatesAutoresizingMaskIntoConstraints;
+    state.originalAutoresizingMask = player.autoresizingMask;
+    state.activeExternalConstraints = WaaActiveExternalConstraintsForView(player);
+
+    [NSLayoutConstraint deactivateConstraints:state.activeExternalConstraints];
+    player.translatesAutoresizingMaskIntoConstraints = YES;
+    player.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [targetView addSubview:player];
+    player.transform = CGAffineTransformIdentity;
+    player.frame = targetView.bounds;
+    player.hidden = NO;
+    player.alpha = 1.0;
+    player.layer.opacity = 1.0f;
+    [targetView bringSubviewToFront:player];
+    objc_setAssociatedObject(controller, &kWaaDanmakuMigrationStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    WaaLogDanmakuPlayerState(@"migrationAttached", player, nil);
+}
+
+static void WaaLayoutMigratedDanmakuPlayer(UIViewController *controller) {
+    WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
+    if (state.player.superview == controller.view) {
+        state.player.transform = CGAffineTransformIdentity;
+        state.player.frame = controller.view.bounds;
+        [controller.view bringSubviewToFront:state.player];
+    }
+}
+
+static void WaaRestoreMigratedDanmakuPlayer(UIViewController *controller) {
+    WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
+    if (!state) {
+        return;
+    }
+    objc_setAssociatedObject(controller, &kWaaDanmakuMigrationStateKey, nil, OBJC_ASSOCIATION_ASSIGN);
+
+    UIView *player = state.player;
+    UIView *originalSuperview = state.originalSuperview;
+    if (!player || !originalSuperview || player.superview != controller.view) {
+        return;
+    }
+
+    NSUInteger index = MIN(state.originalIndex, originalSuperview.subviews.count);
+    [originalSuperview insertSubview:player atIndex:index];
+    player.translatesAutoresizingMaskIntoConstraints = state.originalTranslatesAutoresizingMaskIntoConstraints;
+    player.autoresizingMask = state.originalAutoresizingMask;
+    player.bounds = state.originalBounds;
+    player.center = state.originalCenter;
+    player.transform = state.originalTransform;
+    player.hidden = state.originalHidden;
+    player.alpha = state.originalAlpha;
+    player.layer.opacity = state.originalLayerOpacity;
+    [NSLayoutConstraint activateConstraints:WaaValidConstraintsForActivation(state.activeExternalConstraints)];
+    [originalSuperview setNeedsLayout];
+    [originalSuperview layoutIfNeeded];
+    WaaLogDanmakuPlayerState(@"migrationRestored", player, nil);
 }
 
 static BOOL WaaFloatClearHidesDanmaku(void) {
@@ -582,8 +782,12 @@ static void removeTargetSubviews(UIView *view) {
     WaaLogDanmakuHierarchySnapshot(@"viewWillAppear.before");
     BOOL active = WaaPureModeEnabledForController(self);
     WaaRefreshPureModePlusState(active);
+    if (active) {
+        WaaAttachDanmakuPlayerToPureModeController(self);
+    }
     %orig;
     WaaRefreshPureModePlusState(active);
+    WaaLayoutMigratedDanmakuPlayer(self);
     WaaLogDanmakuHierarchySnapshot(@"viewWillAppear.after");
 }
 
@@ -605,6 +809,11 @@ static void removeTargetSubviews(UIView *view) {
     WaaLogDanmakuHierarchySnapshot(@"viewDidAppear.after");
 }
 
+- (void)viewDidLayoutSubviews {
+    %orig;
+    WaaLayoutMigratedDanmakuPlayer(self);
+}
+
 - (void)viewWillDisappear:(BOOL)animated {
     WaaLogDanmakuHierarchySnapshot(@"viewWillDisappear.before");
     WaaRefreshPureModePlusState(NO);
@@ -615,6 +824,7 @@ static void removeTargetSubviews(UIView *view) {
 - (void)viewDidDisappear:(BOOL)animated {
     %orig;
     WaaRefreshPureModePlusState(NO);
+    WaaRestoreMigratedDanmakuPlayer(self);
     WaaLogDanmakuHierarchySnapshot(@"viewDidDisappear.after");
 }
 
