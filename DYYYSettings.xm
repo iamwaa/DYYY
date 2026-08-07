@@ -5391,7 +5391,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
 	WaaHookItem.type = 0;
 	WaaHookItem.svgIconImageName = @"ic_star_outlined_20";
 	WaaHookItem.cellType = 26;
-	WaaHookItem.colorStyle = 0;
+    WaaHookItem.colorStyle = 2;
 	WaaHookItem.isEnable = YES;
 	WaaHookItem.cellTappedBlock = ^{
 	  // 创建基本设置二级界面的设置项
@@ -5431,11 +5431,17 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
 	  // 【隐藏设置】分类
 	  NSMutableArray<AWESettingItemModel *> *HideItems = [NSMutableArray array];
 	  NSArray *HideSettings = @[
-		  @{@"identifier" : @"WaaEnablePureModePlus",
-			@"title" : @"双指清屏Plus",
-			@"detail" : @"",
-			@"cellType" : @6,
-			@"imageName" : @"ic_eyeslash_outlined_16"}
+          @{ @"identifier" : @"WaaEnablePureModePlus",
+             @"title" : @"双指清屏Plus",
+             @"detail" : @"",
+             @"cellType" : @6,
+             @"imageName" : @"ic_eyeslash_outlined_16" },
+          @{ @"identifier" : @"WaaPureModePlusShowDanmaku",
+             @"title" : @"清屏显示弹幕",
+             @"subTitle" : @"双指清屏Plus触发时保留弹幕",
+             @"detail" : @"",
+             @"cellType" : @6,
+             @"imageName" : @"ic_comment_outlined_20" }
 	  ];
 
 	  for (NSDictionary *dict in HideSettings) {
@@ -5470,8 +5476,9 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
 	  }
 
 	  // 创建并推入二级设置页面
-	  AWESettingBaseViewController *subVC = [DYYYSettingsHelper createSubSettingsViewController:@"WaaHook" sections:sections];
-	  [rootVC.navigationController pushViewController:(UIViewController *)subVC animated:YES];
+      AWESettingBaseViewController *subVC = [DYYYSettingsHelper createSubSettingsViewController:@"WaaHook" sections:sections];
+      DYYYAttachSubSettingsSearchHeader(subVC, @"WaaHook", sections);
+      [rootVC.navigationController pushViewController:(UIViewController *)subVC animated:YES];
 	};
 	[mainItems addObject:WaaHookItem];
 

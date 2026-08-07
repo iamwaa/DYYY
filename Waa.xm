@@ -1,6 +1,7 @@
 // Modified By @Waa
 
 #import "Sources/Core/AwemeHeaders.h"
+#import "Sources/Features/DYYYFloatClearButton.h"
 #import "Sources/UI/DYYYBottomAlertView.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -358,6 +359,59 @@ BOOL isTargetCommentSubview(UIView *view) {
 #pragma mark - 隐藏功能
 
 // 双指清屏增强
+static BOOL WaaPureModeEnabledForController(id controller) {
+    if (!DYYYGetBool(@"WaaEnablePureModePlus")) {
+        return NO;
+    }
+    if ([controller respondsToSelector:@selector(isPureMode)]) {
+        return ((NSNumber *)[controller valueForKey:@"isPureMode"]).boolValue;
+    }
+    return YES;
+}
+
+static BOOL WaaShouldHidePureModeDanmaku(void) {
+    BOOL floatClearHidesDanmaku = hideButton.isElementsHidden && DYYYGetBool(@"DYYYHideDanmaku");
+    BOOL pureModePlusHidesDanmaku = dyyyPureModePlusActive &&
+                                      DYYYGetBool(@"WaaEnablePureModePlus") &&
+                                      !DYYYGetBool(@"WaaPureModePlusShowDanmaku");
+    return floatClearHidesDanmaku || pureModePlusHidesDanmaku;
+}
+
+static BOOL WaaIsDanmakuContainerView(UIView *view) {
+    Class videoDanmakuClass = NSClassFromString(@"AWEVideoPlayDanmakuContainerView");
+    Class danmakuClass = NSClassFromString(@"AWEDanmakuContainerView");
+    return (videoDanmakuClass && [view isKindOfClass:videoDanmakuClass]) ||
+           (danmakuClass && [view isKindOfClass:danmakuClass]);
+}
+
+static void WaaApplyPureModeDanmakuStateToView(UIView *view) {
+    if (!view || !WaaIsDanmakuContainerView(view)) {
+        return;
+    }
+    if (WaaShouldHidePureModeDanmaku()) {
+        DYYYApplyClearTargetViewHiddenState(view);
+    } else {
+        DYYYRestoreClearTargetViewStateIfNeeded(view);
+    }
+}
+
+static void WaaRefreshPureModeDanmakuViewsInView(UIView *view) {
+    if (!view) {
+        return;
+    }
+    WaaApplyPureModeDanmakuStateToView(view);
+    for (UIView *subview in view.subviews) {
+        WaaRefreshPureModeDanmakuViewsInView(subview);
+    }
+}
+
+static void WaaRefreshPureModePlusState(BOOL active) {
+    DYYYSetPureModePlusActive(active);
+    for (UIWindow *window in [UIApplication sharedApplication].windows) {
+        WaaRefreshPureModeDanmakuViewsInView(window);
+    }
+}
+
 static void removeTargetSubviews(UIView *view) {
     if (!view) return;
 
@@ -385,62 +439,52 @@ static void removeTargetSubviews(UIView *view) {
 - (void)viewDidLoad {
     %orig;
 
-    Class targetClass = objc_getClass("AFDPureModePageContainerViewController");
-    BOOL isPureModeEnabled = NO;
-    @try {
-        isPureModeEnabled = DYYYGetBool(@"WaaEnablePureModePlus");
-    } @catch (NSException *e) {
-        return;
-    }
-    if (!isPureModeEnabled || !targetClass || ![self isKindOfClass:targetClass]) {
+    if (!WaaPureModeEnabledForController(self)) {
         return;
     }
 
-    // 检查是否为净化模式（假设控制器有 isPureMode 属性）
-    BOOL isPureMode = NO;
-    if ([self respondsToSelector:@selector(isPureMode)]) {
-        isPureMode = ((NSNumber *)[self valueForKey:@"isPureMode"]).boolValue;
-    } else {
-        // 如果没有属性，假设控制器本身表示净化模式
-        isPureMode = YES;
-    }
-
-    if (isPureMode) {
-        UIView *mainView = self.view;
-        if ([mainView isKindOfClass:[UIView class]]) {
-            removeTargetSubviews(mainView);
-        }
+    UIView *mainView = self.view;
+    if ([mainView isKindOfClass:[UIView class]]) {
+        removeTargetSubviews(mainView);
     }
 }
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
 
-    Class targetClass = objc_getClass("AFDPureModePageContainerViewController");
-    BOOL isPureModeEnabled = NO;
-    @try {
-        isPureModeEnabled = DYYYGetBool(@"WaaEnablePureModePlus");
-    } @catch (NSException *e) {
-        return;
-    }
-    if (!isPureModeEnabled || !targetClass || ![self isKindOfClass:targetClass]) {
+    BOOL active = WaaPureModeEnabledForController(self);
+    WaaRefreshPureModePlusState(active);
+    if (!active) {
         return;
     }
 
-    // 检查是否为净化模式
-    BOOL isPureMode = NO;
-    if ([self respondsToSelector:@selector(isPureMode)]) {
-        isPureMode = ((NSNumber *)[self valueForKey:@"isPureMode"]).boolValue;
-    } else {
-        isPureMode = YES;
+    UIView *mainView = self.view;
+    if ([mainView isKindOfClass:[UIView class]]) {
+        removeTargetSubviews(mainView);
     }
+}
 
-    if (isPureMode) {
-        UIView *mainView = self.view;
-        if ([mainView isKindOfClass:[UIView class]]) {
-            removeTargetSubviews(mainView);
-        }
-    }
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    WaaRefreshPureModePlusState(NO);
+}
+
+%end
+
+%hook AWEVideoPlayDanmakuContainerView
+
+- (void)layoutSubviews {
+    %orig;
+    WaaApplyPureModeDanmakuStateToView(self);
+}
+
+%end
+
+%hook AWEDanmakuContainerView
+
+- (void)layoutSubviews {
+    %orig;
+    WaaApplyPureModeDanmakuStateToView(self);
 }
 
 %end

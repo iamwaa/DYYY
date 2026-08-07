@@ -12,6 +12,7 @@ extern BOOL isPureViewVisible;
 extern BOOL clearButtonForceHidden;
 extern BOOL isAppActive;
 extern BOOL dyyyIsPerformingFloatClearOperation;
+extern BOOL dyyyPureModePlusActive;
 extern BOOL isAppInTransition;
 extern NSArray *targetClassNames;
 extern BOOL dyyyInteractionViewVisible;
@@ -27,6 +28,7 @@ void showClearButton(void);
 void hideClearButton(void);
 void initTargetClassNames(void);
 void reloadClearButtonConfiguration(void);
+void DYYYSetPureModePlusActive(BOOL active);
 void DYYYApplyFloatClearProgressStateToView(UIView *view);
 
 #ifdef __cplusplus

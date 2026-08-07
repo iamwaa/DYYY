@@ -23,6 +23,7 @@ BOOL isPureViewVisible = NO;
 BOOL clearButtonForceHidden = NO;
 BOOL isAppActive = YES;
 BOOL dyyyIsPerformingFloatClearOperation = NO;
+BOOL dyyyPureModePlusActive = NO;
 
 static NSInteger dyyyClearButtonMutationDepth = 0;
 
@@ -137,6 +138,18 @@ void DYYYRestoreClearTargetViewStateIfNeeded(UIView *view) {
         return;
     }
 
+    BOOL pureModePlusHidesDanmaku = dyyyPureModePlusActive &&
+                                      DYYYGetBool(@"WaaEnablePureModePlus") &&
+                                      !DYYYGetBool(@"WaaPureModePlusShowDanmaku");
+    if (pureModePlusHidesDanmaku) {
+        Class videoDanmakuClass = NSClassFromString(@"AWEVideoPlayDanmakuContainerView");
+        Class danmakuClass = NSClassFromString(@"AWEDanmakuContainerView");
+        if ((videoDanmakuClass && [view isKindOfClass:videoDanmakuClass]) ||
+            (danmakuClass && [view isKindOfClass:danmakuClass])) {
+            return;
+        }
+    }
+
     NSNumber *originalHidden = objc_getAssociatedObject(view, &dyyyClearOriginalHiddenKey);
     NSNumber *originalAlpha = objc_getAssociatedObject(view, &dyyyClearOriginalAlphaKey);
     if (originalHidden) {
@@ -246,8 +259,42 @@ void DYYYApplyFloatClearProgressStateToView(UIView *view) {
     if (!view || !DYYYIsClearProgressView(view)) {
         return;
     }
-    DYYYClearProgressMode mode = hideButton.isElementsHidden ? DYYYCurrentClearProgressMode() : DYYYClearProgressModeNone;
+
+    DYYYClearProgressMode mode = DYYYClearProgressModeNone;
+    if (hideButton.isElementsHidden) {
+        mode = DYYYCurrentClearProgressMode();
+    }
+    BOOL pureModePlusActive = dyyyPureModePlusActive && DYYYGetBool(@"WaaEnablePureModePlus");
+    if (mode == DYYYClearProgressModeNone && pureModePlusActive) {
+        mode = DYYYClearProgressModeHide;
+    }
     DYYYApplyClearProgressViewState(view, mode);
+}
+
+static void DYYYRefreshPureModePlusProgressViewsInView(UIView *view) {
+    if (!view) {
+        return;
+    }
+    if (DYYYIsClearProgressView(view)) {
+        DYYYApplyFloatClearProgressStateToView(view);
+    }
+    for (UIView *subview in view.subviews) {
+        DYYYRefreshPureModePlusProgressViewsInView(subview);
+    }
+}
+
+void DYYYSetPureModePlusActive(BOOL active) {
+    dyyyPureModePlusActive = active;
+    void (^refreshBlock)(void) = ^{
+        for (UIWindow *window in [UIApplication sharedApplication].windows) {
+            DYYYRefreshPureModePlusProgressViewsInView(window);
+        }
+    };
+    if ([NSThread isMainThread]) {
+        refreshBlock();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), refreshBlock);
+    }
 }
 
 static void findViewsOfClassHelper(UIView *view, Class viewClass, NSMutableArray *result) {
@@ -868,8 +915,8 @@ void reloadClearButtonConfiguration(void) {
 
     if (!self.isElementsHidden) {
         initTargetClassNames();
-        [self hideUIElements];
         self.isElementsHidden = YES;
+        [self hideUIElements];
         self.selected = YES;
         updateSpeedButtonVisibility();
 
@@ -907,7 +954,7 @@ void reloadClearButtonConfiguration(void) {
 
 - (void)recursivelyRestoreAWEPlayInteractionProgressContainerViewInView:(UIView *)view {
     if (DYYYIsClearProgressView(view)) {
-        DYYYRestoreClearProgressViewState(view);
+        DYYYApplyFloatClearProgressStateToView(view);
     }
 
     for (UIView *subview in view.subviews) {
@@ -950,7 +997,7 @@ void reloadClearButtonConfiguration(void) {
 
 - (void)recursivelyHideAWEPlayInteractionProgressContainerViewInView:(UIView *)view {
     if (DYYYIsClearProgressView(view)) {
-        DYYYApplyClearProgressViewState(view, DYYYCurrentClearProgressMode());
+        DYYYApplyFloatClearProgressStateToView(view);
         if (![self.hiddenViewsList containsObject:view]) {
             [self.hiddenViewsList addObject:view];
         }

@@ -5854,6 +5854,42 @@ static void DYYYApplyFeedVideoCollectButtonSettingsWithRetry(AWEFeedVideoButton 
 
 %end
 
+%hook AWEFeedProgressSliderForLongPress
+
+- (void)layoutSubviews {
+    %orig;
+    DYYYApplyFloatClearProgressStateToView(self);
+}
+
+%end
+
+%hook AWEFakeProgressSliderView
+
+- (void)layoutSubviews {
+    %orig;
+    DYYYApplyFloatClearProgressStateToView(self);
+}
+
+%end
+
+%hook AWEProgressContainerView
+
+- (void)layoutSubviews {
+    %orig;
+    DYYYApplyFloatClearProgressStateToView(self);
+}
+
+%end
+
+%hook AWEProgressPlayBackSlider
+
+- (void)layoutSubviews {
+    %orig;
+    DYYYApplyFloatClearProgressStateToView(self);
+}
+
+%end
+
 static CGFloat DYYYGetUserVerticalOffsetY(NSString *key) {
     NSString *value = [[NSUserDefaults standardUserDefaults] objectForKey:key];
     if (value.length == 0) {

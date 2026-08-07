@@ -72,6 +72,7 @@
               @"DYYYEnableModernPanel" : @[ @"DYYYLongPressPanelBlur", @"DYYYLongPressPanelDark" ],
               @"DYYYEnableDoubleTapMenu" : @[ @"DYYYDoubleTapMenuSettings" ],
               @"DYYYEnableHighFPS" : @[ @"DYYYShowFPSOverlay" ],
+              @"WaaEnablePureModePlus" : @[ @"WaaPureModePlusShowDanmaku" ],
           },
 
           // ===== 条件依赖配置 =====
