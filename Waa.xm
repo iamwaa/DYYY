@@ -576,6 +576,109 @@ static BOOL WaaDanmakuMethodHasType(id object, SEL selector, const char *expecte
     return actualType && expectedType && strcmp(actualType, expectedType) == 0;
 }
 
+// 累积抖音实际喂入数据池的弹幕，避免循环时数据已被消费
+// key 为 DDanmakuPlayer 弱引用，value 为保留顺序且自动去重的弹幕集合
+static NSMapTable<id, NSMutableOrderedSet *> *WaaAccumulatedDanmakuTable(void) {
+    static NSMapTable *table = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        table = [NSMapTable mapTableWithKeyOptions:NSPointerFunctionsWeakMemory | NSPointerFunctionsObjectPointerPersonality
+                                     valueOptions:NSPointerFunctionsStrongMemory];
+    });
+    return table;
+}
+
+// 回填期间的自发调用不应再次计入累积，也不应清空累积
+static BOOL gWaaIsReplayingDanmakus = NO;
+
+static BOOL WaaIsDanmakuPlayer(id object) {
+    Class playerClass = NSClassFromString(@"DDanmakuPlayer");
+    return playerClass && [object isKindOfClass:playerClass];
+}
+
+static void WaaRecordAppendedDanmakus(id danmakuPlayer, id danmakus) {
+    if (gWaaIsReplayingDanmakus || !WaaIsDanmakuPlayer(danmakuPlayer) || ![danmakus isKindOfClass:NSArray.class]) {
+        return;
+    }
+    NSArray *incomingDanmakus = danmakus;
+    if (incomingDanmakus.count == 0) {
+        return;
+    }
+
+    NSMapTable *table = WaaAccumulatedDanmakuTable();
+    NSMutableOrderedSet *accumulatedDanmakus = [table objectForKey:danmakuPlayer];
+    if (!accumulatedDanmakus) {
+        accumulatedDanmakus = [NSMutableOrderedSet orderedSet];
+        [table setObject:accumulatedDanmakus forKey:danmakuPlayer];
+    }
+
+    NSUInteger previousCount = accumulatedDanmakus.count;
+    [accumulatedDanmakus addObjectsFromArray:incomingDanmakus];
+    NSUInteger addedCount = accumulatedDanmakus.count - previousCount;
+    if (addedCount == 0) {
+        return;
+    }
+
+    NSLog(@"[DYYY][PureDanmaku] 累积弹幕入池 player=%p added=%lu total=%lu",
+          danmakuPlayer, (unsigned long)addedCount, (unsigned long)accumulatedDanmakus.count);
+}
+
+static void WaaClearAccumulatedDanmakus(id danmakuPlayer) {
+    if (gWaaIsReplayingDanmakus || !WaaIsDanmakuPlayer(danmakuPlayer)) {
+        return;
+    }
+    NSMapTable *table = WaaAccumulatedDanmakuTable();
+    NSMutableOrderedSet *accumulatedDanmakus = [table objectForKey:danmakuPlayer];
+    if (accumulatedDanmakus.count == 0) {
+        return;
+    }
+    NSLog(@"[DYYY][PureDanmaku] 清空累积弹幕 player=%p count=%lu",
+          danmakuPlayer, (unsigned long)accumulatedDanmakus.count);
+    [table removeObjectForKey:danmakuPlayer];
+}
+
+// DDanmakuPlayer 可能在启动后才加载，因此用运行时替换实现而不是 %hook
+static void WaaInstallDanmakuDataPoolHooksIfNeeded(void) {
+    static BOOL hasInstalled = NO;
+    if (hasInstalled) {
+        return;
+    }
+    Class playerClass = NSClassFromString(@"DDanmakuPlayer");
+    SEL appendSelector = @selector(appendDanmakusToDataPool:);
+    SEL clearSelector = @selector(clearDanmakusInDataPool);
+    Method appendMethod = playerClass ? class_getInstanceMethod(playerClass, appendSelector) : NULL;
+    Method clearMethod = playerClass ? class_getInstanceMethod(playerClass, clearSelector) : NULL;
+    if (!appendMethod || !clearMethod) {
+        return;
+    }
+
+    hasInstalled = YES;
+    static void (*originalAppend)(id, SEL, id) = NULL;
+    static void (*originalClear)(id, SEL) = NULL;
+    originalAppend = (void (*)(id, SEL, id))method_getImplementation(appendMethod);
+    originalClear = (void (*)(id, SEL))method_getImplementation(clearMethod);
+
+    method_setImplementation(appendMethod, imp_implementationWithBlock(^(id player, id danmakus) {
+        if (originalAppend) {
+            originalAppend(player, appendSelector, danmakus);
+        }
+        WaaRecordAppendedDanmakus(player, danmakus);
+    }));
+    method_setImplementation(clearMethod, imp_implementationWithBlock(^(id player) {
+        if (originalClear) {
+            originalClear(player, clearSelector);
+        }
+        WaaClearAccumulatedDanmakus(player);
+    }));
+
+    NSLog(@"[DYYY][PureDanmaku] 已拦截弹幕入池接口");
+}
+
+static NSArray *WaaAccumulatedDanmakus(id danmakuPlayer) {
+    NSMutableOrderedSet *accumulatedDanmakus = [WaaAccumulatedDanmakuTable() objectForKey:danmakuPlayer];
+    return accumulatedDanmakus.count > 0 ? accumulatedDanmakus.array : nil;
+}
+
 static NSArray *WaaAllBookDanmakus(id danmakuPlayer) {
     SEL selector = @selector(allBookDanmakusArray);
     if (!WaaDanmakuMethodHasType(danmakuPlayer, selector, "@16@0:8")) {
@@ -611,24 +714,32 @@ static void WaaRestartMigratedDanmakuForLoop(id danmakuPlayer, NSArray *cachedDa
         return;
     }
 
-    NSArray *allDanmakus = cachedDanmakus;
-    BOOL isUsingCachedDanmakus = allDanmakus.count > 0;
-    if (!isUsingCachedDanmakus) {
+    // 优先使用拦截到的完整入池弹幕，其次才是轮询时抢到的残余列表
+    NSString *danmakuSource = @"pool";
+    NSArray *allDanmakus = WaaAccumulatedDanmakus(danmakuPlayer);
+    if (allDanmakus.count == 0) {
+        danmakuSource = @"cached";
+        allDanmakus = cachedDanmakus;
+    }
+    if (allDanmakus.count == 0) {
+        danmakuSource = @"live";
         allDanmakus = WaaAllBookDanmakus(danmakuPlayer);
     }
     if (allDanmakus.count == 0) {
-        NSLog(@"[DYYY][PureDanmaku] 循环补池失败 player=%p cached=%d count=0", danmakuPlayer, isUsingCachedDanmakus);
+        NSLog(@"[DYYY][PureDanmaku] 循环补池失败 player=%p count=0", danmakuPlayer);
         return;
     }
 
     // 先把完整弹幕重新追加到数据池，再重建循环调度，避免只播放完一次缓存。
+    gWaaIsReplayingDanmakus = YES;
     appendDanmakusImplementation(danmakuPlayer, appendDanmakusSelector, allDanmakus);
     prepareReplayImplementation(danmakuPlayer, prepareReplaySelector);
     updateImplementation(danmakuPlayer, updateSelector, 0.0);
     playImplementation(danmakuPlayer, playSelector);
+    gWaaIsReplayingDanmakus = NO;
 
     NSLog(@"[DYYY][PureDanmaku] 循环补充弹幕池 player=%p source=%@ count=%lu",
-          danmakuPlayer, isUsingCachedDanmakus ? @"cached" : @"live", (unsigned long)allDanmakus.count);
+          danmakuPlayer, danmakuSource, (unsigned long)allDanmakus.count);
 }
 
 static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
@@ -674,6 +785,8 @@ static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
         WaaStopMigratedDanmakuTimeSync(controller);
         return;
     }
+
+    WaaInstallDanmakuDataPoolHooksIfNeeded();
 
     id danmakuPlayer = WaaDanmakuPlayerForView(playerView);
     SEL currentTimeSelector = @selector(timeDriverCurrentPlayTime);
@@ -953,6 +1066,7 @@ static void removeTargetSubviews(UIView *view) {
 
 - (void)layoutSubviews {
     %orig;
+    WaaInstallDanmakuDataPoolHooksIfNeeded();
     WaaApplyPureModeDanmakuStateToView(self);
 }
 
@@ -980,6 +1094,7 @@ static void removeTargetSubviews(UIView *view) {
 
 - (void)layoutSubviews {
     %orig;
+    WaaInstallDanmakuDataPoolHooksIfNeeded();
     WaaApplyPureModeDanmakuStateToView(self);
 }
 
@@ -1040,6 +1155,8 @@ static void removeTargetSubviews(UIView *view) {
 
 %ctor {
     %init;
+
+    WaaInstallDanmakuDataPoolHooksIfNeeded();
 
     if (DYYYGetBool(@"WaaFollowfix")) {
         %init(WaaFollowfixGroup);
