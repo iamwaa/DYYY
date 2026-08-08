@@ -395,6 +395,7 @@ static BOOL WaaShouldForceShowPureModeDanmaku(void);
 @property(nonatomic, strong) NSTimer *timeSyncTimer;
 @property(nonatomic, assign) BOOL hasLastTimeSyncValue;
 @property(nonatomic, assign) double lastTimeSyncValue;
+@property(nonatomic, strong) NSArray *cachedDanmakus;
 @end
 
 @implementation WaaDanmakuMigrationState
@@ -575,22 +576,28 @@ static BOOL WaaDanmakuMethodHasType(id object, SEL selector, const char *expecte
     return actualType && expectedType && strcmp(actualType, expectedType) == 0;
 }
 
-static void WaaRestartMigratedDanmakuForLoop(id danmakuPlayer) {
-    SEL allBookDanmakusSelector = @selector(allBookDanmakusArray);
+static NSArray *WaaAllBookDanmakus(id danmakuPlayer) {
+    SEL selector = @selector(allBookDanmakusArray);
+    if (!WaaDanmakuMethodHasType(danmakuPlayer, selector, "@16@0:8")) {
+        return nil;
+    }
+    NSArray *(*implementation)(id, SEL) = (NSArray *(*)(id, SEL))[danmakuPlayer methodForSelector:selector];
+    id result = implementation ? implementation(danmakuPlayer, selector) : nil;
+    return [result isKindOfClass:NSArray.class] ? result : nil;
+}
+
+static void WaaRestartMigratedDanmakuForLoop(id danmakuPlayer, NSArray *cachedDanmakus) {
     SEL appendDanmakusSelector = @selector(appendDanmakusToDataPool:);
     SEL prepareReplaySelector = @selector(prepareRePlayForLoop);
     SEL updateSelector = @selector(optimizedTimeUpdated:);
     SEL playSelector = @selector(play);
-    if (!WaaDanmakuMethodHasType(danmakuPlayer, allBookDanmakusSelector, "@16@0:8") ||
-        !WaaDanmakuMethodHasType(danmakuPlayer, appendDanmakusSelector, "v24@0:8@16") ||
+    if (!WaaDanmakuMethodHasType(danmakuPlayer, appendDanmakusSelector, "v24@0:8@16") ||
         !WaaDanmakuMethodHasType(danmakuPlayer, prepareReplaySelector, "v16@0:8") ||
         !WaaDanmakuMethodHasType(danmakuPlayer, updateSelector, "v24@0:8d16") ||
         !WaaDanmakuMethodHasType(danmakuPlayer, playSelector, "v16@0:8")) {
         return;
     }
 
-    NSArray *(*allBookDanmakusImplementation)(id, SEL) =
-        (NSArray *(*)(id, SEL))[danmakuPlayer methodForSelector:allBookDanmakusSelector];
     void (*appendDanmakusImplementation)(id, SEL, id) =
         (void (*)(id, SEL, id))[danmakuPlayer methodForSelector:appendDanmakusSelector];
     void (*prepareReplayImplementation)(id, SEL) =
@@ -599,13 +606,18 @@ static void WaaRestartMigratedDanmakuForLoop(id danmakuPlayer) {
         (void (*)(id, SEL, double))[danmakuPlayer methodForSelector:updateSelector];
     void (*playImplementation)(id, SEL) =
         (void (*)(id, SEL))[danmakuPlayer methodForSelector:playSelector];
-    if (!allBookDanmakusImplementation || !appendDanmakusImplementation ||
-        !prepareReplayImplementation || !updateImplementation || !playImplementation) {
+    if (!appendDanmakusImplementation || !prepareReplayImplementation ||
+        !updateImplementation || !playImplementation) {
         return;
     }
 
-    NSArray *allDanmakus = allBookDanmakusImplementation(danmakuPlayer, allBookDanmakusSelector);
+    NSArray *allDanmakus = cachedDanmakus;
+    BOOL isUsingCachedDanmakus = allDanmakus.count > 0;
+    if (!isUsingCachedDanmakus) {
+        allDanmakus = WaaAllBookDanmakus(danmakuPlayer);
+    }
     if (allDanmakus.count == 0) {
+        NSLog(@"[DYYY][PureDanmaku] 循环补池失败 player=%p cached=%d count=0", danmakuPlayer, isUsingCachedDanmakus);
         return;
     }
 
@@ -615,7 +627,8 @@ static void WaaRestartMigratedDanmakuForLoop(id danmakuPlayer) {
     updateImplementation(danmakuPlayer, updateSelector, 0.0);
     playImplementation(danmakuPlayer, playSelector);
 
-    NSLog(@"[DYYY][PureDanmaku] 循环补充弹幕池 player=%p count=%lu", danmakuPlayer, (unsigned long)allDanmakus.count);
+    NSLog(@"[DYYY][PureDanmaku] 循环补充弹幕池 player=%p source=%@ count=%lu",
+          danmakuPlayer, isUsingCachedDanmakus ? @"cached" : @"live", (unsigned long)allDanmakus.count);
 }
 
 static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
@@ -680,6 +693,12 @@ static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
         return;
     }
 
+    NSArray *allDanmakus = WaaAllBookDanmakus(danmakuPlayer);
+    if (allDanmakus.count > 0 && state.cachedDanmakus.count == 0) {
+        state.cachedDanmakus = [allDanmakus copy];
+        NSLog(@"[DYYY][PureDanmaku] 首次缓存完整弹幕列表 player=%p count=%lu", danmakuPlayer, (unsigned long)state.cachedDanmakus.count);
+    }
+
     double previousTime = state.lastTimeSyncValue;
     BOOL didRestartVideoLoop = state.hasLastTimeSyncValue && currentTime + 0.5 < previousTime;
     state.hasLastTimeSyncValue = YES;
@@ -687,7 +706,7 @@ static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
     if (didRestartVideoLoop) {
         NSLog(@"[DYYY][PureDanmaku] 完整重置弹幕循环 player=%p previous=%.3f current=%.3f",
               danmakuPlayer, previousTime, currentTime);
-        WaaRestartMigratedDanmakuForLoop(danmakuPlayer);
+        WaaRestartMigratedDanmakuForLoop(danmakuPlayer, state.cachedDanmakus);
         return;
     }
 
