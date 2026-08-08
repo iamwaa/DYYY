@@ -575,38 +575,41 @@ static BOOL WaaDanmakuMethodHasType(id object, SEL selector, const char *expecte
     return actualType && expectedType && strcmp(actualType, expectedType) == 0;
 }
 
-// 一次性输出弹幕对象的循环相关方法，用于定位重新入池的真实接口。
-static void WaaLogDanmakuLoopSelectorsOnce(id danmakuPlayer, UIView *playerView) {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        NSArray<NSString *> *keywords = @[@"play", @"start", @"resume", @"replay", @"loop",
-                                          @"load", @"reset", @"prepare", @"danmaku", @"time"];
-        NSArray *targets = @[danmakuPlayer ?: NSNull.null, playerView ?: NSNull.null];
-        for (id target in targets) {
-            if (target == NSNull.null) {
-                continue;
-            }
-            for (Class cls = [target class]; cls && cls != NSObject.class; cls = class_getSuperclass(cls)) {
-                unsigned int methodCount = 0;
-                Method *methods = class_copyMethodList(cls, &methodCount);
-                if (!methods) {
-                    continue;
-                }
-                for (unsigned int index = 0; index < methodCount; index++) {
-                    NSString *name = NSStringFromSelector(method_getName(methods[index]));
-                    NSString *lowercaseName = name.lowercaseString;
-                    for (NSString *keyword in keywords) {
-                        if ([lowercaseName containsString:keyword]) {
-                            NSLog(@"[DYYY][PureDanmaku][Dump] %@ %@ types=%s", NSStringFromClass(cls), name,
-                                  method_getTypeEncoding(methods[index]) ?: "?");
-                            break;
-                        }
-                    }
-                }
-                free(methods);
-            }
-        }
-    });
+static void WaaRestartMigratedDanmakuForLoop(id danmakuPlayer) {
+    SEL prepareReplaySelector = @selector(prepareRePlayForLoop);
+    SEL resetSelector = @selector(reset);
+    SEL seekSelector = @selector(seekToTime:);
+    SEL updateSelector = @selector(optimizedTimeUpdated:);
+    SEL playSelector = @selector(play);
+    if (!WaaDanmakuMethodHasType(danmakuPlayer, prepareReplaySelector, "v16@0:8") ||
+        !WaaDanmakuMethodHasType(danmakuPlayer, resetSelector, "v16@0:8") ||
+        !WaaDanmakuMethodHasType(danmakuPlayer, seekSelector, "v24@0:8d16") ||
+        !WaaDanmakuMethodHasType(danmakuPlayer, updateSelector, "v24@0:8d16") ||
+        !WaaDanmakuMethodHasType(danmakuPlayer, playSelector, "v16@0:8")) {
+        return;
+    }
+
+    void (*prepareReplayImplementation)(id, SEL) =
+        (void (*)(id, SEL))[danmakuPlayer methodForSelector:prepareReplaySelector];
+    void (*resetImplementation)(id, SEL) =
+        (void (*)(id, SEL))[danmakuPlayer methodForSelector:resetSelector];
+    void (*seekImplementation)(id, SEL, double) =
+        (void (*)(id, SEL, double))[danmakuPlayer methodForSelector:seekSelector];
+    void (*updateImplementation)(id, SEL, double) =
+        (void (*)(id, SEL, double))[danmakuPlayer methodForSelector:updateSelector];
+    void (*playImplementation)(id, SEL) =
+        (void (*)(id, SEL))[danmakuPlayer methodForSelector:playSelector];
+    if (!prepareReplayImplementation || !resetImplementation || !seekImplementation ||
+        !updateImplementation || !playImplementation) {
+        return;
+    }
+
+    // 按播放器的重播顺序清理显示状态、定位零点并恢复调度。
+    prepareReplayImplementation(danmakuPlayer, prepareReplaySelector);
+    resetImplementation(danmakuPlayer, resetSelector);
+    seekImplementation(danmakuPlayer, seekSelector, 0.0);
+    updateImplementation(danmakuPlayer, updateSelector, 0.0);
+    playImplementation(danmakuPlayer, playSelector);
 }
 
 static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
@@ -671,26 +674,15 @@ static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
         return;
     }
 
-    WaaLogDanmakuLoopSelectorsOnce(danmakuPlayer, playerView);
-
     double previousTime = state.lastTimeSyncValue;
     BOOL didRestartVideoLoop = state.hasLastTimeSyncValue && currentTime + 0.5 < previousTime;
     state.hasLastTimeSyncValue = YES;
     state.lastTimeSyncValue = currentTime;
     if (didRestartVideoLoop) {
-        SEL prepareReplaySelector = @selector(prepareRePlayForLoop);
-        if (WaaDanmakuMethodHasType(danmakuPlayer, prepareReplaySelector, "v16@0:8")) {
-            void (*prepareReplayImplementation)(id, SEL) =
-                (void (*)(id, SEL))[danmakuPlayer methodForSelector:prepareReplaySelector];
-            if (prepareReplayImplementation) {
-                NSUInteger subviewCountBefore = playerView.subviews.count;
-                prepareReplayImplementation(danmakuPlayer, prepareReplaySelector);
-                NSLog(@"[DYYY][PureDanmaku] 原生视频循环 player=%p previous=%.3f current=%.3f subviews=%lu->%lu",
-                      danmakuPlayer, previousTime, currentTime,
-                      (unsigned long)subviewCountBefore, (unsigned long)playerView.subviews.count);
-            }
-        }
-        WaaResumeMigratedDanmakuPlayer(controller);
+        NSLog(@"[DYYY][PureDanmaku] 完整重置弹幕循环 player=%p previous=%.3f current=%.3f",
+              danmakuPlayer, previousTime, currentTime);
+        WaaRestartMigratedDanmakuForLoop(danmakuPlayer);
+        return;
     }
 
     updateImplementation(danmakuPlayer, updateSelector, currentTime);
