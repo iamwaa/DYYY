@@ -577,13 +577,9 @@ static BOOL WaaDanmakuMethodHasType(id object, SEL selector, const char *expecte
 
 static void WaaRestartMigratedDanmakuForLoop(id danmakuPlayer) {
     SEL prepareReplaySelector = @selector(prepareRePlayForLoop);
-    SEL resetSelector = @selector(reset);
-    SEL seekSelector = @selector(seekToTime:);
     SEL updateSelector = @selector(optimizedTimeUpdated:);
     SEL playSelector = @selector(play);
     if (!WaaDanmakuMethodHasType(danmakuPlayer, prepareReplaySelector, "v16@0:8") ||
-        !WaaDanmakuMethodHasType(danmakuPlayer, resetSelector, "v16@0:8") ||
-        !WaaDanmakuMethodHasType(danmakuPlayer, seekSelector, "v24@0:8d16") ||
         !WaaDanmakuMethodHasType(danmakuPlayer, updateSelector, "v24@0:8d16") ||
         !WaaDanmakuMethodHasType(danmakuPlayer, playSelector, "v16@0:8")) {
         return;
@@ -591,23 +587,16 @@ static void WaaRestartMigratedDanmakuForLoop(id danmakuPlayer) {
 
     void (*prepareReplayImplementation)(id, SEL) =
         (void (*)(id, SEL))[danmakuPlayer methodForSelector:prepareReplaySelector];
-    void (*resetImplementation)(id, SEL) =
-        (void (*)(id, SEL))[danmakuPlayer methodForSelector:resetSelector];
-    void (*seekImplementation)(id, SEL, double) =
-        (void (*)(id, SEL, double))[danmakuPlayer methodForSelector:seekSelector];
     void (*updateImplementation)(id, SEL, double) =
         (void (*)(id, SEL, double))[danmakuPlayer methodForSelector:updateSelector];
     void (*playImplementation)(id, SEL) =
         (void (*)(id, SEL))[danmakuPlayer methodForSelector:playSelector];
-    if (!prepareReplayImplementation || !resetImplementation || !seekImplementation ||
-        !updateImplementation || !playImplementation) {
+    if (!prepareReplayImplementation || !updateImplementation || !playImplementation) {
         return;
     }
 
-    // 按播放器的重播顺序清理显示状态、定位零点并恢复调度。
+    // 保留已加载的弹幕数据，仅重建循环调度并恢复播放。
     prepareReplayImplementation(danmakuPlayer, prepareReplaySelector);
-    resetImplementation(danmakuPlayer, resetSelector);
-    seekImplementation(danmakuPlayer, seekSelector, 0.0);
     updateImplementation(danmakuPlayer, updateSelector, 0.0);
     playImplementation(danmakuPlayer, playSelector);
 }
