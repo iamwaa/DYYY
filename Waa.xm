@@ -575,8 +575,38 @@ static BOOL WaaDanmakuMethodHasType(id object, SEL selector, const char *expecte
     return actualType && expectedType && strcmp(actualType, expectedType) == 0;
 }
 
-static void WaaLogDanmakuLoopEvent(NSString *event, id danmakuPlayer, double sourceTime, double targetTime) {
-    NSLog(@"[DYYY][PureDanmaku] %@ player=%p source=%.3f target=%.3f", event, danmakuPlayer, sourceTime, targetTime);
+// 一次性输出弹幕对象的循环相关方法，用于定位重新入池的真实接口。
+static void WaaLogDanmakuLoopSelectorsOnce(id danmakuPlayer, UIView *playerView) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSArray<NSString *> *keywords = @[@"play", @"start", @"resume", @"replay", @"loop",
+                                          @"load", @"reset", @"prepare", @"danmaku", @"time"];
+        NSArray *targets = @[danmakuPlayer ?: NSNull.null, playerView ?: NSNull.null];
+        for (id target in targets) {
+            if (target == NSNull.null) {
+                continue;
+            }
+            for (Class cls = [target class]; cls && cls != NSObject.class; cls = class_getSuperclass(cls)) {
+                unsigned int methodCount = 0;
+                Method *methods = class_copyMethodList(cls, &methodCount);
+                if (!methods) {
+                    continue;
+                }
+                for (unsigned int index = 0; index < methodCount; index++) {
+                    NSString *name = NSStringFromSelector(method_getName(methods[index]));
+                    NSString *lowercaseName = name.lowercaseString;
+                    for (NSString *keyword in keywords) {
+                        if ([lowercaseName containsString:keyword]) {
+                            NSLog(@"[DYYY][PureDanmaku][Dump] %@ %@ types=%s", NSStringFromClass(cls), name,
+                                  method_getTypeEncoding(methods[index]) ?: "?");
+                            break;
+                        }
+                    }
+                }
+                free(methods);
+            }
+        }
+    });
 }
 
 static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
@@ -641,6 +671,8 @@ static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
         return;
     }
 
+    WaaLogDanmakuLoopSelectorsOnce(danmakuPlayer, playerView);
+
     double previousTime = state.lastTimeSyncValue;
     BOOL didRestartVideoLoop = state.hasLastTimeSyncValue && currentTime + 0.5 < previousTime;
     state.hasLastTimeSyncValue = YES;
@@ -651,8 +683,11 @@ static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
             void (*prepareReplayImplementation)(id, SEL) =
                 (void (*)(id, SEL))[danmakuPlayer methodForSelector:prepareReplaySelector];
             if (prepareReplayImplementation) {
-                NSLog(@"[DYYY][PureDanmaku] 原生视频循环 player=%p previous=%.3f current=%.3f", danmakuPlayer, previousTime, currentTime);
+                NSUInteger subviewCountBefore = playerView.subviews.count;
                 prepareReplayImplementation(danmakuPlayer, prepareReplaySelector);
+                NSLog(@"[DYYY][PureDanmaku] 原生视频循环 player=%p previous=%.3f current=%.3f subviews=%lu->%lu",
+                      danmakuPlayer, previousTime, currentTime,
+                      (unsigned long)subviewCountBefore, (unsigned long)playerView.subviews.count);
             }
         }
         WaaResumeMigratedDanmakuPlayer(controller);
