@@ -810,32 +810,90 @@ static NSArray *WaaAllBookDanmakus(id danmakuPlayer) {
     return [result isKindOfClass:NSArray.class] ? result : nil;
 }
 
-static void WaaRestartMigratedDanmakuForLoop(id danmakuPlayer, NSArray *cachedDanmakus) {
-    SEL appendDanmakusSelector = @selector(appendDanmakusToDataPool:);
-    SEL prepareReplaySelector = @selector(prepareRePlayForLoop);
-    SEL updateSelector = @selector(optimizedTimeUpdated:);
-    SEL playSelector = @selector(play);
-    if (!WaaDanmakuMethodHasType(danmakuPlayer, appendDanmakusSelector, "v24@0:8@16") ||
-        !WaaDanmakuMethodHasType(danmakuPlayer, prepareReplaySelector, "v16@0:8") ||
-        !WaaDanmakuMethodHasType(danmakuPlayer, updateSelector, "v24@0:8d16") ||
-        !WaaDanmakuMethodHasType(danmakuPlayer, playSelector, "v16@0:8")) {
-        return;
+// 取出播放器持有的原生数据池，循环时可直接复用其中已缓存的完整弹幕
+static id WaaDanmakuDataPool(id danmakuPlayer) {
+    SEL selector = @selector(dataPool);
+    if (!WaaDanmakuMethodHasType(danmakuPlayer, selector, "@16@0:8")) {
+        return nil;
+    }
+    id (*implementation)(id, SEL) = (id (*)(id, SEL))[danmakuPlayer methodForSelector:selector];
+    id dataPool = implementation ? implementation(danmakuPlayer, selector) : nil;
+    Class dataPoolClass = NSClassFromString(@"DDanmakuDataPool");
+    return dataPoolClass && [dataPool isKindOfClass:dataPoolClass] ? dataPool : nil;
+}
+
+static NSUInteger WaaDanmakuDataPoolCount(id dataPool) {
+    SEL selector = @selector(danmakusArray);
+    if (!WaaDanmakuMethodHasType(dataPool, selector, "@16@0:8")) {
+        return 0;
+    }
+    id (*implementation)(id, SEL) = (id (*)(id, SEL))[dataPool methodForSelector:selector];
+    id danmakus = implementation ? implementation(dataPool, selector) : nil;
+    return [danmakus isKindOfClass:NSArray.class] ? [danmakus count] : 0;
+}
+
+static unsigned long long WaaDanmakuTraveledIndex(id dataPool) {
+    SEL selector = @selector(traveledDanmakuIndex);
+    if (!WaaDanmakuMethodHasType(dataPool, selector, "Q16@0:8")) {
+        return 0;
+    }
+    unsigned long long (*implementation)(id, SEL) =
+        (unsigned long long (*)(id, SEL))[dataPool methodForSelector:selector];
+    return implementation ? implementation(dataPool, selector) : 0;
+}
+
+// 数据池已有完整弹幕时只把消费游标归零重放，避免每次循环都重复追加导致数据池无限增长
+static BOOL WaaResetDanmakuDataPoolCursor(id danmakuPlayer, NSUInteger *poolCount, unsigned long long *traveledIndex) {
+    id dataPool = WaaDanmakuDataPool(danmakuPlayer);
+    SEL resetSelector = @selector(resetTravledDanmakuIndex);
+    if (!dataPool || !WaaDanmakuMethodHasType(dataPool, resetSelector, "v16@0:8")) {
+        return NO;
     }
 
+    NSUInteger count = WaaDanmakuDataPoolCount(dataPool);
+    if (count == 0) {
+        return NO;
+    }
+
+    void (*resetImplementation)(id, SEL) = (void (*)(id, SEL))[dataPool methodForSelector:resetSelector];
+    if (!resetImplementation) {
+        return NO;
+    }
+
+    if (poolCount) {
+        *poolCount = count;
+    }
+    if (traveledIndex) {
+        *traveledIndex = WaaDanmakuTraveledIndex(dataPool);
+    }
+    resetImplementation(dataPool, resetSelector);
+    return YES;
+}
+
+// 清掉屏幕上仍在飞的弹幕，避免重放后新旧两批叠在一起
+static void WaaClearDisplayingDanmakus(id danmakuPlayer) {
+    SEL selector = @selector(clearAllDisplayingDanmakus);
+    if (!WaaDanmakuMethodHasType(danmakuPlayer, selector, "v16@0:8")) {
+        return;
+    }
+    void (*implementation)(id, SEL) = (void (*)(id, SEL))[danmakuPlayer methodForSelector:selector];
+    if (implementation) {
+        implementation(danmakuPlayer, selector);
+    }
+}
+
+// 数据池为空时的兜底：把累积到的完整弹幕重新灌回去
+static BOOL WaaRefillDanmakuDataPool(id danmakuPlayer, NSArray *cachedDanmakus) {
+    SEL appendDanmakusSelector = @selector(appendDanmakusToDataPool:);
+    if (!WaaDanmakuMethodHasType(danmakuPlayer, appendDanmakusSelector, "v24@0:8@16")) {
+        return NO;
+    }
     void (*appendDanmakusImplementation)(id, SEL, id) =
         (void (*)(id, SEL, id))[danmakuPlayer methodForSelector:appendDanmakusSelector];
-    void (*prepareReplayImplementation)(id, SEL) =
-        (void (*)(id, SEL))[danmakuPlayer methodForSelector:prepareReplaySelector];
-    void (*updateImplementation)(id, SEL, double) =
-        (void (*)(id, SEL, double))[danmakuPlayer methodForSelector:updateSelector];
-    void (*playImplementation)(id, SEL) =
-        (void (*)(id, SEL))[danmakuPlayer methodForSelector:playSelector];
-    if (!appendDanmakusImplementation || !prepareReplayImplementation ||
-        !updateImplementation || !playImplementation) {
-        return;
+    if (!appendDanmakusImplementation) {
+        return NO;
     }
 
-    // 优先使用拦截到的完整入池弹幕，其次才是轮询时抢到的残余列表
     NSString *danmakuSource = @"pool";
     NSArray *allDanmakus = WaaAccumulatedDanmakus(danmakuPlayer);
     if (allDanmakus.count == 0) {
@@ -847,20 +905,55 @@ static void WaaRestartMigratedDanmakuForLoop(id danmakuPlayer, NSArray *cachedDa
         allDanmakus = WaaAllBookDanmakus(danmakuPlayer);
     }
     if (allDanmakus.count == 0) {
+        return NO;
+    }
+
+    appendDanmakusImplementation(danmakuPlayer, appendDanmakusSelector, allDanmakus);
+    NSLog(@"[DYYY][PureDanmaku] 循环补充弹幕池 player=%p source=%@ count=%lu",
+          danmakuPlayer, danmakuSource, (unsigned long)allDanmakus.count);
+    return YES;
+}
+
+static void WaaRestartMigratedDanmakuForLoop(id danmakuPlayer, NSArray *cachedDanmakus) {
+    SEL prepareReplaySelector = @selector(prepareRePlayForLoop);
+    SEL updateSelector = @selector(optimizedTimeUpdated:);
+    SEL playSelector = @selector(play);
+    if (!WaaDanmakuMethodHasType(danmakuPlayer, prepareReplaySelector, "v16@0:8") ||
+        !WaaDanmakuMethodHasType(danmakuPlayer, updateSelector, "v24@0:8d16") ||
+        !WaaDanmakuMethodHasType(danmakuPlayer, playSelector, "v16@0:8")) {
+        return;
+    }
+
+    void (*prepareReplayImplementation)(id, SEL) =
+        (void (*)(id, SEL))[danmakuPlayer methodForSelector:prepareReplaySelector];
+    void (*updateImplementation)(id, SEL, double) =
+        (void (*)(id, SEL, double))[danmakuPlayer methodForSelector:updateSelector];
+    void (*playImplementation)(id, SEL) =
+        (void (*)(id, SEL))[danmakuPlayer methodForSelector:playSelector];
+    if (!prepareReplayImplementation || !updateImplementation || !playImplementation) {
+        return;
+    }
+
+    gWaaIsReplayingDanmakus = YES;
+
+    // 优先重置原生数据池游标；池子被清空时才回退到重新灌入累积弹幕
+    NSUInteger poolCount = 0;
+    unsigned long long traveledIndex = 0;
+    BOOL didReset = WaaResetDanmakuDataPoolCursor(danmakuPlayer, &poolCount, &traveledIndex);
+    if (didReset) {
+        NSLog(@"[DYYY][PureDanmaku] 循环重置数据池 player=%p poolCount=%lu traveled=%llu",
+              danmakuPlayer, (unsigned long)poolCount, traveledIndex);
+    } else if (!WaaRefillDanmakuDataPool(danmakuPlayer, cachedDanmakus)) {
+        gWaaIsReplayingDanmakus = NO;
         NSLog(@"[DYYY][PureDanmaku] 循环补池失败 player=%p count=0", danmakuPlayer);
         return;
     }
 
-    // 先把完整弹幕重新追加到数据池，再重建循环调度，避免只播放完一次缓存。
-    gWaaIsReplayingDanmakus = YES;
-    appendDanmakusImplementation(danmakuPlayer, appendDanmakusSelector, allDanmakus);
+    WaaClearDisplayingDanmakus(danmakuPlayer);
     prepareReplayImplementation(danmakuPlayer, prepareReplaySelector);
     updateImplementation(danmakuPlayer, updateSelector, 0.0);
     playImplementation(danmakuPlayer, playSelector);
     gWaaIsReplayingDanmakus = NO;
-
-    NSLog(@"[DYYY][PureDanmaku] 循环补充弹幕池 player=%p source=%@ count=%lu",
-          danmakuPlayer, danmakuSource, (unsigned long)allDanmakus.count);
 }
 
 static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
