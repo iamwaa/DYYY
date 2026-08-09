@@ -637,6 +637,16 @@ static void WaaClearAccumulatedDanmakus(id danmakuPlayer) {
     [table removeObjectForKey:danmakuPlayer];
 }
 
+// 仅当方法由该类自身实现时才可替换，避免改到父类而影响其他子类
+static Method WaaOwnInstanceMethod(Class targetClass, SEL selector) {
+    Method method = targetClass ? class_getInstanceMethod(targetClass, selector) : NULL;
+    if (!method) {
+        return NULL;
+    }
+    Method superclassMethod = class_getInstanceMethod(class_getSuperclass(targetClass), selector);
+    return method == superclassMethod ? NULL : method;
+}
+
 // DDanmakuPlayer 可能在启动后才加载，因此用运行时替换实现而不是 %hook
 static void WaaInstallDanmakuDataPoolHooksIfNeeded(void) {
     static BOOL hasInstalled = NO;
@@ -646,8 +656,8 @@ static void WaaInstallDanmakuDataPoolHooksIfNeeded(void) {
     Class playerClass = NSClassFromString(@"DDanmakuPlayer");
     SEL appendSelector = @selector(appendDanmakusToDataPool:);
     SEL clearSelector = @selector(clearDanmakusInDataPool);
-    Method appendMethod = playerClass ? class_getInstanceMethod(playerClass, appendSelector) : NULL;
-    Method clearMethod = playerClass ? class_getInstanceMethod(playerClass, clearSelector) : NULL;
+    Method appendMethod = WaaOwnInstanceMethod(playerClass, appendSelector);
+    Method clearMethod = WaaOwnInstanceMethod(playerClass, clearSelector);
     if (!appendMethod || !clearMethod) {
         return;
     }
@@ -672,6 +682,117 @@ static void WaaInstallDanmakuDataPoolHooksIfNeeded(void) {
     }));
 
     NSLog(@"[DYYY][PureDanmaku] 已拦截弹幕入池接口");
+}
+
+// 诊断抖音清屏页自带的弹幕控制器：是否创建、是否允许显示、循环回调是否触发
+// 只记录日志，不修改任何返回值与行为
+static void WaaInstallPureModeDanmakuDiagnosticsIfNeeded(void) {
+    static BOOL hasInstalled = NO;
+    if (hasInstalled) {
+        return;
+    }
+    Class controllerClass = NSClassFromString(@"AFDPureModePageDanmakuController");
+    if (!controllerClass) {
+        return;
+    }
+
+    SEL canShowSelector = @selector(canShowDanmakuView);
+    SEL addContainerSelector = @selector(addDanmakuContainerView);
+    SEL loopSelector = @selector(videoWillLoopTimes:);
+    SEL viewDidLoadSelector = @selector(viewDidLoad);
+    Method canShowMethod = WaaOwnInstanceMethod(controllerClass, canShowSelector);
+    Method addContainerMethod = WaaOwnInstanceMethod(controllerClass, addContainerSelector);
+    Method loopMethod = WaaOwnInstanceMethod(controllerClass, loopSelector);
+    Method viewDidLoadMethod = WaaOwnInstanceMethod(controllerClass, viewDidLoadSelector);
+    if (!canShowMethod || !addContainerMethod || !loopMethod || !viewDidLoadMethod) {
+        NSLog(@"[DYYY][PureDanmaku][Official] 清屏弹幕控制器诊断未安装 canShow=%d addContainer=%d loop=%d viewDidLoad=%d",
+              canShowMethod != NULL, addContainerMethod != NULL, loopMethod != NULL, viewDidLoadMethod != NULL);
+        return;
+    }
+
+    hasInstalled = YES;
+    static BOOL (*originalCanShow)(id, SEL) = NULL;
+    static void (*originalAddContainer)(id, SEL) = NULL;
+    static void (*originalLoop)(id, SEL, long long) = NULL;
+    static void (*originalViewDidLoad)(id, SEL) = NULL;
+    originalCanShow = (BOOL (*)(id, SEL))method_getImplementation(canShowMethod);
+    originalAddContainer = (void (*)(id, SEL))method_getImplementation(addContainerMethod);
+    originalLoop = (void (*)(id, SEL, long long))method_getImplementation(loopMethod);
+    originalViewDidLoad = (void (*)(id, SEL))method_getImplementation(viewDidLoadMethod);
+
+    method_setImplementation(canShowMethod, imp_implementationWithBlock(^BOOL(id controller) {
+        BOOL canShow = originalCanShow ? originalCanShow(controller, canShowSelector) : NO;
+        NSLog(@"[DYYY][PureDanmaku][Official] canShowDanmakuView controller=%p result=%d", controller, canShow);
+        return canShow;
+    }));
+    method_setImplementation(addContainerMethod, imp_implementationWithBlock(^(id controller) {
+        NSLog(@"[DYYY][PureDanmaku][Official] addDanmakuContainerView controller=%p", controller);
+        if (originalAddContainer) {
+            originalAddContainer(controller, addContainerSelector);
+        }
+    }));
+    method_setImplementation(loopMethod, imp_implementationWithBlock(^(id controller, long long times) {
+        NSLog(@"[DYYY][PureDanmaku][Official] videoWillLoopTimes controller=%p times=%lld", controller, times);
+        if (originalLoop) {
+            originalLoop(controller, loopSelector, times);
+        }
+    }));
+    method_setImplementation(viewDidLoadMethod, imp_implementationWithBlock(^(id controller) {
+        if (originalViewDidLoad) {
+            originalViewDidLoad(controller, viewDidLoadSelector);
+        }
+        NSLog(@"[DYYY][PureDanmaku][Official] 清屏弹幕控制器已创建 controller=%p", controller);
+    }));
+
+    NSLog(@"[DYYY][PureDanmaku][Official] 已安装清屏弹幕控制器诊断");
+}
+
+// 诊断通用弹幕容器控制器：循环官方回调与当前视频是否允许弹幕
+static void WaaInstallDanmakuContainerDiagnosticsIfNeeded(void) {
+    static BOOL hasInstalled = NO;
+    if (hasInstalled) {
+        return;
+    }
+    Class controllerClass = NSClassFromString(@"AWEDanmakuContainerController");
+    if (!controllerClass) {
+        return;
+    }
+
+    SEL loopSelector = @selector(onPlayerWillLoopPlaying);
+    SEL shouldShowSelector = @selector(shouldCurrentModelShowDanmaku);
+    Method loopMethod = WaaOwnInstanceMethod(controllerClass, loopSelector);
+    Method shouldShowMethod = WaaOwnInstanceMethod(controllerClass, shouldShowSelector);
+    if (!loopMethod || !shouldShowMethod) {
+        NSLog(@"[DYYY][PureDanmaku][Official] 弹幕容器控制器诊断未安装 loop=%d shouldShow=%d",
+              loopMethod != NULL, shouldShowMethod != NULL);
+        return;
+    }
+
+    hasInstalled = YES;
+    static void (*originalLoop)(id, SEL) = NULL;
+    static BOOL (*originalShouldShow)(id, SEL) = NULL;
+    originalLoop = (void (*)(id, SEL))method_getImplementation(loopMethod);
+    originalShouldShow = (BOOL (*)(id, SEL))method_getImplementation(shouldShowMethod);
+
+    method_setImplementation(loopMethod, imp_implementationWithBlock(^(id controller) {
+        NSLog(@"[DYYY][PureDanmaku][Official] onPlayerWillLoopPlaying controller=%p", controller);
+        if (originalLoop) {
+            originalLoop(controller, loopSelector);
+        }
+    }));
+    method_setImplementation(shouldShowMethod, imp_implementationWithBlock(^BOOL(id controller) {
+        BOOL shouldShow = originalShouldShow ? originalShouldShow(controller, shouldShowSelector) : NO;
+        NSLog(@"[DYYY][PureDanmaku][Official] shouldCurrentModelShowDanmaku controller=%p result=%d", controller, shouldShow);
+        return shouldShow;
+    }));
+
+    NSLog(@"[DYYY][PureDanmaku][Official] 已安装弹幕容器控制器诊断");
+}
+
+static void WaaInstallDanmakuRuntimeHooksIfNeeded(void) {
+    WaaInstallDanmakuDataPoolHooksIfNeeded();
+    WaaInstallPureModeDanmakuDiagnosticsIfNeeded();
+    WaaInstallDanmakuContainerDiagnosticsIfNeeded();
 }
 
 static NSArray *WaaAccumulatedDanmakus(id danmakuPlayer) {
@@ -786,7 +907,7 @@ static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
         return;
     }
 
-    WaaInstallDanmakuDataPoolHooksIfNeeded();
+    WaaInstallDanmakuRuntimeHooksIfNeeded();
 
     id danmakuPlayer = WaaDanmakuPlayerForView(playerView);
     SEL currentTimeSelector = @selector(timeDriverCurrentPlayTime);
@@ -1002,6 +1123,7 @@ static void removeTargetSubviews(UIView *view) {
 %hook AFDPureModePageContainerViewController
 
 - (void)viewDidLoad {
+    WaaInstallDanmakuRuntimeHooksIfNeeded();
     %orig;
 
     if (!WaaPureModeEnabledForController(self)) {
@@ -1066,7 +1188,7 @@ static void removeTargetSubviews(UIView *view) {
 
 - (void)layoutSubviews {
     %orig;
-    WaaInstallDanmakuDataPoolHooksIfNeeded();
+    WaaInstallDanmakuRuntimeHooksIfNeeded();
     WaaApplyPureModeDanmakuStateToView(self);
 }
 
@@ -1094,7 +1216,7 @@ static void removeTargetSubviews(UIView *view) {
 
 - (void)layoutSubviews {
     %orig;
-    WaaInstallDanmakuDataPoolHooksIfNeeded();
+    WaaInstallDanmakuRuntimeHooksIfNeeded();
     WaaApplyPureModeDanmakuStateToView(self);
 }
 
@@ -1156,7 +1278,7 @@ static void removeTargetSubviews(UIView *view) {
 %ctor {
     %init;
 
-    WaaInstallDanmakuDataPoolHooksIfNeeded();
+    WaaInstallDanmakuRuntimeHooksIfNeeded();
 
     if (DYYYGetBool(@"WaaFollowfix")) {
         %init(WaaFollowfixGroup);
