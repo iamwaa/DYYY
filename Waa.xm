@@ -375,30 +375,209 @@ static char kWaaDanmakuForceStateCapturedKey;
 static char kWaaDanmakuOriginalHiddenKey;
 static char kWaaDanmakuOriginalAlphaKey;
 static char kWaaDanmakuOriginalLayerOpacityKey;
-static char kWaaDanmakuMigrationStateKey;
+static char kWaaPureDanmakuStateKey;
 
 static BOOL WaaShouldForceShowPureModeDanmaku(void);
+static id WaaDanmakuPlayerForView(UIView *playerView);
 
-@interface WaaDanmakuMigrationState : NSObject
-@property(nonatomic, strong) UIView *player;
-@property(nonatomic, strong) UIView *originalSuperview;
-@property(nonatomic, assign) NSUInteger originalIndex;
-@property(nonatomic, assign) CGRect originalBounds;
-@property(nonatomic, assign) CGPoint originalCenter;
-@property(nonatomic, assign) CGAffineTransform originalTransform;
-@property(nonatomic, assign) BOOL originalHidden;
-@property(nonatomic, assign) CGFloat originalAlpha;
-@property(nonatomic, assign) float originalLayerOpacity;
-@property(nonatomic, assign) BOOL originalTranslatesAutoresizingMaskIntoConstraints;
-@property(nonatomic, assign) UIViewAutoresizing originalAutoresizingMask;
-@property(nonatomic, strong) NSArray<NSLayoutConstraint *> *activeExternalConstraints;
+@class WaaDanmakuOverlayView;
+
+// 清屏页自绘弹幕的运行状态：覆盖层、时间来源播放器与轮询定时器
+@interface WaaPureDanmakuState : NSObject
+@property(nonatomic, strong) WaaDanmakuOverlayView *overlay;
+@property(nonatomic, strong) id sourcePlayer;
 @property(nonatomic, strong) NSTimer *timeSyncTimer;
 @property(nonatomic, assign) BOOL hasLastTimeSyncValue;
 @property(nonatomic, assign) double lastTimeSyncValue;
-@property(nonatomic, strong) NSArray *cachedDanmakus;
+@property(nonatomic, assign) NSUInteger loadedDanmakuCount;
 @end
 
-@implementation WaaDanmakuMigrationState
+@implementation WaaPureDanmakuState
+@end
+
+static const CGFloat kWaaDanmakuFontSize = 15.0;
+static const CGFloat kWaaDanmakuLaneHeight = 27.0;
+static const CGFloat kWaaDanmakuTopInset = 96.0;
+static const CGFloat kWaaDanmakuBottomInset = 220.0;
+static const CGFloat kWaaDanmakuLaneGap = 24.0;
+static const NSTimeInterval kWaaDanmakuTravelDuration = 8.0;
+static const NSUInteger kWaaDanmakuMaxActiveCount = 60;
+static const NSUInteger kWaaDanmakuMaxLaneCount = 8;
+
+// 从原生弹幕对象里提取出的最小渲染单元
+@interface WaaDanmakuItem : NSObject
+@property(nonatomic, copy) NSString *text;
+@property(nonatomic, assign) double time;
+@end
+
+@implementation WaaDanmakuItem
+@end
+
+// 清屏页自绘弹幕层：不依赖抖音渲染管线，按视频时间自行调度标签从右往左飘
+@interface WaaDanmakuOverlayView : UIView
+@property(nonatomic, copy) NSArray<WaaDanmakuItem *> *items;
+@property(nonatomic, assign) NSUInteger cursor;
+@property(nonatomic, assign) double lastUpdateTime;
+@property(nonatomic, strong) NSMutableArray<NSNumber *> *laneFreeTimes;
+@property(nonatomic, assign, getter=isPlaybackPaused) BOOL playbackPaused;
+- (void)loadItems:(NSArray<WaaDanmakuItem *> *)items currentTime:(double)time;
+- (void)resetForLoop;
+- (void)updateToTime:(double)time;
+- (void)setPlaybackPaused:(BOOL)paused;
+@end
+
+@implementation WaaDanmakuOverlayView
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.userInteractionEnabled = NO;
+        self.clipsToBounds = YES;
+        self.backgroundColor = UIColor.clearColor;
+        _laneFreeTimes = [NSMutableArray array];
+    }
+    return self;
+}
+
+// 弹幕是逐步入池的，换列表后把游标对齐到当前时间，避免重放已显示过的弹幕
+- (void)loadItems:(NSArray<WaaDanmakuItem *> *)items currentTime:(double)time {
+    _items = [items copy];
+    self.cursor = [self indexAfterTime:time];
+}
+
+// 首个出现时间晚于 time 的弹幕下标；items 已按时间升序
+- (NSUInteger)indexAfterTime:(double)time {
+    NSUInteger index = 0;
+    while (index < self.items.count && self.items[index].time <= time) {
+        index++;
+    }
+    return index;
+}
+
+// 视频循环时回到弹幕列表开头，并清掉屏幕上残留的标签
+- (void)resetForLoop {
+    self.cursor = 0;
+    self.lastUpdateTime = 0.0;
+    for (UIView *subview in [self.subviews copy]) {
+        [subview.layer removeAllAnimations];
+        [subview removeFromSuperview];
+    }
+    [self.laneFreeTimes removeAllObjects];
+}
+
+// 视频暂停时冻结整层的动画时钟，让弹幕跟着停下
+- (void)setPlaybackPaused:(BOOL)paused {
+    if (paused == _playbackPaused) {
+        return;
+    }
+    _playbackPaused = paused;
+
+    CALayer *layer = self.layer;
+    if (paused) {
+        CFTimeInterval frozenTime = [layer convertTime:CACurrentMediaTime() fromLayer:nil];
+        layer.speed = 0.0;
+        layer.timeOffset = frozenTime;
+        return;
+    }
+
+    CFTimeInterval frozenTime = layer.timeOffset;
+    layer.speed = 1.0;
+    layer.timeOffset = 0.0;
+    layer.beginTime = 0.0;
+    layer.beginTime = [layer convertTime:CACurrentMediaTime() fromLayer:nil] - frozenTime;
+}
+
+// 弹幕只占画面上方一条带，不遮挡视频主体
+- (NSUInteger)laneCount {
+    CGFloat usableHeight = CGRectGetHeight(self.bounds) - kWaaDanmakuTopInset - kWaaDanmakuBottomInset;
+    if (usableHeight < kWaaDanmakuLaneHeight) {
+        return 0;
+    }
+    return MIN((NSUInteger)floor(usableHeight / kWaaDanmakuLaneHeight), kWaaDanmakuMaxLaneCount);
+}
+
+- (void)updateToTime:(double)time {
+    // 向前大跨度跳转（拖动进度）时直接对齐游标，不把积压的弹幕一次性吹上屏
+    if (time > self.lastUpdateTime + 2.0) {
+        self.cursor = [self indexAfterTime:time];
+    }
+    self.lastUpdateTime = time;
+
+    NSUInteger laneCount = [self laneCount];
+    if (laneCount == 0 || self.items.count == 0) {
+        return;
+    }
+
+    while (self.cursor < self.items.count && self.items[self.cursor].time <= time) {
+        WaaDanmakuItem *item = self.items[self.cursor];
+        self.cursor++;
+        [self spawnItem:item atTime:time laneCount:laneCount];
+    }
+}
+
+// 轨道占用一律用视频时间计算，暂停期间不会被墙钟推着提前释放
+- (void)spawnItem:(WaaDanmakuItem *)item atTime:(double)time laneCount:(NSUInteger)laneCount {
+    if (item.text.length == 0 || self.subviews.count >= kWaaDanmakuMaxActiveCount) {
+        return;
+    }
+
+    NSInteger lane = -1;
+    for (NSUInteger index = 0; index < laneCount; index++) {
+        while (index >= self.laneFreeTimes.count) {
+            [self.laneFreeTimes addObject:@(0.0)];
+        }
+        if (self.laneFreeTimes[index].doubleValue <= time) {
+            lane = (NSInteger)index;
+            break;
+        }
+    }
+    // 轨道全忙时直接丢弃，宁可少显示也不重叠
+    if (lane < 0) {
+        return;
+    }
+
+    CGFloat containerWidth = CGRectGetWidth(self.bounds);
+    if (containerWidth <= 0.0) {
+        return;
+    }
+
+    UILabel *label = [[UILabel alloc] init];
+    label.text = item.text;
+    label.font = [UIFont systemFontOfSize:kWaaDanmakuFontSize weight:UIFontWeightMedium];
+    label.textColor = UIColor.whiteColor;
+    label.backgroundColor = UIColor.clearColor;
+    label.numberOfLines = 1;
+    // 视频背景深浅不定，用阴影保证白字在亮画面上也能读
+    label.layer.shadowColor = UIColor.blackColor.CGColor;
+    label.layer.shadowOffset = CGSizeMake(0.0, 1.0);
+    label.layer.shadowRadius = 2.0;
+    label.layer.shadowOpacity = 0.85;
+    label.layer.shouldRasterize = YES;
+    label.layer.rasterizationScale = UIScreen.mainScreen.scale;
+    [label sizeToFit];
+
+    CGFloat labelWidth = ceil(CGRectGetWidth(label.bounds));
+    CGFloat labelY = kWaaDanmakuTopInset + lane * kWaaDanmakuLaneHeight;
+    label.frame = CGRectMake(containerWidth, labelY, labelWidth, kWaaDanmakuLaneHeight);
+    [self addSubview:label];
+
+    CGFloat distance = containerWidth + labelWidth;
+    NSTimeInterval duration = kWaaDanmakuTravelDuration * (distance / containerWidth);
+    CGFloat speed = duration > 0.0 ? distance / duration : 0.0;
+    // 等本条弹幕尾部完全离开右边缘再释放轨道，避免后一条追尾
+    self.laneFreeTimes[lane] = @(time + (speed > 0.0 ? (labelWidth + kWaaDanmakuLaneGap) / speed : 0.0));
+
+    [UIView animateWithDuration:duration
+                          delay:0.0
+                        options:UIViewAnimationOptionCurveLinear | UIViewAnimationOptionAllowUserInteraction
+                     animations:^{
+        label.frame = CGRectMake(-labelWidth, labelY, labelWidth, kWaaDanmakuLaneHeight);
+    }
+                     completion:^(__unused BOOL finished) {
+        [label removeFromSuperview];
+    }];
+}
+
 @end
 
 static void WaaCollectDanmakuPlayerViews(UIView *view, NSMutableArray<UIView *> *results) {
@@ -454,107 +633,36 @@ static UIView *WaaCurrentVisibleDanmakuPlayer(void) {
     return bestPlayer;
 }
 
-static NSArray<NSLayoutConstraint *> *WaaActiveExternalConstraintsForView(UIView *view) {
-    NSMutableArray<NSLayoutConstraint *> *constraints = [NSMutableArray array];
-    for (UIView *ancestor = view.superview; ancestor; ancestor = ancestor.superview) {
-        for (NSLayoutConstraint *constraint in ancestor.constraints) {
-            id firstItem = constraint.firstItem;
-            id secondItem = constraint.secondItem;
-            BOOL firstReferencesView = firstItem == view ||
-                                       ([firstItem isKindOfClass:UILayoutGuide.class] && ((UILayoutGuide *)firstItem).owningView == view);
-            BOOL secondReferencesView = secondItem == view ||
-                                        ([secondItem isKindOfClass:UILayoutGuide.class] && ((UILayoutGuide *)secondItem).owningView == view);
-            if (constraint.active && (firstReferencesView || secondReferencesView)) {
-                [constraints addObject:constraint];
-            }
-        }
-    }
-    return constraints;
-}
-
-static UIView *WaaConstraintItemView(id item) {
-    if ([item isKindOfClass:UIView.class]) {
-        return (UIView *)item;
-    }
-    if ([item isKindOfClass:UILayoutGuide.class]) {
-        return ((UILayoutGuide *)item).owningView;
-    }
-    return nil;
-}
-
-static BOOL WaaViewsShareAncestor(UIView *firstView, UIView *secondView) {
-    if (!firstView || !secondView) {
-        return YES;
-    }
-    NSHashTable<UIView *> *firstAncestors = [NSHashTable weakObjectsHashTable];
-    for (UIView *view = firstView; view; view = view.superview) {
-        [firstAncestors addObject:view];
-    }
-    for (UIView *view = secondView; view; view = view.superview) {
-        if ([firstAncestors containsObject:view]) {
-            return YES;
-        }
-    }
-    return NO;
-}
-
-static NSArray<NSLayoutConstraint *> *WaaValidConstraintsForActivation(NSArray<NSLayoutConstraint *> *constraints) {
-    NSMutableArray<NSLayoutConstraint *> *validConstraints = [NSMutableArray array];
-    for (NSLayoutConstraint *constraint in constraints) {
-        UIView *firstView = WaaConstraintItemView(constraint.firstItem);
-        UIView *secondView = WaaConstraintItemView(constraint.secondItem);
-        if (WaaViewsShareAncestor(firstView, secondView)) {
-            [validConstraints addObject:constraint];
-        }
-    }
-    return validConstraints;
-}
-
-static void WaaAttachDanmakuPlayerToPureModeController(UIViewController *controller) {
-    if (!WaaShouldForceShowPureModeDanmaku() || objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey)) {
+static void WaaAttachDanmakuOverlayToPureModeController(UIViewController *controller) {
+    if (!WaaShouldForceShowPureModeDanmaku() || objc_getAssociatedObject(controller, &kWaaPureDanmakuStateKey)) {
         return;
     }
 
-    UIView *player = WaaCurrentVisibleDanmakuPlayer();
-    UIView *originalSuperview = player.superview;
     UIView *targetView = controller.view;
-    if (!player || !originalSuperview || !targetView) {
+    if (!targetView) {
         return;
     }
 
-    WaaDanmakuMigrationState *state = [WaaDanmakuMigrationState new];
-    state.player = player;
-    state.originalSuperview = originalSuperview;
-    state.originalIndex = [originalSuperview.subviews indexOfObject:player];
-    state.originalBounds = player.bounds;
-    state.originalCenter = player.center;
-    state.originalTransform = player.transform;
-    state.originalHidden = player.hidden;
-    state.originalAlpha = player.alpha;
-    state.originalLayerOpacity = player.layer.opacity;
-    state.originalTranslatesAutoresizingMaskIntoConstraints = player.translatesAutoresizingMaskIntoConstraints;
-    state.originalAutoresizingMask = player.autoresizingMask;
-    state.activeExternalConstraints = WaaActiveExternalConstraintsForView(player);
+    // 只借原生播放器做时间源与弹幕数据源，不再搬动它的视图；此刻可能还找不到，交给后续轮询重试
+    WaaPureDanmakuState *state = [WaaPureDanmakuState new];
+    state.sourcePlayer = WaaDanmakuPlayerForView(WaaCurrentVisibleDanmakuPlayer());
 
-    [NSLayoutConstraint deactivateConstraints:state.activeExternalConstraints];
-    player.translatesAutoresizingMaskIntoConstraints = YES;
-    player.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [targetView addSubview:player];
-    player.transform = CGAffineTransformIdentity;
-    player.frame = targetView.bounds;
-    player.hidden = NO;
-    player.alpha = 1.0;
-    player.layer.opacity = 1.0f;
-    [targetView bringSubviewToFront:player];
-    objc_setAssociatedObject(controller, &kWaaDanmakuMigrationStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    WaaDanmakuOverlayView *overlay = [[WaaDanmakuOverlayView alloc] initWithFrame:targetView.bounds];
+    overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [targetView addSubview:overlay];
+    [targetView bringSubviewToFront:overlay];
+    state.overlay = overlay;
+
+    objc_setAssociatedObject(controller, &kWaaPureDanmakuStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSLog(@"[DYYY][PureDanmaku] 弹幕覆盖层已挂载 controller=%p player=%p", controller, state.sourcePlayer);
 }
 
-static void WaaLayoutMigratedDanmakuPlayer(UIViewController *controller) {
-    WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
-    if (state.player.superview == controller.view) {
-        state.player.transform = CGAffineTransformIdentity;
-        state.player.frame = controller.view.bounds;
-        [controller.view bringSubviewToFront:state.player];
+static void WaaLayoutDanmakuOverlay(UIViewController *controller) {
+    WaaPureDanmakuState *state = objc_getAssociatedObject(controller, &kWaaPureDanmakuStateKey);
+    WaaDanmakuOverlayView *overlay = state.overlay;
+    if (overlay.superview == controller.view) {
+        overlay.frame = controller.view.bounds;
+        [controller.view bringSubviewToFront:overlay];
     }
 }
 
@@ -588,16 +696,13 @@ static NSMapTable<id, NSMutableOrderedSet *> *WaaAccumulatedDanmakuTable(void) {
     return table;
 }
 
-// 回填期间的自发调用不应再次计入累积，也不应清空累积
-static BOOL gWaaIsReplayingDanmakus = NO;
-
 static BOOL WaaIsDanmakuPlayer(id object) {
     Class playerClass = NSClassFromString(@"DDanmakuPlayer");
     return playerClass && [object isKindOfClass:playerClass];
 }
 
 static void WaaRecordAppendedDanmakus(id danmakuPlayer, id danmakus) {
-    if (gWaaIsReplayingDanmakus || !WaaIsDanmakuPlayer(danmakuPlayer) || ![danmakus isKindOfClass:NSArray.class]) {
+    if (!WaaIsDanmakuPlayer(danmakuPlayer) || ![danmakus isKindOfClass:NSArray.class]) {
         return;
     }
     NSArray *incomingDanmakus = danmakus;
@@ -624,7 +729,7 @@ static void WaaRecordAppendedDanmakus(id danmakuPlayer, id danmakus) {
 }
 
 static void WaaClearAccumulatedDanmakus(id danmakuPlayer) {
-    if (gWaaIsReplayingDanmakus || !WaaIsDanmakuPlayer(danmakuPlayer)) {
+    if (!WaaIsDanmakuPlayer(danmakuPlayer)) {
         return;
     }
     NSMapTable *table = WaaAccumulatedDanmakuTable();
@@ -810,238 +915,133 @@ static NSArray *WaaAllBookDanmakus(id danmakuPlayer) {
     return [result isKindOfClass:NSArray.class] ? result : nil;
 }
 
-// 取出播放器持有的原生数据池，循环时可直接复用其中已缓存的完整弹幕
-static id WaaDanmakuDataPool(id danmakuPlayer) {
-    SEL selector = @selector(dataPool);
-    if (!WaaDanmakuMethodHasType(danmakuPlayer, selector, "@16@0:8")) {
+// 读取原生弹幕对象的文本；AWEVideoPlayDanmakuModel 暴露 text 属性
+static NSString *WaaDanmakuTextOf(id danmaku) {
+    SEL selector = @selector(text);
+    if (!WaaDanmakuMethodHasType(danmaku, selector, "@16@0:8")) {
         return nil;
     }
-    id (*implementation)(id, SEL) = (id (*)(id, SEL))[danmakuPlayer methodForSelector:selector];
-    id dataPool = implementation ? implementation(danmakuPlayer, selector) : nil;
-    Class dataPoolClass = NSClassFromString(@"DDanmakuDataPool");
-    return dataPoolClass && [dataPool isKindOfClass:dataPoolClass] ? dataPool : nil;
+    id (*implementation)(id, SEL) = (id (*)(id, SEL))[danmaku methodForSelector:selector];
+    id text = implementation ? implementation(danmaku, selector) : nil;
+    return [text isKindOfClass:NSString.class] ? text : nil;
 }
 
-static NSUInteger WaaDanmakuDataPoolCount(id dataPool) {
-    SEL selector = @selector(danmakusArray);
-    if (!WaaDanmakuMethodHasType(dataPool, selector, "@16@0:8")) {
-        return 0;
+// 读取弹幕相对视频起点的出现时间
+static double WaaDanmakuTimeOf(id danmaku) {
+    SEL selector = @selector(timeOffset);
+    if (!WaaDanmakuMethodHasType(danmaku, selector, "d16@0:8")) {
+        return -1.0;
     }
-    id (*implementation)(id, SEL) = (id (*)(id, SEL))[dataPool methodForSelector:selector];
-    id danmakus = implementation ? implementation(dataPool, selector) : nil;
-    return [danmakus isKindOfClass:NSArray.class] ? [danmakus count] : 0;
+    double (*implementation)(id, SEL) = (double (*)(id, SEL))[danmaku methodForSelector:selector];
+    double time = implementation ? implementation(danmaku, selector) : -1.0;
+    return isfinite(time) ? time : -1.0;
 }
 
-static unsigned long long WaaDanmakuTraveledIndex(id dataPool) {
-    SEL selector = @selector(traveledDanmakuIndex);
-    if (!WaaDanmakuMethodHasType(dataPool, selector, "Q16@0:8")) {
-        return 0;
+// 把抖音的弹幕对象转成自绘所需的最小结构，并按时间排序
+static NSArray<WaaDanmakuItem *> *WaaBuildDanmakuItems(NSArray *danmakus) {
+    NSMutableArray<WaaDanmakuItem *> *items = [NSMutableArray arrayWithCapacity:danmakus.count];
+    for (id danmaku in danmakus) {
+        NSString *text = WaaDanmakuTextOf(danmaku);
+        double time = WaaDanmakuTimeOf(danmaku);
+        if (text.length == 0 || time < 0.0) {
+            continue;
+        }
+        WaaDanmakuItem *item = [WaaDanmakuItem new];
+        item.text = text;
+        item.time = time;
+        [items addObject:item];
     }
-    unsigned long long (*implementation)(id, SEL) =
-        (unsigned long long (*)(id, SEL))[dataPool methodForSelector:selector];
-    return implementation ? implementation(dataPool, selector) : 0;
+    [items sortUsingComparator:^NSComparisonResult(WaaDanmakuItem *lhs, WaaDanmakuItem *rhs) {
+        if (lhs.time < rhs.time) {
+            return NSOrderedAscending;
+        }
+        return lhs.time > rhs.time ? NSOrderedDescending : NSOrderedSame;
+    }];
+    return items;
 }
 
-// 数据池已有完整弹幕时只把消费游标归零重放，避免每次循环都重复追加导致数据池无限增长
-static BOOL WaaResetDanmakuDataPoolCursor(id danmakuPlayer, NSUInteger *poolCount, unsigned long long *traveledIndex) {
-    id dataPool = WaaDanmakuDataPool(danmakuPlayer);
-    SEL resetSelector = @selector(resetTravledDanmakuIndex);
-    if (!dataPool || !WaaDanmakuMethodHasType(dataPool, resetSelector, "v16@0:8")) {
-        return NO;
-    }
-
-    NSUInteger count = WaaDanmakuDataPoolCount(dataPool);
-    if (count == 0) {
-        return NO;
-    }
-
-    void (*resetImplementation)(id, SEL) = (void (*)(id, SEL))[dataPool methodForSelector:resetSelector];
-    if (!resetImplementation) {
-        return NO;
-    }
-
-    if (poolCount) {
-        *poolCount = count;
-    }
-    if (traveledIndex) {
-        *traveledIndex = WaaDanmakuTraveledIndex(dataPool);
-    }
-    resetImplementation(dataPool, resetSelector);
-    return YES;
-}
-
-// 清掉屏幕上仍在飞的弹幕，避免重放后新旧两批叠在一起
-static void WaaClearDisplayingDanmakus(id danmakuPlayer) {
-    SEL selector = @selector(clearAllDisplayingDanmakus);
-    if (!WaaDanmakuMethodHasType(danmakuPlayer, selector, "v16@0:8")) {
-        return;
-    }
-    void (*implementation)(id, SEL) = (void (*)(id, SEL))[danmakuPlayer methodForSelector:selector];
-    if (implementation) {
-        implementation(danmakuPlayer, selector);
-    }
-}
-
-// 数据池为空时的兜底：把累积到的完整弹幕重新灌回去
-static BOOL WaaRefillDanmakuDataPool(id danmakuPlayer, NSArray *cachedDanmakus) {
-    SEL appendDanmakusSelector = @selector(appendDanmakusToDataPool:);
-    if (!WaaDanmakuMethodHasType(danmakuPlayer, appendDanmakusSelector, "v24@0:8@16")) {
-        return NO;
-    }
-    void (*appendDanmakusImplementation)(id, SEL, id) =
-        (void (*)(id, SEL, id))[danmakuPlayer methodForSelector:appendDanmakusSelector];
-    if (!appendDanmakusImplementation) {
-        return NO;
-    }
-
-    NSString *danmakuSource = @"pool";
-    NSArray *allDanmakus = WaaAccumulatedDanmakus(danmakuPlayer);
-    if (allDanmakus.count == 0) {
-        danmakuSource = @"cached";
-        allDanmakus = cachedDanmakus;
-    }
-    if (allDanmakus.count == 0) {
-        danmakuSource = @"live";
-        allDanmakus = WaaAllBookDanmakus(danmakuPlayer);
-    }
-    if (allDanmakus.count == 0) {
-        return NO;
-    }
-
-    appendDanmakusImplementation(danmakuPlayer, appendDanmakusSelector, allDanmakus);
-    NSLog(@"[DYYY][PureDanmaku] 循环补充弹幕池 player=%p source=%@ count=%lu",
-          danmakuPlayer, danmakuSource, (unsigned long)allDanmakus.count);
-    return YES;
-}
-
-static void WaaRestartMigratedDanmakuForLoop(id danmakuPlayer, NSArray *cachedDanmakus) {
-    SEL prepareReplaySelector = @selector(prepareRePlayForLoop);
-    SEL updateSelector = @selector(optimizedTimeUpdated:);
-    SEL playSelector = @selector(play);
-    if (!WaaDanmakuMethodHasType(danmakuPlayer, prepareReplaySelector, "v16@0:8") ||
-        !WaaDanmakuMethodHasType(danmakuPlayer, updateSelector, "v24@0:8d16") ||
-        !WaaDanmakuMethodHasType(danmakuPlayer, playSelector, "v16@0:8")) {
-        return;
-    }
-
-    void (*prepareReplayImplementation)(id, SEL) =
-        (void (*)(id, SEL))[danmakuPlayer methodForSelector:prepareReplaySelector];
-    void (*updateImplementation)(id, SEL, double) =
-        (void (*)(id, SEL, double))[danmakuPlayer methodForSelector:updateSelector];
-    void (*playImplementation)(id, SEL) =
-        (void (*)(id, SEL))[danmakuPlayer methodForSelector:playSelector];
-    if (!prepareReplayImplementation || !updateImplementation || !playImplementation) {
-        return;
-    }
-
-    gWaaIsReplayingDanmakus = YES;
-
-    // 优先重置原生数据池游标；池子被清空时才回退到重新灌入累积弹幕
-    NSUInteger poolCount = 0;
-    unsigned long long traveledIndex = 0;
-    BOOL didReset = WaaResetDanmakuDataPoolCursor(danmakuPlayer, &poolCount, &traveledIndex);
-    if (didReset) {
-        NSLog(@"[DYYY][PureDanmaku] 循环重置数据池 player=%p poolCount=%lu traveled=%llu",
-              danmakuPlayer, (unsigned long)poolCount, traveledIndex);
-    } else if (!WaaRefillDanmakuDataPool(danmakuPlayer, cachedDanmakus)) {
-        gWaaIsReplayingDanmakus = NO;
-        NSLog(@"[DYYY][PureDanmaku] 循环补池失败 player=%p count=0", danmakuPlayer);
-        return;
-    }
-
-    WaaClearDisplayingDanmakus(danmakuPlayer);
-    prepareReplayImplementation(danmakuPlayer, prepareReplaySelector);
-    updateImplementation(danmakuPlayer, updateSelector, 0.0);
-    playImplementation(danmakuPlayer, playSelector);
-    gWaaIsReplayingDanmakus = NO;
-}
-
-static void WaaResumeMigratedDanmakuPlayer(UIViewController *controller) {
-    if (!WaaShouldForceShowPureModeDanmaku()) {
-        return;
-    }
-
-    WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
-    UIView *playerView = state.player;
-    if (!playerView || playerView.superview != controller.view || !playerView.window) {
-        return;
-    }
-
-    id danmakuPlayer = WaaDanmakuPlayerForView(playerView);
-    SEL playSelector = @selector(play);
-    if (!WaaDanmakuMethodHasType(danmakuPlayer, playSelector, "v16@0:8")) {
-        return;
-    }
-
-    void (*playImplementation)(id, SEL) = (void (*)(id, SEL))[danmakuPlayer methodForSelector:playSelector];
-    if (playImplementation) {
-        playImplementation(danmakuPlayer, playSelector);
-    }
-}
-
-static void WaaStopMigratedDanmakuTimeSync(UIViewController *controller) {
-    WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
+static void WaaStopPureDanmakuTimeSync(UIViewController *controller) {
+    WaaPureDanmakuState *state = objc_getAssociatedObject(controller, &kWaaPureDanmakuStateKey);
     [state.timeSyncTimer invalidate];
     state.timeSyncTimer = nil;
     state.hasLastTimeSyncValue = NO;
     state.lastTimeSyncValue = 0.0;
 }
 
-static void WaaSyncMigratedDanmakuTime(UIViewController *controller) {
+// 从原生播放器取视频时间，驱动自绘覆盖层；时间回退即视为视频循环
+static void WaaSyncPureDanmakuTime(UIViewController *controller) {
     if (!WaaShouldForceShowPureModeDanmaku()) {
-        WaaStopMigratedDanmakuTimeSync(controller);
+        WaaStopPureDanmakuTimeSync(controller);
         return;
     }
 
-    WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
-    UIView *playerView = state.player;
-    if (!playerView || playerView.superview != controller.view || !playerView.window) {
-        WaaStopMigratedDanmakuTimeSync(controller);
+    WaaPureDanmakuState *state = objc_getAssociatedObject(controller, &kWaaPureDanmakuStateKey);
+    WaaDanmakuOverlayView *overlay = state.overlay;
+    if (!overlay || overlay.superview != controller.view || !overlay.window) {
+        WaaStopPureDanmakuTimeSync(controller);
         return;
     }
 
     WaaInstallDanmakuRuntimeHooksIfNeeded();
 
-    id danmakuPlayer = WaaDanmakuPlayerForView(playerView);
+    id danmakuPlayer = state.sourcePlayer;
+    // 挂载时可能还没找到播放器，这里惰性补上
+    if (!danmakuPlayer) {
+        danmakuPlayer = WaaDanmakuPlayerForView(WaaCurrentVisibleDanmakuPlayer());
+        if (!danmakuPlayer) {
+            return;
+        }
+        state.sourcePlayer = danmakuPlayer;
+        NSLog(@"[DYYY][PureDanmaku] 覆盖层补绑播放器 controller=%p player=%p", controller, danmakuPlayer);
+    }
+
     SEL currentTimeSelector = @selector(timeDriverCurrentPlayTime);
-    SEL updateSelector = @selector(optimizedTimeUpdated:);
-    if (!WaaDanmakuMethodHasType(danmakuPlayer, currentTimeSelector, "d16@0:8") ||
-        !WaaDanmakuMethodHasType(danmakuPlayer, updateSelector, "v24@0:8d16")) {
-        WaaStopMigratedDanmakuTimeSync(controller);
+    if (!WaaDanmakuMethodHasType(danmakuPlayer, currentTimeSelector, "d16@0:8")) {
         return;
     }
 
     double (*currentTimeImplementation)(id, SEL) =
         (double (*)(id, SEL))[danmakuPlayer methodForSelector:currentTimeSelector];
-    void (*updateImplementation)(id, SEL, double) =
-        (void (*)(id, SEL, double))[danmakuPlayer methodForSelector:updateSelector];
     double currentTime = currentTimeImplementation ? currentTimeImplementation(danmakuPlayer, currentTimeSelector) : NAN;
-    if (!updateImplementation || !isfinite(currentTime) || currentTime < 0.0) {
+    if (!isfinite(currentTime) || currentTime < 0.0) {
         return;
     }
 
-    NSArray *allDanmakus = WaaAllBookDanmakus(danmakuPlayer);
-    if (allDanmakus.count > 0 && state.cachedDanmakus.count == 0) {
-        state.cachedDanmakus = [allDanmakus copy];
-        NSLog(@"[DYYY][PureDanmaku] 首次缓存完整弹幕列表 player=%p count=%lu", danmakuPlayer, (unsigned long)state.cachedDanmakus.count);
+    // 弹幕是逐步入池的，每次轮询都用累积到的最新全量刷新覆盖层
+    NSArray *allDanmakus = WaaAccumulatedDanmakus(danmakuPlayer);
+    if (allDanmakus.count == 0) {
+        allDanmakus = WaaAllBookDanmakus(danmakuPlayer);
+    }
+    // 源数据被抖音清空时保留已载入的列表，否则循环后就没弹幕可放
+    if (allDanmakus.count > 0 && allDanmakus.count != state.loadedDanmakuCount) {
+        NSArray<WaaDanmakuItem *> *items = WaaBuildDanmakuItems(allDanmakus);
+        state.loadedDanmakuCount = allDanmakus.count;
+        [overlay loadItems:items currentTime:currentTime];
+        NSLog(@"[DYYY][PureDanmaku] 覆盖层载入弹幕 player=%p source=%lu usable=%lu",
+              danmakuPlayer, (unsigned long)allDanmakus.count, (unsigned long)items.count);
     }
 
     double previousTime = state.lastTimeSyncValue;
     BOOL didRestartVideoLoop = state.hasLastTimeSyncValue && currentTime + 0.5 < previousTime;
+    // 时间不再前进即视为暂停，弹幕跟着冻住
+    BOOL isPaused = state.hasLastTimeSyncValue && !didRestartVideoLoop && fabs(currentTime - previousTime) < 0.001;
+    overlay.playbackPaused = isPaused;
     state.hasLastTimeSyncValue = YES;
     state.lastTimeSyncValue = currentTime;
     if (didRestartVideoLoop) {
-        NSLog(@"[DYYY][PureDanmaku] 完整重置弹幕循环 player=%p previous=%.3f current=%.3f",
+        NSLog(@"[DYYY][PureDanmaku] 覆盖层重播 player=%p previous=%.3f current=%.3f",
               danmakuPlayer, previousTime, currentTime);
-        WaaRestartMigratedDanmakuForLoop(danmakuPlayer, state.cachedDanmakus);
+        [overlay resetForLoop];
+    }
+    if (isPaused) {
         return;
     }
 
-    updateImplementation(danmakuPlayer, updateSelector, currentTime);
+    [overlay updateToTime:currentTime];
 }
 
-static void WaaStartMigratedDanmakuTimeSync(UIViewController *controller) {
-    WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
+static void WaaStartPureDanmakuTimeSync(UIViewController *controller) {
+    WaaPureDanmakuState *state = objc_getAssociatedObject(controller, &kWaaPureDanmakuStateKey);
     if (!state || state.timeSyncTimer) {
         return;
     }
@@ -1054,43 +1054,26 @@ static void WaaStartMigratedDanmakuTimeSync(UIViewController *controller) {
                                               block:^(__unused NSTimer *runningTimer) {
         UIViewController *strongController = weakController;
         if (strongController) {
-            WaaSyncMigratedDanmakuTime(strongController);
+            WaaSyncPureDanmakuTime(strongController);
         } else {
             [runningTimer invalidate];
         }
     }];
     state.timeSyncTimer = timer;
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
-    WaaSyncMigratedDanmakuTime(controller);
+    WaaSyncPureDanmakuTime(controller);
 }
 
-static void WaaRestoreMigratedDanmakuPlayer(UIViewController *controller) {
-    WaaStopMigratedDanmakuTimeSync(controller);
-    WaaDanmakuMigrationState *state = objc_getAssociatedObject(controller, &kWaaDanmakuMigrationStateKey);
+static void WaaRemoveDanmakuOverlay(UIViewController *controller) {
+    WaaStopPureDanmakuTimeSync(controller);
+    WaaPureDanmakuState *state = objc_getAssociatedObject(controller, &kWaaPureDanmakuStateKey);
     if (!state) {
         return;
     }
-    objc_setAssociatedObject(controller, &kWaaDanmakuMigrationStateKey, nil, OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(controller, &kWaaPureDanmakuStateKey, nil, OBJC_ASSOCIATION_ASSIGN);
 
-    UIView *player = state.player;
-    UIView *originalSuperview = state.originalSuperview;
-    if (!player || !originalSuperview || player.superview != controller.view) {
-        return;
-    }
-
-    NSUInteger index = MIN(state.originalIndex, originalSuperview.subviews.count);
-    [originalSuperview insertSubview:player atIndex:index];
-    player.translatesAutoresizingMaskIntoConstraints = state.originalTranslatesAutoresizingMaskIntoConstraints;
-    player.autoresizingMask = state.originalAutoresizingMask;
-    player.bounds = state.originalBounds;
-    player.center = state.originalCenter;
-    player.transform = state.originalTransform;
-    player.hidden = state.originalHidden;
-    player.alpha = state.originalAlpha;
-    player.layer.opacity = state.originalLayerOpacity;
-    [NSLayoutConstraint activateConstraints:WaaValidConstraintsForActivation(state.activeExternalConstraints)];
-    [originalSuperview setNeedsLayout];
-    [originalSuperview layoutIfNeeded];
+    [state.overlay resetForLoop];
+    [state.overlay removeFromSuperview];
 }
 
 static BOOL WaaFloatClearHidesDanmaku(void) {
@@ -1233,11 +1216,11 @@ static void removeTargetSubviews(UIView *view) {
     BOOL active = WaaPureModeEnabledForController(self);
     WaaRefreshPureModePlusState(active);
     if (active) {
-        WaaAttachDanmakuPlayerToPureModeController(self);
+        WaaAttachDanmakuOverlayToPureModeController(self);
     }
     %orig;
     WaaRefreshPureModePlusState(active);
-    WaaLayoutMigratedDanmakuPlayer(self);
+    WaaLayoutDanmakuOverlay(self);
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -1253,18 +1236,17 @@ static void removeTargetSubviews(UIView *view) {
     if ([mainView isKindOfClass:[UIView class]]) {
         removeTargetSubviews(mainView);
     }
-    WaaLayoutMigratedDanmakuPlayer(self);
-    WaaResumeMigratedDanmakuPlayer(self);
-    WaaStartMigratedDanmakuTimeSync(self);
+    WaaLayoutDanmakuOverlay(self);
+    WaaStartPureDanmakuTimeSync(self);
 }
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    WaaLayoutMigratedDanmakuPlayer(self);
+    WaaLayoutDanmakuOverlay(self);
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
-    WaaStopMigratedDanmakuTimeSync(self);
+    WaaStopPureDanmakuTimeSync(self);
     WaaRefreshPureModePlusState(NO);
     %orig;
 }
@@ -1272,7 +1254,7 @@ static void removeTargetSubviews(UIView *view) {
 - (void)viewDidDisappear:(BOOL)animated {
     %orig;
     WaaRefreshPureModePlusState(NO);
-    WaaRestoreMigratedDanmakuPlayer(self);
+    WaaRemoveDanmakuOverlay(self);
 }
 
 %end
