@@ -915,26 +915,78 @@ static NSArray *WaaAllBookDanmakus(id danmakuPlayer) {
     return [result isKindOfClass:NSArray.class] ? result : nil;
 }
 
-// 读取原生弹幕对象的文本；AWEVideoPlayDanmakuModel 暴露 text 属性
-static NSString *WaaDanmakuTextOf(id danmaku) {
-    SEL selector = @selector(text);
-    if (!WaaDanmakuMethodHasType(danmaku, selector, "@16@0:8")) {
-        return nil;
+// 只校验无参 + 返回类型，不做完整签名 strcmp；完整编码在不同版本上会带类名导致失配
+static BOOL WaaDanmakuGetterReturns(id object, SEL selector, char expectedReturnType) {
+    if (![object respondsToSelector:selector]) {
+        return NO;
     }
-    id (*implementation)(id, SEL) = (id (*)(id, SEL))[danmaku methodForSelector:selector];
-    id text = implementation ? implementation(danmaku, selector) : nil;
-    return [text isKindOfClass:NSString.class] ? text : nil;
+    NSMethodSignature *signature = [object methodSignatureForSelector:selector];
+    const char *returnType = signature.methodReturnType;
+    return signature.numberOfArguments == 2 && returnType && returnType[0] == expectedReturnType;
 }
 
-// 读取弹幕相对视频起点的出现时间
-static double WaaDanmakuTimeOf(id danmaku) {
-    SEL selector = @selector(timeOffset);
-    if (!WaaDanmakuMethodHasType(danmaku, selector, "d16@0:8")) {
-        return -1.0;
+static id WaaDanmakuObjectValue(id object, SEL selector) {
+    if (!WaaDanmakuGetterReturns(object, selector, '@')) {
+        return nil;
     }
-    double (*implementation)(id, SEL) = (double (*)(id, SEL))[danmaku methodForSelector:selector];
-    double time = implementation ? implementation(danmaku, selector) : -1.0;
-    return isfinite(time) ? time : -1.0;
+    id (*implementation)(id, SEL) = (id (*)(id, SEL))[object methodForSelector:selector];
+    return implementation ? implementation(object, selector) : nil;
+}
+
+// 读取原生弹幕对象的文本；纯文本为空时回退到富文本
+static NSString *WaaDanmakuTextOf(id danmaku) {
+    id text = WaaDanmakuObjectValue(danmaku, @selector(text));
+    if ([text isKindOfClass:NSString.class] && ((NSString *)text).length > 0) {
+        return text;
+    }
+
+    id attributedText = WaaDanmakuObjectValue(danmaku, @selector(attributedString));
+    if ([attributedText isKindOfClass:NSAttributedString.class]) {
+        NSString *plainText = ((NSAttributedString *)attributedText).string;
+        if (plainText.length > 0) {
+            return plainText;
+        }
+    }
+    return nil;
+}
+
+// 读取弹幕相对视频起点的出现时间；两种模型字段名不同
+static double WaaDanmakuTimeOf(id danmaku) {
+    SEL selectors[] = {@selector(timeOffset), @selector(offsetTime)};
+    for (NSUInteger index = 0; index < sizeof(selectors) / sizeof(selectors[0]); index++) {
+        if (!WaaDanmakuGetterReturns(danmaku, selectors[index], 'd')) {
+            continue;
+        }
+        double (*implementation)(id, SEL) = (double (*)(id, SEL))[danmaku methodForSelector:selectors[index]];
+        double time = implementation ? implementation(danmaku, selectors[index]) : -1.0;
+        if (isfinite(time) && time >= 0.0) {
+            return time;
+        }
+    }
+    return -1.0;
+}
+
+// 取不到字段时把对象真实形状打出来，避免再靠猜
+static void WaaLogDanmakuShapeOnce(id danmaku) {
+    static BOOL hasLogged = NO;
+    if (hasLogged || !danmaku) {
+        return;
+    }
+    hasLogged = YES;
+
+    Method textMethod = class_getInstanceMethod([danmaku class], @selector(text));
+    Method timeOffsetMethod = class_getInstanceMethod([danmaku class], @selector(timeOffset));
+    Method offsetTimeMethod = class_getInstanceMethod([danmaku class], @selector(offsetTime));
+    NSString *shape = [danmaku description];
+    if (shape.length > 200) {
+        shape = [shape substringToIndex:200];
+    }
+    NSLog(@"[DYYY][PureDanmaku] 弹幕对象形状 class=%@ text=%s timeOffset=%s offsetTime=%s desc=%@",
+          NSStringFromClass([danmaku class]),
+          textMethod ? method_getTypeEncoding(textMethod) : "<none>",
+          timeOffsetMethod ? method_getTypeEncoding(timeOffsetMethod) : "<none>",
+          offsetTimeMethod ? method_getTypeEncoding(offsetTimeMethod) : "<none>",
+          shape);
 }
 
 // 把抖音的弹幕对象转成自绘所需的最小结构，并按时间排序
@@ -944,6 +996,7 @@ static NSArray<WaaDanmakuItem *> *WaaBuildDanmakuItems(NSArray *danmakus) {
         NSString *text = WaaDanmakuTextOf(danmaku);
         double time = WaaDanmakuTimeOf(danmaku);
         if (text.length == 0 || time < 0.0) {
+            WaaLogDanmakuShapeOnce(danmaku);
             continue;
         }
         WaaDanmakuItem *item = [WaaDanmakuItem new];
