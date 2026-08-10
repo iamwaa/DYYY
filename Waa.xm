@@ -882,6 +882,58 @@ static void WaaInstallPureModeDanmakuDiagnosticsIfNeeded(void) {
     NSLog(@"[DYYY][PureDanmaku][Official] 已安装清屏弹幕控制器诊断");
 }
 
+// 只读探针：hook 清屏页控制器管理器的初始化入口，观察组件列表与最终生成的控制器
+// 不解耦任何行为，只打印日志，用来定位弹幕为什么没被启用
+static void WaaInstallPureModeControllerManagerProbeIfNeeded(void) {
+    static BOOL hasInstalled = NO;
+    if (hasInstalled) {
+        return;
+    }
+    Class managerClass = NSClassFromString(@"AFDPureModePageControllerManager");
+    if (!managerClass) {
+        return;
+    }
+
+    SEL setupSelector = @selector(setupControllersWithConfiguration:customization:context:awemeModel:);
+    Method setupMethod = WaaOwnInstanceMethod(managerClass, setupSelector);
+    if (!setupMethod) {
+        NSLog(@"[DYYY][PureDanmaku][Probe] 未找到 setupControllersWithConfiguration");
+        return;
+    }
+
+    hasInstalled = YES;
+    static void (*originalSetup)(id, SEL, id, id, id, id) = NULL;
+    originalSetup = (void (*)(id, SEL, id, id, id, id))method_getImplementation(setupMethod);
+    method_setImplementation(setupMethod, imp_implementationWithBlock(
+        ^(id manager, id configuration, id customization, id context, id awemeModel) {
+        NSArray *componentArray = nil;
+        if ([configuration respondsToSelector:@selector(componentArray)]) {
+            componentArray = [configuration valueForKey:@"componentArray"];
+        }
+        NSArray *componentParamKeys = nil;
+        if ([configuration respondsToSelector:@selector(componentParamDict)]) {
+            componentParamKeys = [[configuration valueForKey:@"componentParamDict"] allKeys];
+        }
+        NSLog(@"[DYYY][PureDanmaku][Probe] setup 前置 componentArray=%@ paramKeys=%@",
+              componentArray, componentParamKeys);
+
+        if (originalSetup) {
+            originalSetup(manager, setupSelector, configuration, customization, context, awemeModel);
+        }
+
+        NSMutableArray *controllers = [manager valueForKey:@"controllers"];
+        NSMutableArray *classNames = [manager valueForKey:@"mbClassNameArray"];
+        NSMutableString *controllerDesc = [NSMutableString string];
+        for (id controller in controllers) {
+            [controllerDesc appendFormat:@"%@,", NSStringFromClass([controller class])];
+        }
+        NSLog(@"[DYYY][PureDanmaku][Probe] setup 后置 controllers=%@ classNameArray=%@",
+              controllerDesc, classNames);
+    }));
+
+    NSLog(@"[DYYY][PureDanmaku][Probe] 已安装控制器管理器探针");
+}
+
 // 诊断通用弹幕容器控制器：循环官方回调与当前视频是否允许弹幕
 static void WaaInstallDanmakuContainerDiagnosticsIfNeeded(void) {
     static BOOL hasInstalled = NO;
@@ -928,6 +980,7 @@ static void WaaInstallDanmakuRuntimeHooksIfNeeded(void) {
     WaaInstallDanmakuDataPoolHooksIfNeeded();
     WaaInstallPureModeDanmakuDiagnosticsIfNeeded();
     WaaInstallDanmakuContainerDiagnosticsIfNeeded();
+    WaaInstallPureModeControllerManagerProbeIfNeeded();
 }
 
 static NSArray *WaaAccumulatedDanmakus(id danmakuPlayer) {
