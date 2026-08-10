@@ -389,7 +389,9 @@ static id WaaDanmakuPlayerForView(UIView *playerView);
 @property(nonatomic, strong) NSTimer *timeSyncTimer;
 @property(nonatomic, assign) BOOL hasLastTimeSyncValue;
 @property(nonatomic, assign) double lastTimeSyncValue;
+@property(nonatomic, assign) CFTimeInterval lastTimeAdvancedAt;
 @property(nonatomic, assign) NSUInteger loadedDanmakuCount;
+@property(nonatomic, assign) NSUInteger tickCount;
 @end
 
 @implementation WaaPureDanmakuState
@@ -1074,9 +1076,56 @@ static void WaaStopPureDanmakuTimeSync(UIViewController *controller) {
     state.timeSyncTimer = nil;
     state.hasLastTimeSyncValue = NO;
     state.lastTimeSyncValue = 0.0;
+    state.lastTimeAdvancedAt = 0.0;
 }
 
 // 从原生播放器取视频时间，驱动自绘覆盖层；时间回退即视为视频循环
+// 清屏页自己的播放控制器会持续推送播放时间（驱动进度条与控制中心），
+// 而弹幕播放器的 timeDriver 在清屏模式下会被抖音冻住，所以以推送值为准
+static double gWaaPureModePushedPlayTime = -1.0;
+static CFTimeInterval gWaaPureModePushedAt = 0.0;
+
+static void WaaInstallPureModePlaybackTimeHookIfNeeded(void) {
+    static BOOL hasInstalled = NO;
+    if (hasInstalled) {
+        return;
+    }
+    Class controllerClass = NSClassFromString(@"AFDPureModePagePlaybackController");
+    SEL updateSelector = @selector(player:updatePlayTime:canPlayTime:totalTime:);
+    Method updateMethod = WaaOwnInstanceMethod(controllerClass, updateSelector);
+    if (!updateMethod) {
+        return;
+    }
+
+    hasInstalled = YES;
+    static void (*originalUpdate)(id, SEL, id, double, double, double) = NULL;
+    originalUpdate = (void (*)(id, SEL, id, double, double, double))method_getImplementation(updateMethod);
+    method_setImplementation(updateMethod, imp_implementationWithBlock(
+        ^(id controller, id player, double playTime, double canPlayTime, double totalTime) {
+        if (originalUpdate) {
+            originalUpdate(controller, updateSelector, player, playTime, canPlayTime, totalTime);
+        }
+        if (isfinite(playTime) && playTime >= 0.0) {
+            gWaaPureModePushedPlayTime = playTime;
+            gWaaPureModePushedAt = CACurrentMediaTime();
+        }
+    }));
+
+    NSLog(@"[DYYY][PureDanmaku] 已接管清屏页播放时间");
+}
+
+// 推送值需要新鲜；超过 2s 没更新就认为不可信（页面已退出或真暂停）
+static BOOL WaaPureModePushedPlayTime(double *playTime) {
+    if (gWaaPureModePushedPlayTime < 0.0 ||
+        CACurrentMediaTime() - gWaaPureModePushedAt > 2.0) {
+        return NO;
+    }
+    if (playTime) {
+        *playTime = gWaaPureModePushedPlayTime;
+    }
+    return YES;
+}
+
 static void WaaSyncPureDanmakuTime(UIViewController *controller) {
     if (!WaaShouldForceShowPureModeDanmaku()) {
         WaaStopPureDanmakuTimeSync(controller);
@@ -1091,6 +1140,7 @@ static void WaaSyncPureDanmakuTime(UIViewController *controller) {
     }
 
     WaaInstallDanmakuRuntimeHooksIfNeeded();
+    WaaInstallPureModePlaybackTimeHookIfNeeded();
 
     id danmakuPlayer = state.sourcePlayer;
     // 挂载时可能还没找到播放器，这里惰性补上
@@ -1111,6 +1161,12 @@ static void WaaSyncPureDanmakuTime(UIViewController *controller) {
     double (*currentTimeImplementation)(id, SEL) =
         (double (*)(id, SEL))[danmakuPlayer methodForSelector:currentTimeSelector];
     double currentTime = currentTimeImplementation ? currentTimeImplementation(danmakuPlayer, currentTimeSelector) : NAN;
+
+    // 清屏模式下弹幕播放器的时钟会停走，优先用清屏页推送的真实播放时间
+    double pushedTime = 0.0;
+    if (WaaPureModePushedPlayTime(&pushedTime)) {
+        currentTime = pushedTime;
+    }
     if (!isfinite(currentTime) || currentTime < 0.0) {
         return;
     }
@@ -1131,8 +1187,16 @@ static void WaaSyncPureDanmakuTime(UIViewController *controller) {
 
     double previousTime = state.lastTimeSyncValue;
     BOOL didRestartVideoLoop = state.hasLastTimeSyncValue && currentTime + 0.5 < previousTime;
-    // 时间不再前进即视为暂停，弹幕跟着冻住
-    BOOL isPaused = state.hasLastTimeSyncValue && !didRestartVideoLoop && fabs(currentTime - previousTime) < 0.001;
+
+    // 轮询（0.1s）比播放时间推送更密，相邻两次拿到同一个值是正常的；
+    // 因此按“持续停止前进的墙钟时长”判定暂停，避免误判造成弹幕抽动
+    CFTimeInterval now = CACurrentMediaTime();
+    if (!state.hasLastTimeSyncValue || didRestartVideoLoop ||
+        fabs(currentTime - previousTime) >= 0.001) {
+        state.lastTimeAdvancedAt = now;
+    }
+    BOOL isPaused = state.hasLastTimeSyncValue && !didRestartVideoLoop &&
+                    now - state.lastTimeAdvancedAt > 0.7;
     overlay.playbackPaused = isPaused;
     state.hasLastTimeSyncValue = YES;
     state.lastTimeSyncValue = currentTime;
@@ -1143,6 +1207,15 @@ static void WaaSyncPureDanmakuTime(UIViewController *controller) {
     }
     if (isPaused) {
         return;
+    }
+
+    // 每 30 tick（约 3s）采样一次，确认时钟确实在前进且游标在推进
+    state.tickCount++;
+    if (state.tickCount % 30 == 1) {
+        NSLog(@"[DYYY][PureDanmaku] 覆盖层心跳 time=%.3f pushed=%d cursor=%lu items=%lu 在屏=%lu",
+              currentTime, WaaPureModePushedPlayTime(NULL),
+              (unsigned long)overlay.cursor, (unsigned long)overlay.items.count,
+              (unsigned long)overlay.subviews.count);
     }
 
     [overlay updateToTime:currentTime];
@@ -1156,6 +1229,7 @@ static void WaaStartPureDanmakuTimeSync(UIViewController *controller) {
 
     state.hasLastTimeSyncValue = NO;
     state.lastTimeSyncValue = 0.0;
+    state.lastTimeAdvancedAt = CACurrentMediaTime();
     __weak UIViewController *weakController = controller;
     NSTimer *timer = [NSTimer timerWithTimeInterval:0.1
                                             repeats:YES
