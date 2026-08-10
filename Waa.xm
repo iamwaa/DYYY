@@ -974,31 +974,58 @@ static void WaaLogDanmakuShapeOnce(id danmaku) {
     }
     hasLogged = YES;
 
-    Method textMethod = class_getInstanceMethod([danmaku class], @selector(text));
-    Method timeOffsetMethod = class_getInstanceMethod([danmaku class], @selector(timeOffset));
-    Method offsetTimeMethod = class_getInstanceMethod([danmaku class], @selector(offsetTime));
-    NSString *shape = [danmaku description];
-    if (shape.length > 200) {
-        shape = [shape substringToIndex:200];
+    NSMutableString *selectorList = [NSMutableString string];
+    unsigned int methodCount = 0;
+    Method *methods = class_copyMethodList([danmaku class], &methodCount);
+    for (unsigned int index = 0; index < methodCount && selectorList.length < 600; index++) {
+        [selectorList appendFormat:@"%@ ", NSStringFromSelector(method_getName(methods[index]))];
     }
-    NSLog(@"[DYYY][PureDanmaku] 弹幕对象形状 class=%@ text=%s timeOffset=%s offsetTime=%s desc=%@",
-          NSStringFromClass([danmaku class]),
-          textMethod ? method_getTypeEncoding(textMethod) : "<none>",
-          timeOffsetMethod ? method_getTypeEncoding(timeOffsetMethod) : "<none>",
-          offsetTimeMethod ? method_getTypeEncoding(offsetTimeMethod) : "<none>",
-          shape);
+    free(methods);
+
+    NSLog(@"[DYYY][PureDanmaku] 弹幕对象形状 class=%@ 方法=%@",
+          NSStringFromClass([danmaku class]), selectorList);
 }
 
-// 把抖音的弹幕对象转成自绘所需的最小结构，并按时间排序
+// 数据池里存的可能是 AWEDanmakuItemDescriptor 这类包装器，
+// 真正的模型挂在 danmakuModel / metaData 上，逐层剥到带 text 的对象为止
+static id WaaResolveDanmakuModel(id danmaku) {
+    id candidate = danmaku;
+    for (NSUInteger depth = 0; depth < 3 && candidate; depth++) {
+        if (WaaDanmakuGetterReturns(candidate, @selector(text), '@')) {
+            return candidate;
+        }
+        id unwrapped = WaaDanmakuObjectValue(candidate, @selector(danmakuModel));
+        if (!unwrapped) {
+            unwrapped = WaaDanmakuObjectValue(candidate, @selector(metaData));
+        }
+        if (!unwrapped || unwrapped == candidate) {
+            break;
+        }
+        candidate = unwrapped;
+    }
+    return candidate;
+}
+
+// 把抖音的弹幕对象转成自绘所需的最小结构，按时间排序并去重
+// 循环时抖音会重新创建描述符，按对象身份去重不可靠，改用内容+时间
 static NSArray<WaaDanmakuItem *> *WaaBuildDanmakuItems(NSArray *danmakus) {
     NSMutableArray<WaaDanmakuItem *> *items = [NSMutableArray arrayWithCapacity:danmakus.count];
+    NSMutableSet<NSString *> *seenKeys = [NSMutableSet setWithCapacity:danmakus.count];
     for (id danmaku in danmakus) {
-        NSString *text = WaaDanmakuTextOf(danmaku);
-        double time = WaaDanmakuTimeOf(danmaku);
+        id model = WaaResolveDanmakuModel(danmaku);
+        NSString *text = WaaDanmakuTextOf(model);
+        double time = WaaDanmakuTimeOf(model);
         if (text.length == 0 || time < 0.0) {
             WaaLogDanmakuShapeOnce(danmaku);
             continue;
         }
+
+        NSString *key = [NSString stringWithFormat:@"%.2f|%@", time, text];
+        if ([seenKeys containsObject:key]) {
+            continue;
+        }
+        [seenKeys addObject:key];
+
         WaaDanmakuItem *item = [WaaDanmakuItem new];
         item.text = text;
         item.time = time;
