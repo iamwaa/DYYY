@@ -398,7 +398,7 @@ static id WaaDanmakuPlayerForView(UIView *playerView);
 static const CGFloat kWaaDanmakuFontSize = 15.0;
 static const CGFloat kWaaDanmakuLaneHeight = 27.0;
 static const CGFloat kWaaDanmakuTopInset = 96.0;
-static const CGFloat kWaaDanmakuBottomInset = 220.0;
+static const CGFloat kWaaDanmakuBottomInset = 120.0;
 static const CGFloat kWaaDanmakuLaneGap = 24.0;
 static const NSTimeInterval kWaaDanmakuTravelDuration = 8.0;
 static const NSUInteger kWaaDanmakuMaxActiveCount = 60;
@@ -505,6 +505,14 @@ static const NSUInteger kWaaDanmakuMaxLaneCount = 8;
 
     NSUInteger laneCount = [self laneCount];
     if (laneCount == 0 || self.items.count == 0) {
+        // 尺寸不够会静默丢弃所有弹幕，这里把原因记下来
+        static BOOL hasLoggedIdle = NO;
+        if (!hasLoggedIdle) {
+            hasLoggedIdle = YES;
+            NSLog(@"[DYYY][PureDanmaku] 覆盖层未出弹幕 bounds=%@ lanes=%lu items=%lu window=%d",
+                  NSStringFromCGRect(self.bounds), (unsigned long)laneCount,
+                  (unsigned long)self.items.count, self.window != nil);
+        }
         return;
     }
 
@@ -560,6 +568,15 @@ static const NSUInteger kWaaDanmakuMaxLaneCount = 8;
     CGFloat labelY = kWaaDanmakuTopInset + lane * kWaaDanmakuLaneHeight;
     label.frame = CGRectMake(containerWidth, labelY, labelWidth, kWaaDanmakuLaneHeight);
     [self addSubview:label];
+
+    // 确认标签真的上屏了，以及它落在什么位置
+    static BOOL hasLoggedSpawn = NO;
+    if (!hasLoggedSpawn) {
+        hasLoggedSpawn = YES;
+        NSLog(@"[DYYY][PureDanmaku] 首条弹幕上屏 text=%@ frame=%@ overlay=%@ lanes=%lu",
+              item.text, NSStringFromCGRect(label.frame), NSStringFromCGRect(self.bounds),
+              (unsigned long)laneCount);
+    }
 
     CGFloat distance = containerWidth + labelWidth;
     NSTimeInterval duration = kWaaDanmakuTravelDuration * (distance / containerWidth);
@@ -633,6 +650,15 @@ static UIView *WaaCurrentVisibleDanmakuPlayer(void) {
     return bestPlayer;
 }
 
+// 清屏页 view 在 viewWillAppear 时可能还是 zero，尺寸不足会让弹幕静默丢弃，回退到屏幕尺寸
+static CGRect WaaDanmakuOverlayBounds(UIViewController *controller) {
+    CGRect bounds = controller.view.bounds;
+    if (CGRectGetWidth(bounds) < 1.0 || CGRectGetHeight(bounds) < 1.0) {
+        bounds = UIScreen.mainScreen.bounds;
+    }
+    return bounds;
+}
+
 static void WaaAttachDanmakuOverlayToPureModeController(UIViewController *controller) {
     if (!WaaShouldForceShowPureModeDanmaku() || objc_getAssociatedObject(controller, &kWaaPureDanmakuStateKey)) {
         return;
@@ -647,7 +673,7 @@ static void WaaAttachDanmakuOverlayToPureModeController(UIViewController *contro
     WaaPureDanmakuState *state = [WaaPureDanmakuState new];
     state.sourcePlayer = WaaDanmakuPlayerForView(WaaCurrentVisibleDanmakuPlayer());
 
-    WaaDanmakuOverlayView *overlay = [[WaaDanmakuOverlayView alloc] initWithFrame:targetView.bounds];
+    WaaDanmakuOverlayView *overlay = [[WaaDanmakuOverlayView alloc] initWithFrame:WaaDanmakuOverlayBounds(controller)];
     overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [targetView addSubview:overlay];
     [targetView bringSubviewToFront:overlay];
@@ -660,10 +686,12 @@ static void WaaAttachDanmakuOverlayToPureModeController(UIViewController *contro
 static void WaaLayoutDanmakuOverlay(UIViewController *controller) {
     WaaPureDanmakuState *state = objc_getAssociatedObject(controller, &kWaaPureDanmakuStateKey);
     WaaDanmakuOverlayView *overlay = state.overlay;
-    if (overlay.superview == controller.view) {
-        overlay.frame = controller.view.bounds;
-        [controller.view bringSubviewToFront:overlay];
+    if (overlay.superview != controller.view) {
+        return;
     }
+
+    overlay.frame = WaaDanmakuOverlayBounds(controller);
+    [controller.view bringSubviewToFront:overlay];
 }
 
 static id WaaDanmakuPlayerForView(UIView *playerView) {
