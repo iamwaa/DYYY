@@ -48,33 +48,23 @@ static BOOL WaaCommentInputContainerIsCompactBottomBar(UIView *view) {
     return minY > screenHeight * 0.7 && height <= 140.0;
 }
 
-@interface UIView(Comment)
-- (void)setBackgroundColor:(UIColor *)backgroundColor;
-@end
-
-%hook UIView
-- (void)setBackgroundColor:(UIColor *)backgroundColor {
+UIColor *WaaCommentBackgroundColorForView(UIView *view, UIColor *backgroundColor) {
     CGFloat transparency = 1.0;
 
-    UIView *superview = self.superview;
-    while (superview) {
-        superview = superview.superview;
-    }
-
-    superview = self.superview;
-    BOOL isTargetMiddleContainer = [self isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer")];
-    BOOL isTargetCommentContainer = [self isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")];
+    UIView *superview = view.superview;
+    BOOL isTargetMiddleContainer = [view isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer")];
+    BOOL isTargetCommentContainer = [view isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")];
     BOOL isFirstChildOfMiddleContainer = NO;
     BOOL isFirstChildOfCommentContainer = NO;
     BOOL inputContainerHasSendButton = NO;
     BOOL inputContainerIsCompactBar = NO;
 
     if (isTargetCommentContainer) {
-        inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(self);
-        inputContainerIsCompactBar = WaaCommentInputContainerIsCompactBottomBar(self);
+        inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(view);
+        inputContainerIsCompactBar = WaaCommentInputContainerIsCompactBottomBar(view);
     } else if (isTargetMiddleContainer) {
-        inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(self);
-        UIView *parentView = self.superview;
+        inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(view);
+        UIView *parentView = view.superview;
         while (parentView) {
             if ([parentView isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
                 inputContainerHasSendButton = inputContainerHasSendButton || WaaViewContainsVisibleSendDUXButton(parentView);
@@ -87,7 +77,7 @@ static BOOL WaaCommentInputContainerIsCompactBottomBar(UIView *view) {
     
     while (!isTargetMiddleContainer && !isTargetCommentContainer && superview && !(isFirstChildOfMiddleContainer || isFirstChildOfCommentContainer)) {
         if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer")]) {
-            isFirstChildOfMiddleContainer = (superview.subviews.firstObject == self);
+            isFirstChildOfMiddleContainer = (superview.subviews.firstObject == view);
             inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(superview);
             UIView *parentView = superview.superview;
             while (parentView) {
@@ -100,20 +90,19 @@ static BOOL WaaCommentInputContainerIsCompactBottomBar(UIView *view) {
             }
         }
         else if ([superview isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
-            isFirstChildOfCommentContainer = (superview.subviews.firstObject == self);
+            isFirstChildOfCommentContainer = (superview.subviews.firstObject == view);
             inputContainerHasSendButton = WaaViewContainsVisibleSendDUXButton(superview);
             inputContainerIsCompactBar = WaaCommentInputContainerIsCompactBottomBar(superview);
         }
         superview = superview.superview;
     }
 
-    UIResponder *responder = self.nextResponder;
+    UIResponder *responder = view.nextResponder;
     BOOL isInCommentPanel = [responder isKindOfClass:NSClassFromString(@"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController")];
 
     BOOL shouldSkipInputTransparency = (isTargetCommentContainer || isTargetMiddleContainer || isFirstChildOfCommentContainer || isFirstChildOfMiddleContainer) && inputContainerHasSendButton && inputContainerIsCompactBar;
     if (shouldSkipInputTransparency) {
-        %orig(backgroundColor);
-        return;
+        return backgroundColor;
     }
 
     if ((isTargetCommentContainer || isFirstChildOfCommentContainer) && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
@@ -159,9 +148,8 @@ static BOOL WaaCommentInputContainerIsCompactBottomBar(UIView *view) {
         }
     }
 
-    %orig(backgroundColor);
+    return backgroundColor;
 }
-%end
 
 // 调整评论区文字颜色
 UIColor *darkerColorForColor(UIColor *color) {
@@ -217,12 +205,12 @@ UIColor *darkerColorForColor(UIColor *color) {
 
 @end
 
-%hook UIView
+static BOOL WaaClassNameMatches(UIView *view, NSString *moduleName, NSString *classSuffix) {
+    NSString *className = NSStringFromClass([view class]);
+    return [className containsString:moduleName] && [className hasSuffix:classSuffix];
+}
 
-- (void)layoutSubviews {
-    %orig;
-
-    NSString *className = NSStringFromClass([self class]);
+void WaaApplyCommentAppearanceAfterLayout(UIView *view) {
     BOOL isCommentColorEnabled = DYYYGetBool(@"WaaEnableCommentColor");
 
     if (isCommentColorEnabled) {
@@ -245,23 +233,21 @@ UIColor *darkerColorForColor(UIColor *color) {
             UIColor *darkerColor = darkerColorForColor(customColor);
             Class YYLabelClass = NSClassFromString(@"YYLabel");
 
-            for (UIView *subview in self.subviews) {
-                NSString *subviewClassName = NSStringFromClass([subview class]);
-
+            for (UIView *subview in view.subviews) {
                 if ([subview isKindOfClass:[UILabel class]] &&
-                    [subviewClassName isEqualToString:@"AWECommentSwiftBizUI.CommentInteractionBaseLabel"]) {
+                    WaaClassNameMatches(subview, @"AWECommentSwiftBizUI", @"CommentInteractionBaseLabel")) {
                     ((UILabel *)subview).textColor = darkerColor;
                 } else if (YYLabelClass && [subview isKindOfClass:YYLabelClass] &&
-                           [subviewClassName isEqualToString:@"AWECommentPanelListSwiftImpl.BaseCellCommentLabel"]) {
+                           WaaClassNameMatches(subview, @"AWECommentPanelListSwiftImpl", @"BaseCellCommentLabel")) {
                     ((UILabel *)subview).textColor = customColor;
                 } else if ([subview isKindOfClass:[UILabel class]] &&
-                           [subviewClassName isEqualToString:@"AWECommentPanelHeaderSwiftImpl.CommentHeaderCell"]) {
+                           WaaClassNameMatches(subview, @"AWECommentPanelHeaderSwiftImpl", @"CommentHeaderCell")) {
                     ((UILabel *)subview).textColor = customColor;
                 }
             }
 
             // 展开按钮
-            for (UIView *subview in self.subviews) {
+            for (UIView *subview in view.subviews) {
                 if ([subview isKindOfClass:[UIButton class]]) {
                     UIButton *button = (UIButton *)subview;
                     NSString *buttonText = [button titleForState:UIControlStateNormal];
@@ -271,17 +257,17 @@ UIColor *darkerColorForColor(UIColor *color) {
                 }
             }
 
-            [self traverseSubviews:self customColor:customColor];
+            [view traverseSubviews:view customColor:customColor];
         }
     }
 
     // 点赞数量
-    UIView *superview = self.superview;
+    UIView *superview = view.superview;
     while (superview) {
-        if ([NSStringFromClass([superview class]) isEqualToString:@"AWECommentPanelListSwiftImpl.ActionView"]) {
+        if (WaaClassNameMatches(superview, @"AWECommentPanelListSwiftImpl", @"ActionView")) {
             if (isCommentColorEnabled) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [self updateActionViewLabelColorRecursive:self];
+                    [view updateActionViewLabelColorRecursive:view];
                 });
             }
             break;
@@ -290,13 +276,11 @@ UIColor *darkerColorForColor(UIColor *color) {
     }
 
     // 隐藏输入框上方横线
-    for (UIView *subview in self.subviews) {
+    for (UIView *subview in view.subviews) {
         CGRect frame = subview.frame;
 
-        NSString *superclassName = NSStringFromClass([subview.superview class]);
-        BOOL isInTargetContainer = [superclassName isEqualToString:@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer"];
-
-        CGFloat parentWidth = self.bounds.size.width;
+        BOOL isInTargetContainer = WaaClassNameMatches(subview.superview, @"AWECommentInputViewSwiftImpl", @"CommentInputViewMiddleContainer");
+        CGFloat parentWidth = view.bounds.size.width;
         BOOL widthMatch = fabs(frame.size.width - parentWidth) < 1.0;
         BOOL heightMatch = frame.size.height > 0 && frame.size.height < 1.0;
 
@@ -306,21 +290,11 @@ UIColor *darkerColorForColor(UIColor *color) {
     }
 }
 
-%end
-
 // 调整评论区图标颜色
 BOOL isTargetCommentSubview(UIView *view) {
-    static NSSet<NSString *> *targetClassNames;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        targetClassNames = [NSSet setWithArray:@[
-            @"AWECommentPanelListSwiftImpl.ActionView",
-            @"AWECommentPanelListSwiftImpl.CommentFooterView"
-        ]];
-    });
-
     while (view) {
-        if ([targetClassNames containsObject:NSStringFromClass([view class])]) {
+        if (WaaClassNameMatches(view, @"AWECommentPanelListSwiftImpl", @"ActionView") ||
+            WaaClassNameMatches(view, @"AWECommentPanelListSwiftImpl", @"CommentFooterView")) {
             return YES;
         }
         view = view.superview;
@@ -328,9 +302,7 @@ BOOL isTargetCommentSubview(UIView *view) {
     return NO;
 }
 
-%hook UIImageView
-
-- (void)setImage:(UIImage *)image {
+UIImage *WaaCommentImageForDisplay(UIImageView *imageView, UIImage *image) {
     BOOL isCommentColorEnabled = DYYYGetBool(@"WaaEnableCommentColor");
     NSString *customHexColor = DYYYGetString(@"WaaCommentColor");
     UIColor *customColor = nil;
@@ -346,17 +318,13 @@ BOOL isTargetCommentSubview(UIView *view) {
         }
     }
 
-    if (isCommentColorEnabled && customColor && isTargetCommentSubview(self)) {
-        UIImage *templateImage = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        %orig(templateImage);
-        self.tintColor = darkerColorForColor(customColor);
-        return;
+    if (isCommentColorEnabled && customColor && isTargetCommentSubview(imageView)) {
+        imageView.tintColor = darkerColorForColor(customColor);
+        return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
     }
 
-    %orig;
+    return image;
 }
-
-%end
 
 #pragma mark - 隐藏功能
 

@@ -55,6 +55,7 @@
           @"dependencies" : @{
               // 普通依赖：当源设置开启时，目标设置项可用
               @"DYYYEnableDanmuColor" : @[ @"DYYYDanmuColor" ],
+              @"WaaEnableCommentColor" : @[ @"WaaCommentColor" ],
               @"DYYYEnableArea" : @[ @"DYYYGeonamesUsername", @"DYYYLabelColor", @"DYYYEnableRandomGradient" ],
 	              @"DYYYShowScheduleDisplay" : @[ @"DYYYScheduleStyle", @"DYYYProgressLabelColor", @"DYYYTimelineVerticalPosition" ],
               @"DYYYEnableNotificationTransparency" : @[ @"DYYYNotificationCornerRadius" ],
@@ -100,7 +101,12 @@
 
           // ===== 互斥激活配置 =====
           // 当源设置项关闭时，目标设置项才能激活
-          @"mutualExclusions" : @{@"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ], @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor" ], @"DYYYSkipPhoto": @[@"DYYYSkipPhotoText"]},
+          @"mutualExclusions" : @{
+              @"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ],
+              @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor" ],
+              @"DYYYSkipPhoto" : @[ @"DYYYSkipPhotoText" ],
+              @"DYYYEnableCommentBlur" : @[ @"WaaCommentTransparency", @"WaaInputBoxTransparency" ],
+          },
 
           // ===== 值依赖配置 =====
           // 基于字符串值的依赖关系

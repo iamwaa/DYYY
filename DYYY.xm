@@ -44,6 +44,10 @@
 #import "Sources/UI/DYYYToast.h"
 #import "Sources/Core/DYYYUtils.h"
 
+extern UIColor *WaaCommentBackgroundColorForView(UIView *view, UIColor *backgroundColor);
+extern void WaaApplyCommentAppearanceAfterLayout(UIView *view);
+extern UIImage *WaaCommentImageForDisplay(UIImageView *imageView, UIImage *image);
+
 static CGFloat gStartY = 0.0;
 static CGFloat gStartVal = 0.0;
 static DYEdgeMode gMode = DYEdgeModeNone;
@@ -15580,10 +15584,24 @@ static Class tabBarButtonClass = nil;
 
 %end
 
+static void DYYYApplyCommentInterfaceStyle(AWECommentContainerViewController *viewController) {
+    UIUserInterfaceStyle style = DYYYGetBool(@"WaaForceCommentDarkMode") ? UIUserInterfaceStyleDark : UIUserInterfaceStyleUnspecified;
+    viewController.overrideUserInterfaceStyle = style;
+    viewController.view.overrideUserInterfaceStyle = style;
+}
+
 %hook AWECommentContainerViewController
 
+- (void)viewDidLoad {
+    self.overrideUserInterfaceStyle = DYYYGetBool(@"WaaForceCommentDarkMode") ? UIUserInterfaceStyleDark : UIUserInterfaceStyleUnspecified;
+    %orig;
+    DYYYApplyCommentInterfaceStyle(self);
+}
+
 - (void)viewWillAppear:(BOOL)animated {
+    DYYYApplyCommentInterfaceStyle(self);
     %orig(animated);
+    DYYYApplyCommentInterfaceStyle(self);
     dyyyCommentViewVisible = YES;
     updateSpeedButtonVisibility();
     DYYYCommentPausePlaybackIfNeeded();
@@ -15591,6 +15609,7 @@ static Class tabBarButtonClass = nil;
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
+    DYYYApplyCommentInterfaceStyle(self);
     dyyyCommentViewVisible = YES;
     updateSpeedButtonVisibility();
     updateClearButtonVisibility();
@@ -15672,10 +15691,10 @@ static Class tabBarButtonClass = nil;
                         innerSubview.subviews[0].hidden = YES;
                     }
 
-                    UIView *whiteBackgroundView = [[UIView alloc] initWithFrame:innerSubview.bounds];
-                    whiteBackgroundView.backgroundColor = [UIColor whiteColor];
-                    whiteBackgroundView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-                    [innerSubview addSubview:whiteBackgroundView];
+                    UIView *backgroundView = [[UIView alloc] initWithFrame:innerSubview.bounds];
+                    backgroundView.backgroundColor = [UIColor systemBackgroundColor];
+                    backgroundView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                    [innerSubview addSubview:backgroundView];
                     break;
                 }
             }
@@ -15813,11 +15832,13 @@ static Class tabBarButtonClass = nil;
         }
     }
 
-    %orig(backgroundColor);
+    %orig(WaaCommentBackgroundColorForView(self, backgroundColor));
 }
 
 - (void)layoutSubviews {
     %orig;
+
+    WaaApplyCommentAppearanceAfterLayout(self);
 
     BOOL enableFS = DYYYGetBoolCached(@"DYYYEnableFullScreen");
     BOOL enableBlur = DYYYGetBoolCached(@"DYYYEnableCommentBlur");
@@ -17312,6 +17333,8 @@ static void DYYYRemoveAppLifecycleObservers(void) {
 
 %hook UIImageView
 - (void)setImage:(UIImage *)image {
+    image = WaaCommentImageForDisplay(self, image);
+
     if (DYYYShouldForceHideFeedVideoCollectButtonView(self)) {
         %orig(nil);
         return;

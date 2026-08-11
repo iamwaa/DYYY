@@ -5410,6 +5410,11 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
 	  // 【外观设置】分类
 	  NSMutableArray<AWESettingItemModel *> *UIItems = [NSMutableArray array];
 	  NSArray *UISettings = @[
+		  @{@"identifier" : @"WaaForceCommentDarkMode",
+			@"title" : @"强制评论区暗黑",
+			@"detail" : @"",
+			@"cellType" : @6,
+			@"imageName" : @"ic_comment_outlined_20"},
 		  @{@"identifier" : @"WaaEnableCommentColor",
 			@"title" : @"启用评论文字改色",
 			@"detail" : @"",
@@ -5467,19 +5472,19 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
 	  NSArray *danmakuParamSettings = @[
             @{ @"identifier" : @"WaaPureDanmakuMaxLanes",
                @"title" : @"弹幕行数上限",
-               @"subTitle" : @"同时最多占用多少行，默认 8，范围 1-20",
+               @"subTitle" : @"同时最多占用多少行，范围 1-20",
                @"detail" : @"",
                @"cellType" : @20,
                @"imageName" : @"ic_comment_outlined_20" },
             @{ @"identifier" : @"WaaPureDanmakuSpeed",
                @"title" : @"弹幕滚动速度",
-               @"subTitle" : @"滚过屏幕所需秒数，默认 8，越小越快，范围 2-30",
+               @"subTitle" : @"滚过屏幕所需秒数，越小越快，范围 2-30",
                @"detail" : @"",
                @"cellType" : @20,
                @"imageName" : @"ic_comment_outlined_20" },
             @{ @"identifier" : @"WaaPureDanmakuLaneHeight",
                @"title" : @"弹幕行高",
-               @"subTitle" : @"行高越小弹幕越密，默认 27，范围 20-60",
+               @"subTitle" : @"行高越小弹幕越密，范围 20-60",
                @"detail" : @"",
                @"cellType" : @20,
                @"imageName" : @"ic_comment_outlined_20" }
