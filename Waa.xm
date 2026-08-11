@@ -1239,7 +1239,12 @@ static void WaaSyncPureDanmakuTime(UIViewController *controller) {
     }
 
     double previousTime = state.lastTimeSyncValue;
-    BOOL didRestartVideoLoop = state.hasLastTimeSyncValue && currentTime + 0.5 < previousTime;
+    // 严格限定：必须是可信播放时间（>1s）真实回到接近开头（<0.3s）才算循环。
+    // 5.9→0、18.4→0 这种时间源切换造成的突变不满足条件，避免误触发清空
+    BOOL didRestartVideoLoop = state.hasLastTimeSyncValue &&
+                               previousTime > 1.0 &&
+                               currentTime < 0.3 &&
+                               currentTime + 0.5 < previousTime;
 
     // 轮询（0.1s）比播放时间推送更密，相邻两次拿到同一个值是正常的；
     // 因此按“持续停止前进的墙钟时长”判定暂停，避免误判造成弹幕抽动
