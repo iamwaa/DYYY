@@ -15584,24 +15584,57 @@ static Class tabBarButtonClass = nil;
 
 %end
 
+static NSString *DYYYCommentInterfaceStyleName(UIUserInterfaceStyle style) {
+    switch (style) {
+        case UIUserInterfaceStyleLight:
+            return @"light";
+        case UIUserInterfaceStyleDark:
+            return @"dark";
+        default:
+            return @"unspecified";
+    }
+}
+
+static void DYYYLogCommentInterfaceStyle(AWECommentContainerViewController *viewController, NSString *stage) {
+    UIView *view = viewController.isViewLoaded ? viewController.view : nil;
+    NSLog(@"[DYYY][CommentAppearance][Dark] stage=%@ enabled=%@ controller=%@ controllerOverride=%@ viewLoaded=%@ viewOverride=%@ controllerTrait=%@ viewTrait=%@ windowTrait=%@",
+          stage,
+          DYYYGetBool(@"WaaForceCommentDarkMode") ? @"YES" : @"NO",
+          NSStringFromClass([viewController class]),
+          DYYYCommentInterfaceStyleName(viewController.overrideUserInterfaceStyle),
+          view ? @"YES" : @"NO",
+          DYYYCommentInterfaceStyleName(view.overrideUserInterfaceStyle),
+          DYYYCommentInterfaceStyleName(viewController.traitCollection.userInterfaceStyle),
+          DYYYCommentInterfaceStyleName(view.traitCollection.userInterfaceStyle),
+          DYYYCommentInterfaceStyleName(view.window.traitCollection.userInterfaceStyle));
+}
+
 static void DYYYApplyCommentInterfaceStyle(AWECommentContainerViewController *viewController) {
     UIUserInterfaceStyle style = DYYYGetBool(@"WaaForceCommentDarkMode") ? UIUserInterfaceStyleDark : UIUserInterfaceStyleUnspecified;
-    viewController.overrideUserInterfaceStyle = style;
-    viewController.view.overrideUserInterfaceStyle = style;
+    if (viewController.overrideUserInterfaceStyle != style) {
+        viewController.overrideUserInterfaceStyle = style;
+    }
+    if (viewController.view.overrideUserInterfaceStyle != style) {
+        viewController.view.overrideUserInterfaceStyle = style;
+    }
 }
 
 %hook AWECommentContainerViewController
 
 - (void)viewDidLoad {
     self.overrideUserInterfaceStyle = DYYYGetBool(@"WaaForceCommentDarkMode") ? UIUserInterfaceStyleDark : UIUserInterfaceStyleUnspecified;
+    DYYYLogCommentInterfaceStyle(self, @"viewDidLoad.before");
     %orig;
     DYYYApplyCommentInterfaceStyle(self);
+    DYYYLogCommentInterfaceStyle(self, @"viewDidLoad.after");
 }
 
 - (void)viewWillAppear:(BOOL)animated {
     DYYYApplyCommentInterfaceStyle(self);
+    DYYYLogCommentInterfaceStyle(self, @"viewWillAppear.before");
     %orig(animated);
     DYYYApplyCommentInterfaceStyle(self);
+    DYYYLogCommentInterfaceStyle(self, @"viewWillAppear.after");
     dyyyCommentViewVisible = YES;
     updateSpeedButtonVisibility();
     DYYYCommentPausePlaybackIfNeeded();
@@ -15610,6 +15643,7 @@ static void DYYYApplyCommentInterfaceStyle(AWECommentContainerViewController *vi
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     DYYYApplyCommentInterfaceStyle(self);
+    DYYYLogCommentInterfaceStyle(self, @"viewDidAppear.after");
     dyyyCommentViewVisible = YES;
     updateSpeedButtonVisibility();
     updateClearButtonVisibility();
@@ -15629,6 +15663,14 @@ static void DYYYApplyCommentInterfaceStyle(AWECommentContainerViewController *vi
             }
         }
     }
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    NSString *previousStyle = DYYYCommentInterfaceStyleName(previousTraitCollection.userInterfaceStyle);
+    %orig(previousTraitCollection);
+    DYYYApplyCommentInterfaceStyle(self);
+    NSLog(@"[DYYY][CommentAppearance][Dark] traitCollectionDidChange previous=%@", previousStyle);
+    DYYYLogCommentInterfaceStyle(self, @"traitCollectionDidChange.after");
 }
 
 - (void)viewDidDisappear:(BOOL)animated {

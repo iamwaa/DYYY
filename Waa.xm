@@ -160,6 +160,80 @@ UIColor *darkerColorForColor(UIColor *color) {
     return color;
 }
 
+static char kWaaCommentAppearanceLogSignatureKey;
+static char kWaaCommentVisualLogSignaturesKey;
+
+static NSString *WaaCommentColorDescription(UIColor *color, UITraitCollection *traitCollection) {
+    if (!color) {
+        return @"nil";
+    }
+    UIColor *resolvedColor = traitCollection ? [color resolvedColorWithTraitCollection:traitCollection] : color;
+    CGFloat red = 0;
+    CGFloat green = 0;
+    CGFloat blue = 0;
+    CGFloat alpha = 0;
+    if ([resolvedColor getRed:&red green:&green blue:&blue alpha:&alpha]) {
+        return [NSString stringWithFormat:@"rgba(%.3f,%.3f,%.3f,%.3f)", red, green, blue, alpha];
+    }
+    return resolvedColor.description;
+}
+
+static NSString *WaaCommentTextSummary(UIView *label) {
+    NSString *text = nil;
+    if ([label respondsToSelector:@selector(text)]) {
+        text = [(id)label text];
+    }
+    if (text.length == 0 && [label respondsToSelector:@selector(attributedText)]) {
+        text = [[(id)label attributedText] string];
+    }
+    text = text ?: @"";
+    text = [text stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
+    return text.length > 40 ? [[text substringToIndex:40] stringByAppendingString:@"..."] : text;
+}
+
+static UIColor *WaaCommentAttributedForegroundColor(UIView *label) {
+    if (![label respondsToSelector:@selector(attributedText)]) {
+        return nil;
+    }
+    NSAttributedString *attributedText = [(id)label attributedText];
+    if (attributedText.length == 0) {
+        return nil;
+    }
+    return [attributedText attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:nil];
+}
+
+static void WaaLogCommentLabelIfChanged(UIView *label, NSString *stage, NSString *target, UIColor *beforeColor, UIColor *afterColor) {
+    if (!label) {
+        return;
+    }
+    NSString *attributedColor = WaaCommentColorDescription(WaaCommentAttributedForegroundColor(label), label.traitCollection);
+    NSString *signature = [NSString stringWithFormat:@"%@|%@|%@|%@|%@|%@",
+                                                     stage,
+                                                     target ?: @"none",
+                                                     WaaCommentTextSummary(label),
+                                                     WaaCommentColorDescription(beforeColor, label.traitCollection),
+                                                     WaaCommentColorDescription(afterColor, label.traitCollection),
+                                                     attributedColor];
+    NSString *signatureKey = [NSString stringWithFormat:@"%@|%@", stage, target ?: @"none"];
+    NSDictionary *previousSignatures = objc_getAssociatedObject(label, &kWaaCommentAppearanceLogSignatureKey);
+    if ([previousSignatures[signatureKey] isEqualToString:signature]) {
+        return;
+    }
+    NSMutableDictionary *updatedSignatures = [previousSignatures mutableCopy] ?: [NSMutableDictionary dictionary];
+    updatedSignatures[signatureKey] = signature;
+    objc_setAssociatedObject(label, &kWaaCommentAppearanceLogSignatureKey, [updatedSignatures copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSLog(@"[DYYY][CommentAppearance][Text] stage=%@ target=%@ class=%@ parent=%@ trait=%ld text=\"%@\" before=%@ after=%@ attributedForeground=%@",
+          stage,
+          target ?: @"none",
+          NSStringFromClass([label class]),
+          NSStringFromClass([label.superview class]),
+          (long)label.traitCollection.userInterfaceStyle,
+          WaaCommentTextSummary(label),
+          WaaCommentColorDescription(beforeColor, label.traitCollection),
+          WaaCommentColorDescription(afterColor, label.traitCollection),
+          attributedColor);
+}
+
 @interface UIView (CustomColor)
 - (void)traverseSubviews:(UIView *)view customColor:(UIColor *)customColor;
 - (void)updateActionViewLabelColorRecursive:(UIView *)view;
@@ -171,7 +245,9 @@ UIColor *darkerColorForColor(UIColor *color) {
     if ([view isKindOfClass:[UILabel class]]) {
         UILabel *label = (UILabel *)view;
         if ([label.text containsString:@"条评论"]) {
+            UIColor *beforeColor = label.textColor;
             label.textColor = customColor;
+            WaaLogCommentLabelIfChanged(label, @"comment-count", @"commentCount", beforeColor, label.textColor);
         }
     }
 
@@ -195,7 +271,10 @@ UIColor *darkerColorForColor(UIColor *color) {
     UIColor *darkerColor = darkerColorForColor(customColor);
 
     if ([view isKindOfClass:[UILabel class]]) {
-        ((UILabel *)view).textColor = darkerColor;
+        UILabel *label = (UILabel *)view;
+        UIColor *beforeColor = label.textColor;
+        label.textColor = darkerColor;
+        WaaLogCommentLabelIfChanged(label, @"action-view", @"actionLabel", beforeColor, label.textColor);
     }
 
     for (UIView *subview in view.subviews) {
@@ -210,11 +289,329 @@ static BOOL WaaClassNameMatches(UIView *view, NSString *moduleName, NSString *cl
     return [className containsString:moduleName] && [className hasSuffix:classSuffix];
 }
 
+static BOOL WaaViewIsInCommentScope(UIView *view) {
+    for (UIView *currentView = view; currentView; currentView = currentView.superview) {
+        NSString *className = NSStringFromClass([currentView class]);
+        if ([className containsString:@"AWEComment"] || [className containsString:@"CommentPanel"] || [className containsString:@"CommentInput"]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL WaaStoreCommentVisualSignatureIfChanged(UIView *view, NSString *key, NSString *signature) {
+    NSDictionary *previousSignatures = objc_getAssociatedObject(view, &kWaaCommentVisualLogSignaturesKey);
+    if ([previousSignatures[key] isEqualToString:signature]) {
+        return NO;
+    }
+    NSMutableDictionary *updatedSignatures = [previousSignatures mutableCopy] ?: [NSMutableDictionary dictionary];
+    updatedSignatures[key] = signature;
+    objc_setAssociatedObject(view, &kWaaCommentVisualLogSignaturesKey, [updatedSignatures copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return YES;
+}
+
+static NSString *WaaCommentImageDescription(UIImage *image) {
+    if (!image) {
+        return @"nil";
+    }
+    return [NSString stringWithFormat:@"ptr=%p size=%.1fx%.1f scale=%.1f mode=%ld",
+                                      image,
+                                      image.size.width,
+                                      image.size.height,
+                                      image.scale,
+                                      (long)image.renderingMode];
+}
+
+static NSString *WaaCommentCGColorDescription(CGColorRef color, UITraitCollection *traitCollection) {
+    return color ? WaaCommentColorDescription([UIColor colorWithCGColor:color], traitCollection) : @"nil";
+}
+
+static void WaaLogAllCommentTextAndIconColorsIfChanged(UIView *view) {
+    if (!WaaViewIsInCommentScope(view) ||
+        (!DYYYGetBool(@"WaaEnableCommentColor") && !DYYYGetBool(@"WaaForceCommentDarkMode"))) {
+        return;
+    }
+
+    NSString *className = NSStringFromClass([view class]);
+    NSString *parentClassName = NSStringFromClass([view.superview class]);
+    NSString *accessibility = view.accessibilityLabel ?: @"";
+    NSString *trait = [NSString stringWithFormat:@"%ld", (long)view.traitCollection.userInterfaceStyle];
+
+    BOOL hasTextColor = [view respondsToSelector:@selector(textColor)];
+    BOOL hasText = [view respondsToSelector:@selector(text)] || [view respondsToSelector:@selector(attributedText)];
+    if (hasTextColor || hasText) {
+        UIColor *textColor = hasTextColor ? [(id)view textColor] : nil;
+        NSString *placeholderText = @"";
+        UIColor *placeholderColor = nil;
+        if ([view isKindOfClass:[UITextField class]]) {
+            UITextField *textField = (UITextField *)view;
+            placeholderText = textField.placeholder ?: textField.attributedPlaceholder.string ?: @"";
+            placeholderColor = textField.attributedPlaceholder.length > 0
+                                   ? [textField.attributedPlaceholder attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:nil]
+                                   : nil;
+        }
+        NSString *signature = [NSString stringWithFormat:@"%@|%@|%@|%@|%@|%@|%@",
+                                                         WaaCommentTextSummary(view),
+                                                         WaaCommentColorDescription(textColor, view.traitCollection),
+                                                         WaaCommentColorDescription(WaaCommentAttributedForegroundColor(view), view.traitCollection),
+                                                         placeholderText,
+                                                         WaaCommentColorDescription(placeholderColor, view.traitCollection),
+                                                         WaaCommentColorDescription(view.tintColor, view.traitCollection),
+                                                         trait];
+        if (WaaStoreCommentVisualSignatureIfChanged(view, @"allText", signature)) {
+            NSLog(@"[DYYY][CommentAppearance][TextAll] class=%@ parent=%@ trait=%@ accessibility=\"%@\" text=\"%@\" textColor=%@ attributedForeground=%@ placeholder=\"%@\" placeholderForeground=%@ tint=%@",
+                  className,
+                  parentClassName,
+                  trait,
+                  accessibility,
+                  WaaCommentTextSummary(view),
+                  WaaCommentColorDescription(textColor, view.traitCollection),
+                  WaaCommentColorDescription(WaaCommentAttributedForegroundColor(view), view.traitCollection),
+                  placeholderText,
+                  WaaCommentColorDescription(placeholderColor, view.traitCollection),
+                  WaaCommentColorDescription(view.tintColor, view.traitCollection));
+        }
+    }
+
+    if ([view isKindOfClass:[UIButton class]]) {
+        UIButton *button = (UIButton *)view;
+        NSString *signature = [NSString stringWithFormat:@"%@|%@|%@|%@|%@|%@|%@|%@|%@|%@",
+                                                         [button titleForState:UIControlStateNormal] ?: @"",
+                                                         WaaCommentColorDescription([button titleColorForState:UIControlStateNormal], view.traitCollection),
+                                                         WaaCommentColorDescription([button titleColorForState:UIControlStateHighlighted], view.traitCollection),
+                                                         WaaCommentColorDescription([button titleColorForState:UIControlStateSelected], view.traitCollection),
+                                                         WaaCommentColorDescription([button titleColorForState:UIControlStateDisabled], view.traitCollection),
+                                                         WaaCommentImageDescription([button imageForState:UIControlStateNormal]),
+                                                         WaaCommentImageDescription([button imageForState:UIControlStateHighlighted]),
+                                                         WaaCommentImageDescription([button imageForState:UIControlStateSelected]),
+                                                         WaaCommentColorDescription(button.tintColor, view.traitCollection),
+                                                         trait];
+        if (WaaStoreCommentVisualSignatureIfChanged(view, @"allButton", signature)) {
+            NSLog(@"[DYYY][CommentAppearance][TextAll] kind=button class=%@ parent=%@ trait=%@ accessibility=\"%@\" title=\"%@\" normal=%@ highlighted=%@ selected=%@ disabled=%@ tint=%@ normalImage={%@} highlightedImage={%@} selectedImage={%@}",
+                  className,
+                  parentClassName,
+                  trait,
+                  accessibility,
+                  [button titleForState:UIControlStateNormal] ?: @"",
+                  WaaCommentColorDescription([button titleColorForState:UIControlStateNormal], view.traitCollection),
+                  WaaCommentColorDescription([button titleColorForState:UIControlStateHighlighted], view.traitCollection),
+                  WaaCommentColorDescription([button titleColorForState:UIControlStateSelected], view.traitCollection),
+                  WaaCommentColorDescription([button titleColorForState:UIControlStateDisabled], view.traitCollection),
+                  WaaCommentColorDescription(button.tintColor, view.traitCollection),
+                  WaaCommentImageDescription([button imageForState:UIControlStateNormal]),
+                  WaaCommentImageDescription([button imageForState:UIControlStateHighlighted]),
+                  WaaCommentImageDescription([button imageForState:UIControlStateSelected]));
+        }
+    }
+
+    BOOL isCustomIconView = ![view isKindOfClass:[UIImageView class]] && ![view isKindOfClass:[UIButton class]] &&
+                            ([className containsString:@"Icon"] || [className containsString:@"Image"] ||
+                             [className containsString:@"SVG"] || [className containsString:@"DUX"]);
+    if (isCustomIconView) {
+        NSString *signature = [NSString stringWithFormat:@"%@|%@|%@|%@|%@|%@",
+                                                         WaaCommentColorDescription(view.tintColor, view.traitCollection),
+                                                         WaaCommentColorDescription(view.backgroundColor, view.traitCollection),
+                                                         WaaCommentCGColorDescription(view.layer.backgroundColor, view.traitCollection),
+                                                         WaaCommentCGColorDescription(view.layer.borderColor, view.traitCollection),
+                                                         [NSString stringWithFormat:@"%.3f", view.alpha],
+                                                         trait];
+        if (WaaStoreCommentVisualSignatureIfChanged(view, @"allCustomIcon", signature)) {
+            NSLog(@"[DYYY][CommentAppearance][IconAll] kind=custom class=%@ parent=%@ trait=%@ accessibility=\"%@\" tint=%@ background=%@ layerBackground=%@ layerBorder=%@ alpha=%.3f",
+                  className,
+                  parentClassName,
+                  trait,
+                  accessibility,
+                  WaaCommentColorDescription(view.tintColor, view.traitCollection),
+                  WaaCommentColorDescription(view.backgroundColor, view.traitCollection),
+                  WaaCommentCGColorDescription(view.layer.backgroundColor, view.traitCollection),
+                  WaaCommentCGColorDescription(view.layer.borderColor, view.traitCollection),
+                  view.alpha);
+        }
+    }
+
+    if ([view isKindOfClass:[UIImageView class]]) {
+        UIImageView *imageView = (UIImageView *)view;
+        NSString *signature = [NSString stringWithFormat:@"%@|%@|%@|%@",
+                                                         WaaCommentImageDescription(imageView.image),
+                                                         WaaCommentImageDescription(imageView.highlightedImage),
+                                                         WaaCommentColorDescription(imageView.tintColor, view.traitCollection),
+                                                         trait];
+        if (WaaStoreCommentVisualSignatureIfChanged(view, @"allIcon", signature)) {
+            NSLog(@"[DYYY][CommentAppearance][IconAll] class=%@ parent=%@ trait=%@ accessibility=\"%@\" tint=%@ image={%@} highlightedImage={%@}",
+                  className,
+                  parentClassName,
+                  trait,
+                  accessibility,
+                  WaaCommentColorDescription(imageView.tintColor, view.traitCollection),
+                  WaaCommentImageDescription(imageView.image),
+                  WaaCommentImageDescription(imageView.highlightedImage));
+        }
+    }
+}
+
+static BOOL WaaCommentViewHasIconContainerAncestor(UIView *view) {
+    for (UIView *ancestor = view.superview; ancestor; ancestor = ancestor.superview) {
+        NSString *ancestorClass = NSStringFromClass([ancestor class]);
+        if ([ancestorClass containsString:@"ActionView"] || [ancestorClass containsString:@"FooterView"] ||
+            [ancestorClass containsString:@"Toolbar"] || [ancestorClass containsString:@"InputView"] ||
+            [ancestorClass containsString:@"HeaderView"]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL WaaCommentImageLooksLikeIcon(UIImageView *imageView) {
+    UIImage *image = imageView.image;
+    if (!image) {
+        return NO;
+    }
+    CGFloat width = image.size.width;
+    CGFloat height = image.size.height;
+    BOOL compactImage = width > 0 && height > 0 && width <= 48.0 && height <= 48.0;
+    BOOL templateImage = image.renderingMode == UIImageRenderingModeAlwaysTemplate;
+    NSString *className = NSStringFromClass([imageView class]);
+    BOOL iconClass = [className containsString:@"Icon"] || [className containsString:@"SVG"];
+    BOOL iconContainer = WaaCommentViewHasIconContainerAncestor(imageView);
+    return templateImage || iconClass || (compactImage && iconContainer);
+}
+
+static BOOL WaaCommentButtonImageLooksLikeIcon(UIButton *button, UIImage *image) {
+    if (!image) {
+        return NO;
+    }
+    NSString *className = NSStringFromClass([button class]);
+    BOOL iconClass = [className containsString:@"Icon"] || [className containsString:@"SVG"] || [className containsString:@"DUX"];
+    BOOL compactImage = image.size.width > 0 && image.size.height > 0 && image.size.width <= 48.0 && image.size.height <= 48.0;
+    return image.renderingMode == UIImageRenderingModeAlwaysTemplate || iconClass ||
+           (compactImage && WaaCommentViewHasIconContainerAncestor(button));
+}
+
+static BOOL WaaColorsEqualForView(UIColor *leftColor, UIColor *rightColor, UIView *view) {
+    if (leftColor == rightColor) {
+        return YES;
+    }
+    if (!leftColor || !rightColor) {
+        return NO;
+    }
+    UIColor *resolvedLeft = [leftColor resolvedColorWithTraitCollection:view.traitCollection];
+    UIColor *resolvedRight = [rightColor resolvedColorWithTraitCollection:view.traitCollection];
+    return CGColorEqualToColor(resolvedLeft.CGColor, resolvedRight.CGColor);
+}
+
+static BOOL WaaAttributedTextNeedsColor(NSAttributedString *attributedText, UIColor *targetColor, UIView *view) {
+    if (attributedText.length == 0) {
+        return NO;
+    }
+    __block BOOL needsUpdate = NO;
+    [attributedText enumerateAttribute:NSForegroundColorAttributeName
+                              inRange:NSMakeRange(0, attributedText.length)
+                              options:0
+                           usingBlock:^(id colorValue, NSRange range, BOOL *stop) {
+                             UIColor *color = [colorValue isKindOfClass:[UIColor class]] ? colorValue : nil;
+                             if (!WaaColorsEqualForView(color, targetColor, view)) {
+                                 needsUpdate = YES;
+                                 *stop = YES;
+                             }
+                           }];
+    return needsUpdate;
+}
+
+static void WaaApplyAllCommentTextAndIconColors(UIView *view, UIColor *textColor, UIColor *iconColor) {
+    if (!WaaViewIsInCommentScope(view)) {
+        return;
+    }
+
+    if ([view respondsToSelector:@selector(setTextColor:)]) {
+        UIColor *currentColor = [view respondsToSelector:@selector(textColor)] ? [(id)view textColor] : nil;
+        if (!WaaColorsEqualForView(currentColor, textColor, view)) {
+            [(id)view setTextColor:textColor];
+        }
+    }
+
+    if ([view respondsToSelector:@selector(attributedText)] && [view respondsToSelector:@selector(setAttributedText:)]) {
+        NSAttributedString *attributedText = [(id)view attributedText];
+        if (WaaAttributedTextNeedsColor(attributedText, textColor, view)) {
+            NSMutableAttributedString *updatedText = [attributedText mutableCopy];
+            [updatedText addAttribute:NSForegroundColorAttributeName value:textColor range:NSMakeRange(0, updatedText.length)];
+            [(id)view setAttributedText:updatedText];
+        }
+    }
+
+    if ([view isKindOfClass:[UITextField class]]) {
+        UITextField *textField = (UITextField *)view;
+        NSAttributedString *placeholder = textField.attributedPlaceholder;
+        if (WaaAttributedTextNeedsColor(placeholder, textColor, view)) {
+            NSMutableAttributedString *updatedPlaceholder = [placeholder mutableCopy];
+            [updatedPlaceholder addAttribute:NSForegroundColorAttributeName value:textColor range:NSMakeRange(0, updatedPlaceholder.length)];
+            textField.attributedPlaceholder = updatedPlaceholder;
+        }
+    }
+
+    if ([view isKindOfClass:[UIButton class]]) {
+        UIButton *button = (UIButton *)view;
+        for (NSNumber *stateValue in @[@(UIControlStateNormal), @(UIControlStateHighlighted), @(UIControlStateSelected), @(UIControlStateDisabled)]) {
+            UIControlState state = (UIControlState)stateValue.unsignedIntegerValue;
+            if (!WaaColorsEqualForView([button titleColorForState:state], textColor, view)) {
+                [button setTitleColor:textColor forState:state];
+            }
+            NSAttributedString *attributedTitle = [button attributedTitleForState:state];
+            if (WaaAttributedTextNeedsColor(attributedTitle, textColor, view)) {
+                NSMutableAttributedString *updatedTitle = [attributedTitle mutableCopy];
+                [updatedTitle addAttribute:NSForegroundColorAttributeName value:textColor range:NSMakeRange(0, updatedTitle.length)];
+                [button setAttributedTitle:updatedTitle forState:state];
+            }
+            UIImage *image = [button imageForState:state];
+            if (WaaCommentButtonImageLooksLikeIcon(button, image) && image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+                [button setImage:[image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:state];
+            }
+        }
+        if (!WaaColorsEqualForView(button.tintColor, iconColor, view)) {
+            button.tintColor = iconColor;
+        }
+    }
+
+    if ([view isKindOfClass:[UIImageView class]]) {
+        UIImageView *imageView = (UIImageView *)view;
+        if (WaaCommentImageLooksLikeIcon(imageView)) {
+            if (imageView.image && imageView.image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+                imageView.image = [imageView.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+            }
+            if (imageView.highlightedImage && imageView.highlightedImage.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+                imageView.highlightedImage = [imageView.highlightedImage imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+            }
+            if (!WaaColorsEqualForView(imageView.tintColor, iconColor, view)) {
+                imageView.tintColor = iconColor;
+            }
+        }
+    }
+
+    NSString *className = NSStringFromClass([view class]);
+    if (([className containsString:@"Icon"] || [className containsString:@"SVG"]) &&
+        !WaaColorsEqualForView(view.tintColor, iconColor, view)) {
+        view.tintColor = iconColor;
+    }
+}
+
 void WaaApplyCommentAppearanceAfterLayout(UIView *view) {
+    WaaLogAllCommentTextAndIconColorsIfChanged(view);
     BOOL isCommentColorEnabled = DYYYGetBool(@"WaaEnableCommentColor");
+    static NSInteger lastLoggedEnabledState = -1;
+    NSInteger enabledState = isCommentColorEnabled ? 1 : 0;
+    if (lastLoggedEnabledState != enabledState) {
+        lastLoggedEnabledState = enabledState;
+        NSLog(@"[DYYY][CommentAppearance][Text] enabled=%@ entryViewClass=%@", isCommentColorEnabled ? @"YES" : @"NO", NSStringFromClass([view class]));
+    }
 
     if (isCommentColorEnabled) {
         NSString *customHexColor = DYYYGetString(@"WaaCommentColor");
+        static NSString *lastLoggedColorConfig = nil;
+        @synchronized([UIView class]) {
+            if (![lastLoggedColorConfig isEqualToString:customHexColor ?: @""]) {
+                lastLoggedColorConfig = [customHexColor copy] ?: @"";
+                NSLog(@"[DYYY][CommentAppearance][Text] config enabled=YES value=\"%@\" entryViewClass=%@", lastLoggedColorConfig, NSStringFromClass([view class]));
+            }
+        }
         UIColor *customColor = nil;
 
         if (customHexColor.length > 0) {
@@ -228,21 +625,49 @@ void WaaApplyCommentAppearanceAfterLayout(UIView *view) {
             }
         }
 
-        // 用户名、内容、时间属地
+        if (!customColor) {
+            static NSString *lastInvalidColorConfig = nil;
+            @synchronized([UIView class]) {
+                if (![lastInvalidColorConfig isEqualToString:customHexColor ?: @""]) {
+                    lastInvalidColorConfig = [customHexColor copy] ?: @"";
+                    NSLog(@"[DYYY][CommentAppearance][Text] invalidColor value=\"%@\"", lastInvalidColorConfig);
+                }
+            }
+        }
+
+        // 评论区全部文字与可识别图标统一改色
         if (customColor) {
             UIColor *darkerColor = darkerColorForColor(customColor);
+            WaaApplyAllCommentTextAndIconColors(view, customColor, darkerColor);
+            WaaLogAllCommentTextAndIconColorsIfChanged(view);
+
             Class YYLabelClass = NSClassFromString(@"YYLabel");
 
             for (UIView *subview in view.subviews) {
-                if ([subview isKindOfClass:[UILabel class]] &&
-                    WaaClassNameMatches(subview, @"AWECommentSwiftBizUI", @"CommentInteractionBaseLabel")) {
-                    ((UILabel *)subview).textColor = darkerColor;
-                } else if (YYLabelClass && [subview isKindOfClass:YYLabelClass] &&
-                           WaaClassNameMatches(subview, @"AWECommentPanelListSwiftImpl", @"BaseCellCommentLabel")) {
-                    ((UILabel *)subview).textColor = customColor;
-                } else if ([subview isKindOfClass:[UILabel class]] &&
-                           WaaClassNameMatches(subview, @"AWECommentPanelHeaderSwiftImpl", @"CommentHeaderCell")) {
-                    ((UILabel *)subview).textColor = customColor;
+                BOOL isUILabel = [subview isKindOfClass:[UILabel class]];
+                BOOL isYYLabel = YYLabelClass && [subview isKindOfClass:YYLabelClass];
+                if (isUILabel || isYYLabel) {
+                    UIColor *beforeColor = [subview respondsToSelector:@selector(textColor)] ? [(id)subview textColor] : nil;
+                    NSString *target = nil;
+                    UIColor *targetColor = nil;
+
+                    if (isUILabel && WaaClassNameMatches(subview, @"AWECommentSwiftBizUI", @"CommentInteractionBaseLabel")) {
+                        target = @"interaction";
+                        targetColor = darkerColor;
+                    } else if (isYYLabel && WaaClassNameMatches(subview, @"AWECommentPanelListSwiftImpl", @"BaseCellCommentLabel")) {
+                        target = @"content";
+                        targetColor = customColor;
+                    } else if (isUILabel && WaaClassNameMatches(subview, @"AWECommentPanelHeaderSwiftImpl", @"CommentHeaderCell")) {
+                        target = @"header";
+                        targetColor = customColor;
+                    }
+
+                    if (targetColor && [subview respondsToSelector:@selector(setTextColor:)]) {
+                        [(id)subview setTextColor:targetColor];
+                        WaaLogCommentLabelIfChanged(subview, @"matched", target, beforeColor, [(id)subview textColor]);
+                    } else if (WaaViewIsInCommentScope(subview)) {
+                        WaaLogCommentLabelIfChanged(subview, @"candidate", @"unmatched", beforeColor, beforeColor);
+                    }
                 }
             }
 
@@ -252,7 +677,10 @@ void WaaApplyCommentAppearanceAfterLayout(UIView *view) {
                     UIButton *button = (UIButton *)subview;
                     NSString *buttonText = [button titleForState:UIControlStateNormal];
                     if ([buttonText containsString:@"展开"] && [buttonText containsString:@"条回复"]) {
+                        UIColor *beforeColor = [button titleColorForState:UIControlStateNormal];
                         [button setTitleColor:darkerColor forState:UIControlStateNormal];
+                        UILabel *titleLabel = button.titleLabel;
+                        WaaLogCommentLabelIfChanged(titleLabel, @"reply-button", @"expandReplies", beforeColor, [button titleColorForState:UIControlStateNormal]);
                     }
                 }
             }
