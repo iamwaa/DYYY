@@ -10,6 +10,7 @@ static NSString *const kDYYYHideMusicButtonKey = @"DYYYHideMusicButton";
 static NSString *const kDYYYHideCancelMuteKey = @"DYYYHideCancelMute";
 
 typedef void (*DYYYVoidLayoutIMP)(id, SEL);
+typedef void (*DYYYWillMoveToSuperviewIMP)(id, SEL, UIView *);
 
 typedef struct {
     const char *className;
@@ -22,63 +23,11 @@ static atomic_bool gDYYYHideMusicButtonHooksStarted = false;
 
 static DYYYVoidLayoutIMP gOrigMusicCoverButtonLayout = NULL;
 static DYYYVoidLayoutIMP gOrigListenFeedViewLayout = NULL;
-static DYYYVoidLayoutIMP gOrigClassicMusicViewLayout = NULL;
-static DYYYVoidLayoutIMP gOrigStyleOneMusicViewLayout = NULL;
-static DYYYVoidLayoutIMP gOrigStyleTwoMusicViewLayout = NULL;
 static DYYYVoidLayoutIMP gOrigCancelMuteAwemeViewLayout = NULL;
-static DYYYVoidLayoutIMP gOrigLiveCancelMuteAwemeViewLayout = NULL;
+static DYYYWillMoveToSuperviewIMP gOrigCancelMuteAwemeViewWillMove = NULL;
 
 static BOOL DYYYHideMusicButtonEnabled(void) {
     return DYYYGetBool(kDYYYHideMusicButtonKey);
-}
-
-static BOOL DYYYShouldHideCancelMuteChrome(void) {
-    // 隐藏音乐按钮时，默认静音场景下占同一右下角位的「取消静音」也应一并收掉。
-    return DYYYHideMusicButtonEnabled() || DYYYGetBool(kDYYYHideCancelMuteKey);
-}
-
-static void DYYYRemoveMusicChromeView(UIView *view) {
-    if (![view isKindOfClass:[UIView class]]) {
-        return;
-    }
-    view.hidden = YES;
-    [view removeFromSuperview];
-}
-
-static BOOL DYYYClassNameMatchesMusicContainer(NSString *className) {
-    if (className.length == 0) {
-        return NO;
-    }
-    return [className isEqualToString:@"AWEPlayInteractionMusicView"] ||
-           [className isEqualToString:@"AWEPlayInteractionStyleOneMusicView"] ||
-           [className isEqualToString:@"AWEPlayInteractionStyleTwoMusicView"] ||
-           [className isEqualToString:@"AWEPlayInteractionListenFeedView"];
-}
-
-static UIView *DYYYNearestMusicContainerView(UIView *view) {
-    UIView *current = view;
-    while (current) {
-        NSString *className = NSStringFromClass(object_getClass(current));
-        if (DYYYClassNameMatchesMusicContainer(className)) {
-            return current;
-        }
-        current = current.superview;
-    }
-    return nil;
-}
-
-static BOOL DYYYMusicCoverAccessibilityShouldHide(NSString *accessibilityLabel) {
-    if (accessibilityLabel.length == 0) {
-        return NO;
-    }
-    if ([accessibilityLabel isEqualToString:@"音乐详情"]) {
-        return YES;
-    }
-    // 跟拍/模板视频会把右下角音乐位改成「拍同款」文案
-    if ([accessibilityLabel isEqualToString:@"拍同款"] || [accessibilityLabel containsString:@"拍同款"]) {
-        return YES;
-    }
-    return NO;
 }
 
 static void DYYYHideMusicCoverButtonIfNeeded(UIView *button) {
@@ -86,40 +35,29 @@ static void DYYYHideMusicCoverButtonIfNeeded(UIView *button) {
         return;
     }
 
-    UIView *container = DYYYNearestMusicContainerView(button);
-    if (container) {
-        DYYYRemoveMusicChromeView(container);
-        return;
-    }
-
-    NSString *accessibilityLabel = nil;
-    if ([button respondsToSelector:@selector(accessibilityLabel)]) {
-        accessibilityLabel = button.accessibilityLabel;
-    }
-    if (!DYYYMusicCoverAccessibilityShouldHide(accessibilityLabel)) {
-        return;
-    }
-
-    UIView *parent = button.superview;
-    if (parent) {
-        DYYYRemoveMusicChromeView(parent);
-    } else {
-        DYYYRemoveMusicChromeView(button);
+    if ([button.accessibilityLabel isEqualToString:@"音乐详情"]) {
+        button.alpha = 0;
     }
 }
 
-static void DYYYHideMusicContainerIfNeeded(UIView *view) {
-    if (!DYYYHideMusicButtonEnabled()) {
-        return;
+static void DYYYHideListenFeedViewIfNeeded(UIView *view) {
+    if (DYYYHideMusicButtonEnabled() && [view isKindOfClass:[UIView class]]) {
+        view.alpha = 0;
     }
-    DYYYRemoveMusicChromeView(view);
 }
 
 static void DYYYHideCancelMuteViewIfNeeded(UIView *view) {
-    if (!DYYYShouldHideCancelMuteChrome()) {
+    if (!DYYYGetBool(kDYYYHideCancelMuteKey) || ![view isKindOfClass:[UIView class]]) {
         return;
     }
-    DYYYRemoveMusicChromeView(view);
+
+    UIView *superview = view.superview;
+    if ([superview isKindOfClass:NSClassFromString(@"AWEBaseElementView")] && DYYYHideMusicButtonEnabled()) {
+        [superview removeFromSuperview];
+        return;
+    }
+
+    view.hidden = YES;
 }
 
 #pragma mark - Replacements
@@ -135,28 +73,7 @@ static void DYYYListenFeedViewLayoutSubviews(id self, SEL _cmd) {
     if (gOrigListenFeedViewLayout) {
         gOrigListenFeedViewLayout(self, _cmd);
     }
-    DYYYHideMusicContainerIfNeeded((UIView *)self);
-}
-
-static void DYYYClassicMusicViewLayoutSubviews(id self, SEL _cmd) {
-    if (gOrigClassicMusicViewLayout) {
-        gOrigClassicMusicViewLayout(self, _cmd);
-    }
-    DYYYHideMusicContainerIfNeeded((UIView *)self);
-}
-
-static void DYYYStyleOneMusicViewLayoutSubviews(id self, SEL _cmd) {
-    if (gOrigStyleOneMusicViewLayout) {
-        gOrigStyleOneMusicViewLayout(self, _cmd);
-    }
-    DYYYHideMusicContainerIfNeeded((UIView *)self);
-}
-
-static void DYYYStyleTwoMusicViewLayoutSubviews(id self, SEL _cmd) {
-    if (gOrigStyleTwoMusicViewLayout) {
-        gOrigStyleTwoMusicViewLayout(self, _cmd);
-    }
-    DYYYHideMusicContainerIfNeeded((UIView *)self);
+    DYYYHideListenFeedViewIfNeeded((UIView *)self);
 }
 
 static void DYYYCancelMuteAwemeViewLayoutSubviews(id self, SEL _cmd) {
@@ -166,11 +83,19 @@ static void DYYYCancelMuteAwemeViewLayoutSubviews(id self, SEL _cmd) {
     DYYYHideCancelMuteViewIfNeeded((UIView *)self);
 }
 
-static void DYYYLiveCancelMuteAwemeViewLayoutSubviews(id self, SEL _cmd) {
-    if (gOrigLiveCancelMuteAwemeViewLayout) {
-        gOrigLiveCancelMuteAwemeViewLayout(self, _cmd);
+static void DYYYCancelMuteAwemeViewWillMoveToSuperview(id self, SEL _cmd, UIView *newSuperview) {
+    if (gOrigCancelMuteAwemeViewWillMove) {
+        gOrigCancelMuteAwemeViewWillMove(self, _cmd, newSuperview);
     }
-    DYYYHideCancelMuteViewIfNeeded((UIView *)self);
+
+    if (newSuperview != nil || !DYYYHideMusicButtonEnabled()) {
+        return;
+    }
+
+    UIView *superview = [(UIView *)self superview];
+    if ([superview isKindOfClass:NSClassFromString(@"AWEBaseElementView")]) {
+        [superview removeFromSuperview];
+    }
 }
 
 #pragma mark - Install
@@ -240,6 +165,53 @@ static BOOL DYYYInstallLayoutSubviewsHook(Class cls, DYYYVoidLayoutIMP replaceme
     return YES;
 }
 
+static BOOL DYYYInstallWillMoveToSuperviewHook(Class cls) {
+    if (!cls) {
+        return NO;
+    }
+
+    SEL selector = @selector(willMoveToSuperview:);
+    Method existing = class_getInstanceMethod(cls, selector);
+    if (!existing) {
+        NSLog(@"[DYYY][RuntimeHook][HideMusicButton] 缺少 willMoveToSuperview:：%@", NSStringFromClass(cls));
+        return NO;
+    }
+
+    const char *typeEncoding = method_getTypeEncoding(existing);
+    IMP existingIMP = method_getImplementation(existing);
+    if (existingIMP == (IMP)DYYYCancelMuteAwemeViewWillMoveToSuperview) {
+        return gOrigCancelMuteAwemeViewWillMove != NULL;
+    }
+
+    BOOL methodDefinedOnClass = NO;
+    unsigned int methodCount = 0;
+    Method *methods = class_copyMethodList(cls, &methodCount);
+    for (unsigned int i = 0; i < methodCount; i++) {
+        if (method_getName(methods[i]) == selector) {
+            methodDefinedOnClass = YES;
+            break;
+        }
+    }
+    free(methods);
+
+    if (!methodDefinedOnClass) {
+        if (!class_addMethod(cls, selector, (IMP)DYYYCancelMuteAwemeViewWillMoveToSuperview, typeEncoding)) {
+            NSLog(@"[DYYY][RuntimeHook][HideMusicButton] class_addMethod 失败：%@ willMoveToSuperview:", NSStringFromClass(cls));
+            return NO;
+        }
+        gOrigCancelMuteAwemeViewWillMove = (DYYYWillMoveToSuperviewIMP)existingIMP;
+        return YES;
+    }
+
+    IMP previous = method_setImplementation(existing, (IMP)DYYYCancelMuteAwemeViewWillMoveToSuperview);
+    if (!previous || previous == (IMP)DYYYCancelMuteAwemeViewWillMoveToSuperview) {
+        NSLog(@"[DYYY][RuntimeHook][HideMusicButton] 无法保存原 IMP：%@ willMoveToSuperview:", NSStringFromClass(cls));
+        return NO;
+    }
+    gOrigCancelMuteAwemeViewWillMove = (DYYYWillMoveToSuperviewIMP)previous;
+    return YES;
+}
+
 void DYYYStartHideMusicButtonHooks(void) {
     bool expected = false;
     if (!atomic_compare_exchange_strong(&gDYYYHideMusicButtonHooksStarted, &expected, true)) {
@@ -249,11 +221,7 @@ void DYYYStartHideMusicButtonHooks(void) {
     DYYYHideMusicLayoutHookSpec specs[] = {
         {"AWEMusicCoverButton", &gOrigMusicCoverButtonLayout, DYYYMusicCoverButtonLayoutSubviews, YES},
         {"AWEPlayInteractionListenFeedView", &gOrigListenFeedViewLayout, DYYYListenFeedViewLayoutSubviews, YES},
-        {"AWEPlayInteractionMusicView", &gOrigClassicMusicViewLayout, DYYYClassicMusicViewLayoutSubviews, NO},
-        {"AWEPlayInteractionStyleOneMusicView", &gOrigStyleOneMusicViewLayout, DYYYStyleOneMusicViewLayoutSubviews, NO},
-        {"AWEPlayInteractionStyleTwoMusicView", &gOrigStyleTwoMusicViewLayout, DYYYStyleTwoMusicViewLayoutSubviews, NO},
         {"AFDCancelMuteAwemeView", &gOrigCancelMuteAwemeViewLayout, DYYYCancelMuteAwemeViewLayoutSubviews, YES},
-        {"AWELiveCancelMuteAwemeView", &gOrigLiveCancelMuteAwemeViewLayout, DYYYLiveCancelMuteAwemeViewLayoutSubviews, NO},
     };
 
     NSUInteger installed = 0;
@@ -268,6 +236,11 @@ void DYYYStartHideMusicButtonHooks(void) {
         if (DYYYInstallLayoutSubviewsHook(cls, specs[i].replacement, specs[i].originalSlot, specs[i].required)) {
             installed += 1;
         }
+    }
+
+    Class cancelMuteClass = objc_getClass("AFDCancelMuteAwemeView");
+    if (DYYYInstallWillMoveToSuperviewHook(cancelMuteClass)) {
+        installed += 1;
     }
 
     NSLog(@"[DYYY][RuntimeHook][HideMusicButton] 安装完成，成功 %lu 个目标", (unsigned long)installed);

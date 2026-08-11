@@ -606,6 +606,8 @@ static NSSet<NSString *> *DYYYInlineTextInputIdentifiers(void) {
           @"DYYYSelfTitle",
           @"DYYYSheetBlurTransparent", @"DYYYTabBarHeight", @"DYYYTimelineVerticalPosition", @"DYYYTopBarTransparent",
           @"DYYYVideoBGColor", @"DYYYDanmuColor", @"DYYYLabelColor", @"DYYYProgressLabelColor",
+          @"WaaCommentColor", @"WaaCommentTransparency", @"WaaInputBoxTransparency",
+          @"WaaPureDanmakuMaxLanes", @"WaaPureDanmakuSpeed", @"WaaPureDanmakuLaneHeight",
           @"DYYYEnableFloatClearButtonSize", @"DYYYSpeedButtonSize", @"DYYYSpeedSettings", @"DYYYAutoHideSpeedButtonTime"
       ]];
     });
@@ -621,6 +623,12 @@ static NSString *DYYYInlineTextInputPlaceholder(NSString *identifier) {
         @"DYYYSpeedSettings" : @"逗号分隔",
         @"DYYYAutoHideSpeedButtonTime" : @"s",
         @"DYYYCommentContent" : @"不填则默认",
+        @"WaaCommentColor" : @"十六进制",
+        @"WaaCommentTransparency" : @"0-1小数",
+        @"WaaInputBoxTransparency" : @"0-1小数",
+        @"WaaPureDanmakuMaxLanes" : @"默认 8",
+        @"WaaPureDanmakuSpeed" : @"默认 8 秒",
+        @"WaaPureDanmakuLaneHeight" : @"默认 27",
         @"DYYYVideoBGColor" : @"十六进制", @"DYYYDanmuColor" : @"十六进制或 random",
         @"DYYYLabelColor" : @"十六进制", @"DYYYProgressLabelColor" : @"十六进制"
     };
@@ -646,7 +654,8 @@ static UIKeyboardType DYYYInlineTextInputKeyboardType(NSString *identifier) {
     NSSet<NSString *> *decimalIdentifiers = [NSSet setWithArray:@[
         @"DYYYAvatarViewTransparency", @"DYYYCommentBlurTransparent", @"DYYYGlobalTransparency", @"DYYYNotificationCornerRadius",
         @"DYYYSheetBlurTransparent", @"DYYYTimelineVerticalPosition", @"DYYYTopBarTransparent", @"DYYYEnableFloatClearButtonSize",
-        @"DYYYSpeedButtonSize", @"DYYYAutoHideSpeedButtonTime"
+        @"DYYYSpeedButtonSize", @"DYYYAutoHideSpeedButtonTime", @"WaaCommentTransparency", @"WaaInputBoxTransparency",
+        @"WaaPureDanmakuMaxLanes", @"WaaPureDanmakuSpeed", @"WaaPureDanmakuLaneHeight"
     ]];
     if ([identifier isEqualToString:@"DYYYFilterLowLikes"] || [identifier isEqualToString:@"DYYYFilterTimeLimit"]) {
         return UIKeyboardTypeNumberPad;
@@ -690,7 +699,8 @@ static CGFloat DYYYInlineTextInputPreferredWidth(NSString *identifier, CGFloat c
         @"DYYYElementScale", @"DYYYEnableFloatClearButtonSize", @"DYYYSpeedButtonSize", @"DYYYAutoHideSpeedButtonTime",
         @"DYYYFilterLowLikes", @"DYYYFilterTimeLimit", @"DYYYGlobalTransparency",
         @"DYYYIPLabelScale", @"DYYYIPLabelVerticalOffset", @"DYYYNicknameScale", @"DYYYNicknameVerticalOffset", @"DYYYNotificationCornerRadius",
-        @"DYYYSheetBlurTransparent", @"DYYYTabBarHeight", @"DYYYTimelineVerticalPosition", @"DYYYTopBarTransparent"
+        @"DYYYSheetBlurTransparent", @"DYYYTabBarHeight", @"DYYYTimelineVerticalPosition", @"DYYYTopBarTransparent",
+        @"WaaCommentTransparency", @"WaaInputBoxTransparency"
     ]];
     NSSet<NSString *> *longIdentifiers = [NSSet setWithArray:@[
         @"DYYYCommentContent", @"DYYYInterfaceDownload", @"DYYYRemoteConfigURL", @"DYYYSpeedSettings"
@@ -5391,7 +5401,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
 	WaaHookItem.type = 0;
 	WaaHookItem.svgIconImageName = @"ic_star_outlined_20";
 	WaaHookItem.cellType = 26;
-	WaaHookItem.colorStyle = 0;
+    WaaHookItem.colorStyle = 2;
 	WaaHookItem.isEnable = YES;
 	WaaHookItem.cellTappedBlock = ^{
 	  // 创建基本设置二级界面的设置项
@@ -5431,17 +5441,60 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
 	  // 【隐藏设置】分类
 	  NSMutableArray<AWESettingItemModel *> *HideItems = [NSMutableArray array];
 	  NSArray *HideSettings = @[
-		  @{@"identifier" : @"WaaEnablePureModePlus",
-			@"title" : @"双指清屏Plus",
-			@"detail" : @"",
-			@"cellType" : @6,
-			@"imageName" : @"ic_eyeslash_outlined_16"}
+          @{ @"identifier" : @"WaaEnablePureModePlus",
+             @"title" : @"双指清屏Plus",
+             @"detail" : @"",
+             @"cellType" : @6,
+             @"imageName" : @"ic_eyeslash_outlined_16" },
+          @{ @"identifier" : @"WaaPureModePlusShowDanmaku",
+             @"title" : @"清屏显示弹幕",
+             @"subTitle" : @"双指清屏Plus触发时保留弹幕",
+             @"detail" : @"",
+             @"cellType" : @37,
+             @"imageName" : @"ic_comment_outlined_20" }
 	  ];
 
+	  AWESettingItemModel *showDanmakuItem = nil;
 	  for (NSDictionary *dict in HideSettings) {
 		  AWESettingItemModel *item = [DYYYSettingsHelper createSettingItem:dict cellTapHandlers:cellTapHandlers];
 		  [HideItems addObject:item];
-	  }	  
+		  if ([item.identifier isEqualToString:@"WaaPureModePlusShowDanmaku"]) {
+			  showDanmakuItem = item;
+		  }
+	  }
+
+	  // 弹幕参数项：描述走副标题（cellType 20 才渲染 subTitle），仅在「清屏显示弹幕」开启后显示
+	  NSArray *danmakuParamSettings = @[
+            @{ @"identifier" : @"WaaPureDanmakuMaxLanes",
+               @"title" : @"弹幕行数上限",
+               @"subTitle" : @"同时最多占用多少行，默认 8，范围 1-20",
+               @"detail" : @"",
+               @"cellType" : @20,
+               @"imageName" : @"ic_comment_outlined_20" },
+            @{ @"identifier" : @"WaaPureDanmakuSpeed",
+               @"title" : @"弹幕滚动速度",
+               @"subTitle" : @"滚过屏幕所需秒数，默认 8，越小越快，范围 2-30",
+               @"detail" : @"",
+               @"cellType" : @20,
+               @"imageName" : @"ic_comment_outlined_20" },
+            @{ @"identifier" : @"WaaPureDanmakuLaneHeight",
+               @"title" : @"弹幕行高",
+               @"subTitle" : @"行高越小弹幕越密，默认 27，范围 20-60",
+               @"detail" : @"",
+               @"cellType" : @20,
+               @"imageName" : @"ic_comment_outlined_20" }
+	  ];
+
+	  NSMutableArray<AWESettingItemModel *> *danmakuParamItems = [NSMutableArray array];
+	  for (NSDictionary *dict in danmakuParamSettings) {
+		  AWESettingItemModel *item = [DYYYSettingsHelper createSettingItem:dict cellTapHandlers:cellTapHandlers];
+		  [danmakuParamItems addObject:item];
+	  }
+
+	  // 构建搜索索引时全量收录，保证全局搜索仍能搜到参数项
+	  if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WaaPureModePlusShowDanmaku"] || DYYYBuildingSettingsSearchIndex) {
+		  [HideItems addObjectsFromArray:danmakuParamItems];
+	  }  
 
 	  // 【增强设置】分类
 	  NSMutableArray<AWESettingItemModel *> *EnhancedItems = [NSMutableArray array];
@@ -5461,7 +5514,8 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
 	// 创建并组织所有section
 	  NSMutableArray *sections = [NSMutableArray array];
 	  [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"外观设置" items:UIItems]];
-	  [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"隐藏设置" items:HideItems]];
+	  AWESettingSectionModel *hideSection = [DYYYSettingsHelper createSectionWithTitle:@"隐藏设置" items:HideItems];
+	  [sections addObject:hideSection];
 	  [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"增强设置" items:EnhancedItems]];	  
 
 	  DYYYRegisterSearchSections(@"WaaHook", sections);
@@ -5470,8 +5524,43 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
 	  }
 
 	  // 创建并推入二级设置页面
-	  AWESettingBaseViewController *subVC = [DYYYSettingsHelper createSubSettingsViewController:@"WaaHook" sections:sections];
-	  [rootVC.navigationController pushViewController:(UIViewController *)subVC animated:YES];
+      AWESettingBaseViewController *subVC = [DYYYSettingsHelper createSubSettingsViewController:@"WaaHook" sections:sections];
+      DYYYAttachSubSettingsSearchHeader(subVC, @"WaaHook", sections);
+
+      // 「清屏显示弹幕」开关变化时动态显示/隐藏弹幕参数项
+      if (showDanmakuItem) {
+          __weak AWESettingSectionModel *weakHideSection = hideSection;
+          __weak AWESettingBaseViewController *weakSubVC = subVC;
+          void (^originalShowDanmakuSwitch)(void) = showDanmakuItem.switchChangedBlock;
+          showDanmakuItem.switchChangedBlock = ^{
+            if (originalShowDanmakuSwitch) {
+                originalShowDanmakuSwitch();
+            }
+            AWESettingSectionModel *section = weakHideSection;
+            if (!section) {
+                return;
+            }
+            BOOL enabled = [[NSUserDefaults standardUserDefaults] boolForKey:@"WaaPureModePlusShowDanmaku"];
+            NSMutableArray *currentItems = [section.itemArray mutableCopy] ?: [NSMutableArray array];
+            BOOL paramsVisible = danmakuParamItems.count > 0 && [currentItems containsObject:danmakuParamItems.firstObject];
+            if (enabled == paramsVisible) {
+                return;
+            }
+            if (enabled) {
+                // 加回前按依赖规则刷新可用态，避免带着旧的禁用状态上屏
+                for (AWESettingItemModel *paramItem in danmakuParamItems) {
+                    [DYYYSettingsHelper applyDependencyRulesForItem:paramItem];
+                }
+                [currentItems addObjectsFromArray:danmakuParamItems];
+            } else {
+                [currentItems removeObjectsInArray:danmakuParamItems];
+            }
+            section.itemArray = currentItems;
+            [weakSubVC.tableView reloadData];
+          };
+      }
+
+      [rootVC.navigationController pushViewController:(UIViewController *)subVC animated:YES];
 	};
 	[mainItems addObject:WaaHookItem];
 

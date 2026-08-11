@@ -72,6 +72,8 @@
               @"DYYYEnableModernPanel" : @[ @"DYYYLongPressPanelBlur", @"DYYYLongPressPanelDark" ],
               @"DYYYEnableDoubleTapMenu" : @[ @"DYYYDoubleTapMenuSettings" ],
               @"DYYYEnableHighFPS" : @[ @"DYYYShowFPSOverlay" ],
+              @"WaaEnablePureModePlus" : @[ @"WaaPureModePlusShowDanmaku" ],
+              @"WaaPureModePlusShowDanmaku" : @[ @"WaaPureDanmakuMaxLanes", @"WaaPureDanmakuSpeed", @"WaaPureDanmakuLaneHeight" ],
           },
 
           // ===== 条件依赖配置 =====
