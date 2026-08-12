@@ -10,6 +10,11 @@
 
 #pragma mark - 外观功能
 
+static BOOL WaaViewIsInCommentScope(UIView *view);
+static BOOL WaaViewShouldReceiveCommentAppearance(UIView *view);
+static BOOL WaaColorLooksLightForView(UIColor *color, UIView *view);
+static UIColor *WaaCommentDarkBackgroundColorForView(UIView *view, UIColor *currentColor);
+
 // 调整评论区透明度
 static BOOL WaaViewContainsVisibleSendDUXButton(UIView *view) {
     if (!view || view.hidden || view.alpha <= 0.01) {
@@ -148,6 +153,10 @@ UIColor *WaaCommentBackgroundColorForView(UIView *view, UIColor *backgroundColor
         }
     }
 
+    if (DYYYGetBool(@"WaaForceCommentDarkMode") && WaaViewShouldReceiveCommentAppearance(view) && WaaColorLooksLightForView(backgroundColor, view)) {
+        backgroundColor = WaaCommentDarkBackgroundColorForView(view, backgroundColor);
+    }
+
     return backgroundColor;
 }
 
@@ -162,6 +171,7 @@ UIColor *darkerColorForColor(UIColor *color) {
 
 static char kWaaCommentAppearanceLogSignatureKey;
 static char kWaaCommentVisualLogSignaturesKey;
+static char kWaaCommentDarkTreeLogSignaturesKey;
 
 static NSString *WaaCommentColorDescription(UIColor *color, UITraitCollection *traitCollection) {
     if (!color) {
@@ -292,11 +302,59 @@ static BOOL WaaClassNameMatches(UIView *view, NSString *moduleName, NSString *cl
 static BOOL WaaViewIsInCommentScope(UIView *view) {
     for (UIView *currentView = view; currentView; currentView = currentView.superview) {
         NSString *className = NSStringFromClass([currentView class]);
-        if ([className containsString:@"AWEComment"] || [className containsString:@"CommentPanel"] || [className containsString:@"CommentInput"]) {
+        if ([className containsString:@"AWEComment"] || [className containsString:@"CommentPanel"] ||
+            [className containsString:@"CommentInput"] || [className containsString:@"AWESearchAnchorItemView"] ||
+            [className containsString:@"CommentLoadMoreFooter"] || [className containsString:@"ActionView"] ||
+            [className containsString:@"AWECommentDownButton"]) {
             return YES;
         }
     }
     return NO;
+}
+
+static BOOL WaaViewShouldReceiveCommentAppearance(UIView *view) {
+    if (WaaViewIsInCommentScope(view)) {
+        return YES;
+    }
+    NSString *className = NSStringFromClass([view class]);
+    return [className containsString:@"AWEComment"] || [className containsString:@"CommentPanel"] ||
+           [className containsString:@"CommentInput"] || [className containsString:@"AWESearchAnchorItemView"] ||
+           [className containsString:@"CommentLoadMoreFooter"] || [className containsString:@"ActionView"] ||
+           [className containsString:@"AWECommentDownButton"];
+}
+
+static BOOL WaaViewIsCommentControllerRoot(UIView *view) {
+    UIResponder *responder = view.nextResponder;
+    NSString *responderClassName = responder ? NSStringFromClass([responder class]) : @"";
+    return [responderClassName containsString:@"AWECommentContainerViewController"] ||
+           [responderClassName containsString:@"CommentContainerInnerViewController"];
+}
+
+static BOOL WaaColorLooksLightForView(UIColor *color, UIView *view) {
+    if (!color) {
+        return NO;
+    }
+    UIColor *resolvedColor = [color resolvedColorWithTraitCollection:view.traitCollection];
+    CGFloat red = 0;
+    CGFloat green = 0;
+    CGFloat blue = 0;
+    CGFloat alpha = 0;
+    if (![resolvedColor getRed:&red green:&green blue:&blue alpha:&alpha]) {
+        return NO;
+    }
+    return alpha > 0.01 && (red * 0.299 + green * 0.587 + blue * 0.114) > 0.72;
+}
+
+static UIColor *WaaCommentDarkBackgroundColorForView(UIView *view, UIColor *currentColor) {
+    CGFloat alpha = 1.0;
+    CGFloat red = 0;
+    CGFloat green = 0;
+    CGFloat blue = 0;
+    CGFloat currentAlpha = 0;
+    if (currentColor && [[currentColor resolvedColorWithTraitCollection:view.traitCollection] getRed:&red green:&green blue:&blue alpha:&currentAlpha]) {
+        alpha = currentAlpha;
+    }
+    return [UIColor colorWithRed:0.055 green:0.055 blue:0.065 alpha:alpha];
 }
 
 static BOOL WaaStoreCommentVisualSignatureIfChanged(UIView *view, NSString *key, NSString *signature) {
@@ -518,7 +576,7 @@ static BOOL WaaAttributedTextNeedsColor(NSAttributedString *attributedText, UICo
 }
 
 static void WaaApplyAllCommentTextAndIconColors(UIView *view, UIColor *textColor, UIColor *iconColor) {
-    if (!WaaViewIsInCommentScope(view)) {
+    if (!WaaViewShouldReceiveCommentAppearance(view)) {
         return;
     }
 
@@ -593,7 +651,68 @@ static void WaaApplyAllCommentTextAndIconColors(UIView *view, UIColor *textColor
     }
 }
 
+void WaaForceCommentDarkModeForViewTree(UIView *view) {
+    if (!view) {
+        return;
+    }
+
+    BOOL forceDarkMode = DYYYGetBool(@"WaaForceCommentDarkMode");
+    UIUserInterfaceStyle targetStyle = forceDarkMode ? UIUserInterfaceStyleDark : UIUserInterfaceStyleUnspecified;
+    if (WaaViewShouldReceiveCommentAppearance(view) || WaaViewIsCommentControllerRoot(view)) {
+        if (view.overrideUserInterfaceStyle != targetStyle) {
+            view.overrideUserInterfaceStyle = targetStyle;
+        }
+
+        if (forceDarkMode && WaaColorLooksLightForView(view.backgroundColor, view)) {
+            view.backgroundColor = WaaCommentDarkBackgroundColorForView(view, view.backgroundColor);
+        }
+        if (forceDarkMode && view.layer.backgroundColor && WaaColorLooksLightForView([UIColor colorWithCGColor:view.layer.backgroundColor], view)) {
+            view.layer.backgroundColor = WaaCommentDarkBackgroundColorForView(view, [UIColor colorWithCGColor:view.layer.backgroundColor]).CGColor;
+        }
+
+        NSString *signature = [NSString stringWithFormat:@"%@|%@|%@|%@|%@|%@",
+                                                         NSStringFromClass([view class]),
+                                                         NSStringFromClass([view.superview class]),
+                                                         targetStyle == UIUserInterfaceStyleDark ? @"dark" : @"unspecified",
+                                                         WaaCommentColorDescription(view.backgroundColor, view.traitCollection),
+                                                         WaaCommentCGColorDescription(view.layer.backgroundColor, view.traitCollection),
+                                                         @((long)view.traitCollection.userInterfaceStyle)];
+        NSString *previousSignature = objc_getAssociatedObject(view, &kWaaCommentDarkTreeLogSignaturesKey);
+        if (![previousSignature isEqualToString:signature]) {
+            objc_setAssociatedObject(view, &kWaaCommentDarkTreeLogSignaturesKey, signature, OBJC_ASSOCIATION_COPY_NONATOMIC);
+            NSLog(@"[DYYY][CommentAppearance][DarkTree] class=%@ parent=%@ override=%@ trait=%@ background=%@ layerBackground=%@",
+                  NSStringFromClass([view class]),
+                  NSStringFromClass([view.superview class]),
+                  targetStyle == UIUserInterfaceStyleDark ? @"dark" : @"unspecified",
+                  @((long)view.traitCollection.userInterfaceStyle),
+                  WaaCommentColorDescription(view.backgroundColor, view.traitCollection),
+                  WaaCommentCGColorDescription(view.layer.backgroundColor, view.traitCollection));
+        }
+    }
+
+    for (UIView *subview in view.subviews) {
+        WaaForceCommentDarkModeForViewTree(subview);
+    }
+}
+
+static void WaaApplyCommentAppearanceToViewTree(UIView *view, UIColor *textColor, UIColor *iconColor) {
+    if (!view) {
+        return;
+    }
+    if (WaaViewShouldReceiveCommentAppearance(view)) {
+        WaaApplyAllCommentTextAndIconColors(view, textColor, iconColor);
+    }
+    for (UIView *subview in view.subviews) {
+        WaaApplyCommentAppearanceToViewTree(subview, textColor, iconColor);
+    }
+}
+
 void WaaApplyCommentAppearanceAfterLayout(UIView *view) {
+    BOOL isCommentControllerRoot = WaaViewIsCommentControllerRoot(view);
+    BOOL shouldApplyCurrentView = WaaViewShouldReceiveCommentAppearance(view);
+    if (shouldApplyCurrentView) {
+        WaaForceCommentDarkModeForViewTree(view);
+    }
     WaaLogAllCommentTextAndIconColorsIfChanged(view);
     BOOL isCommentColorEnabled = DYYYGetBool(@"WaaEnableCommentColor");
     static NSInteger lastLoggedEnabledState = -1;
@@ -638,7 +757,11 @@ void WaaApplyCommentAppearanceAfterLayout(UIView *view) {
         // 评论区全部文字与可识别图标统一改色
         if (customColor) {
             UIColor *darkerColor = darkerColorForColor(customColor);
-            WaaApplyAllCommentTextAndIconColors(view, customColor, darkerColor);
+            if (isCommentControllerRoot) {
+                WaaApplyCommentAppearanceToViewTree(view, customColor, darkerColor);
+            } else {
+                WaaApplyAllCommentTextAndIconColors(view, customColor, darkerColor);
+            }
             WaaLogAllCommentTextAndIconColorsIfChanged(view);
 
             Class YYLabelClass = NSClassFromString(@"YYLabel");

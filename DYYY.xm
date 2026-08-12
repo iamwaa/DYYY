@@ -46,6 +46,7 @@
 
 extern UIColor *WaaCommentBackgroundColorForView(UIView *view, UIColor *backgroundColor);
 extern void WaaApplyCommentAppearanceAfterLayout(UIView *view);
+extern void WaaForceCommentDarkModeForViewTree(UIView *view);
 extern UIImage *WaaCommentImageForDisplay(UIImageView *imageView, UIImage *image);
 
 static CGFloat gStartY = 0.0;
@@ -15614,8 +15615,12 @@ static void DYYYApplyCommentInterfaceStyle(AWECommentContainerViewController *vi
     if (viewController.overrideUserInterfaceStyle != style) {
         viewController.overrideUserInterfaceStyle = style;
     }
-    if (viewController.view.overrideUserInterfaceStyle != style) {
-        viewController.view.overrideUserInterfaceStyle = style;
+    if (viewController.isViewLoaded) {
+        UIView *view = viewController.view;
+        if (view.overrideUserInterfaceStyle != style) {
+            view.overrideUserInterfaceStyle = style;
+        }
+        WaaForceCommentDarkModeForViewTree(view);
     }
 }
 
@@ -15696,6 +15701,9 @@ static void DYYYApplyCommentInterfaceStyle(AWECommentContainerViewController *vi
 
 - (void)viewDidLayoutSubviews {
     %orig;
+
+    DYYYApplyCommentInterfaceStyle(self);
+    WaaApplyCommentAppearanceAfterLayout(self.view);
 
     if (!DYYYGetBool(@"DYYYEnableCommentBlur"))
         return;
