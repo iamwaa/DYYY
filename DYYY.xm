@@ -4521,8 +4521,8 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 // 1. Hook 富文本赋值方法 (核心)
 - (void)setAttributedText:(NSAttributedString *)attributedText {
-    if (attributedText.length > 0 && [NSStringFromClass([self class]) containsString:@"AWECommentPanelListSwiftImpl"] &&
-        [NSStringFromClass([self class]) hasSuffix:@"BaseCellCommentLabel"] && DYYYGetBool(@"WaaEnableCommentColor")) {
+    if (attributedText.length > 0 && [NSStringFromClass([(id)self class]) containsString:@"AWECommentPanelListSwiftImpl"] &&
+        [NSStringFromClass([(id)self class]) hasSuffix:@"BaseCellCommentLabel"] && DYYYGetBool(@"WaaEnableCommentColor")) {
         NSString *hex = DYYYGetString(@"WaaCommentColor");
         unsigned int hexValue = 0;
         NSScanner *scanner = [NSScanner scannerWithString:[hex hasPrefix:@"#"] ? [hex substringFromIndex:1] : hex];
@@ -4534,7 +4534,7 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
             NSMutableAttributedString *coloredText = [attributedText mutableCopy];
             [coloredText addAttribute:NSForegroundColorAttributeName value:commentColor range:NSMakeRange(0, coloredText.length)];
             attributedText = coloredText;
-            NSLog(@"[DYYY][CommentAppearance][YYLabel] contentAttributedColorApplied class=%@ length=%lu text=\"%@\" color=%@", NSStringFromClass([self class]), (unsigned long)coloredText.length, coloredText.string, commentColor);
+            NSLog(@"[DYYY][CommentAppearance][YYLabel] contentAttributedColorApplied class=%@ length=%lu text=\"%@\" color=%@", NSStringFromClass([(id)self class]), (unsigned long)coloredText.length, coloredText.string, commentColor);
         }
     }
 
