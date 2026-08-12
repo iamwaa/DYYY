@@ -672,6 +672,69 @@ void WaaForceCommentDarkModeForViewTree(UIView *view) {
             view.layer.backgroundColor = WaaCommentDarkBackgroundColorForView(view, [UIColor colorWithCGColor:view.layer.backgroundColor]).CGColor;
         }
 
+        // 强制暗黑模式时，把浅色文字和图标改为白色，否则深色背景上看不见
+        if (forceDarkMode) {
+            UIColor *whiteColor = [UIColor whiteColor];
+
+            // 文字：UILabel / YYLabel / UITextView 等
+            if ([view respondsToSelector:@selector(setTextColor:)]) {
+                UIColor *currentColor = [view respondsToSelector:@selector(textColor)] ? [(id)view textColor] : nil;
+                if (currentColor && WaaColorLooksLightForView(currentColor, view)) {
+                    [(id)view setTextColor:whiteColor];
+                }
+            }
+
+            // 富文本前景色
+            if ([view respondsToSelector:@selector(attributedText)] && [view respondsToSelector:@selector(setAttributedText:)]) {
+                NSAttributedString *attrText = [(id)view attributedText];
+                if (attrText.length > 0) {
+                    UIColor *fgColor = [attrText attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:nil];
+                    if (fgColor && WaaColorLooksLightForView(fgColor, view)) {
+                        NSMutableAttributedString *updated = [attrText mutableCopy];
+                        [updated addAttribute:NSForegroundColorAttributeName value:whiteColor range:NSMakeRange(0, updated.length)];
+                        [(id)view setAttributedText:updated];
+                    }
+                }
+            }
+
+            // UIButton 标题颜色和图标
+            if ([view isKindOfClass:[UIButton class]]) {
+                UIButton *button = (UIButton *)view;
+                for (NSNumber *stateValue in @[@(UIControlStateNormal), @(UIControlStateHighlighted), @(UIControlStateSelected), @(UIControlStateDisabled)]) {
+                    UIControlState state = (UIControlState)stateValue.unsignedIntegerValue;
+                    UIColor *titleColor = [button titleColorForState:state];
+                    if (titleColor && WaaColorLooksLightForView(titleColor, view)) {
+                        [button setTitleColor:whiteColor forState:state];
+                    }
+                    UIImage *image = [button imageForState:state];
+                    if (image && WaaCommentButtonImageLooksLikeIcon(button, image)) {
+                        if (image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+                            [button setImage:[image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:state];
+                        }
+                    }
+                }
+                if (button.tintColor && WaaColorLooksLightForView(button.tintColor, view)) {
+                    button.tintColor = whiteColor;
+                }
+            }
+
+            // UIImageView 图标
+            if ([view isKindOfClass:[UIImageView class]]) {
+                UIImageView *imageView = (UIImageView *)view;
+                if (WaaCommentImageLooksLikeIcon(imageView)) {
+                    if (imageView.image && imageView.image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+                        imageView.image = [imageView.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+                    }
+                    if (imageView.highlightedImage && imageView.highlightedImage.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+                        imageView.highlightedImage = [imageView.highlightedImage imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+                    }
+                    if (imageView.tintColor && WaaColorLooksLightForView(imageView.tintColor, view)) {
+                        imageView.tintColor = whiteColor;
+                    }
+                }
+            }
+        }
+
         NSString *signature = [NSString stringWithFormat:@"%@|%@|%@|%@|%@|%@",
                                                          NSStringFromClass([view class]),
                                                          NSStringFromClass([view.superview class]),
