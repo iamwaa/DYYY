@@ -278,12 +278,11 @@ static void WaaLogCommentLabelIfChanged(UIView *label, NSString *stage, NSString
                                            green:((hexValue >> 8) & 0xFF) / 255.0
                                             blue:(hexValue & 0xFF) / 255.0
                                            alpha:1.0];
-    UIColor *darkerColor = darkerColorForColor(customColor);
 
     if ([view isKindOfClass:[UILabel class]]) {
         UILabel *label = (UILabel *)view;
         UIColor *beforeColor = label.textColor;
-        label.textColor = darkerColor;
+        label.textColor = customColor;
         WaaLogCommentLabelIfChanged(label, @"action-view", @"actionLabel", beforeColor, label.textColor);
     }
 
@@ -294,7 +293,6 @@ static void WaaLogCommentLabelIfChanged(UIView *label, NSString *stage, NSString
 
 @end
 
-static BOOL WaaClassNameMatches(UIView *view, NSString *moduleName, NSString *classSuffix) {
     NSString *className = NSStringFromClass([view class]);
     return [className containsString:moduleName] && [className hasSuffix:classSuffix];
 }
@@ -529,8 +527,10 @@ static BOOL WaaCommentImageLooksLikeIcon(UIImageView *imageView) {
     BOOL compactImage = width > 0 && height > 0 && width <= 48.0 && height <= 48.0;
     BOOL templateImage = image.renderingMode == UIImageRenderingModeAlwaysTemplate;
     NSString *className = NSStringFromClass([imageView class]);
-    BOOL iconClass = [className containsString:@"Icon"] || [className containsString:@"SVG"];
-    BOOL iconContainer = WaaCommentViewHasIconContainerAncestor(imageView);
+    BOOL iconClass = [className containsString:@"Icon"] || [className containsString:@"SVG"] ||
+                     [className containsString:@"CommentInteractionBaseButton"];
+    BOOL iconContainer = WaaCommentViewHasIconContainerAncestor(imageView) ||
+                         [NSStringFromClass([imageView.superview class]) containsString:@"CommentInteractionBaseButton"];
     return templateImage || iconClass || (compactImage && iconContainer);
 }
 
@@ -539,7 +539,8 @@ static BOOL WaaCommentButtonImageLooksLikeIcon(UIButton *button, UIImage *image)
         return NO;
     }
     NSString *className = NSStringFromClass([button class]);
-    BOOL iconClass = [className containsString:@"Icon"] || [className containsString:@"SVG"] || [className containsString:@"DUX"];
+    BOOL iconClass = [className containsString:@"Icon"] || [className containsString:@"SVG"] || [className containsString:@"DUX"] ||
+                     [className containsString:@"CommentInteractionBaseButton"];
     BOOL compactImage = image.size.width > 0 && image.size.height > 0 && image.size.width <= 48.0 && image.size.height <= 48.0;
     return image.renderingMode == UIImageRenderingModeAlwaysTemplate || iconClass ||
            (compactImage && WaaCommentViewHasIconContainerAncestor(button));
@@ -758,9 +759,9 @@ void WaaApplyCommentAppearanceAfterLayout(UIView *view) {
         if (customColor) {
             UIColor *darkerColor = darkerColorForColor(customColor);
             if (isCommentControllerRoot) {
-                WaaApplyCommentAppearanceToViewTree(view, customColor, darkerColor);
+                WaaApplyCommentAppearanceToViewTree(view, customColor, customColor);
             } else {
-                WaaApplyAllCommentTextAndIconColors(view, customColor, darkerColor);
+                WaaApplyAllCommentTextAndIconColors(view, customColor, customColor);
             }
             WaaLogAllCommentTextAndIconColorsIfChanged(view);
 
@@ -870,7 +871,7 @@ UIImage *WaaCommentImageForDisplay(UIImageView *imageView, UIImage *image) {
     }
 
     if (isCommentColorEnabled && customColor && isTargetCommentSubview(imageView)) {
-        imageView.tintColor = darkerColorForColor(customColor);
+        imageView.tintColor = customColor;
         return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
     }
 
