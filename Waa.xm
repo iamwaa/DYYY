@@ -529,7 +529,7 @@ static BOOL WaaCommentImageLooksLikeIcon(UIImageView *imageView) {
     BOOL templateImage = image.renderingMode == UIImageRenderingModeAlwaysTemplate;
     NSString *className = NSStringFromClass([imageView class]);
     BOOL iconClass = [className containsString:@"Icon"] || [className containsString:@"SVG"] ||
-                     [className containsString:@"CommentInteractionBaseButton"];
+                     [className containsString:@"CommentInteractionBaseButton"] || [className containsString:@"CommentInteractionBaseImageView"];
     BOOL iconContainer = WaaCommentViewHasIconContainerAncestor(imageView) ||
                          [NSStringFromClass([imageView.superview class]) containsString:@"CommentInteractionBaseButton"];
     return templateImage || iconClass || (compactImage && iconContainer);
@@ -541,7 +541,7 @@ static BOOL WaaCommentButtonImageLooksLikeIcon(UIButton *button, UIImage *image)
     }
     NSString *className = NSStringFromClass([button class]);
     BOOL iconClass = [className containsString:@"Icon"] || [className containsString:@"SVG"] || [className containsString:@"DUX"] ||
-                     [className containsString:@"CommentInteractionBaseButton"];
+                     [className containsString:@"CommentInteractionBaseButton"] || [className containsString:@"CommentInteractionBaseImageView"];
     BOOL compactImage = image.size.width > 0 && image.size.height > 0 && image.size.width <= 48.0 && image.size.height <= 48.0;
     return image.renderingMode == UIImageRenderingModeAlwaysTemplate || iconClass ||
            (compactImage && WaaCommentViewHasIconContainerAncestor(button));
@@ -672,53 +672,49 @@ void WaaForceCommentDarkModeForViewTree(UIView *view) {
             view.layer.backgroundColor = WaaCommentDarkBackgroundColorForView(view, [UIColor colorWithCGColor:view.layer.backgroundColor]).CGColor;
         }
 
-        // 强制暗黑模式时，把浅色文字和图标改为白色，否则深色背景上看不见
+        // 强制暗黑模式使用明确的前景色，不能依赖宿主原有颜色是否“够亮”。
         if (forceDarkMode) {
-            UIColor *whiteColor = [UIColor whiteColor];
+            UIColor *primaryTextColor = [UIColor whiteColor];
+            UIColor *secondaryTextColor = [UIColor colorWithWhite:0.90 alpha:1.0];
 
-            // 文字：UILabel / YYLabel / UITextView 等
             if ([view respondsToSelector:@selector(setTextColor:)]) {
-                UIColor *currentColor = [view respondsToSelector:@selector(textColor)] ? [(id)view textColor] : nil;
-                if (currentColor && WaaColorLooksLightForView(currentColor, view)) {
-                    [(id)view setTextColor:whiteColor];
-                }
+                NSString *className = NSStringFromClass([view class]);
+                UIColor *targetTextColor = [className containsString:@"CommentInteractionBaseLabel"] ? secondaryTextColor : primaryTextColor;
+                [(id)view setTextColor:targetTextColor];
             }
 
-            // 富文本前景色
             if ([view respondsToSelector:@selector(attributedText)] && [view respondsToSelector:@selector(setAttributedText:)]) {
                 NSAttributedString *attrText = [(id)view attributedText];
                 if (attrText.length > 0) {
-                    UIColor *fgColor = [attrText attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:nil];
-                    if (fgColor && WaaColorLooksLightForView(fgColor, view)) {
-                        NSMutableAttributedString *updated = [attrText mutableCopy];
-                        [updated addAttribute:NSForegroundColorAttributeName value:whiteColor range:NSMakeRange(0, updated.length)];
-                        [(id)view setAttributedText:updated];
-                    }
+                    NSString *className = NSStringFromClass([view class]);
+                    UIColor *targetTextColor = [className containsString:@"CommentInteractionBaseLabel"] ? secondaryTextColor : primaryTextColor;
+                    NSMutableAttributedString *updated = [attrText mutableCopy];
+                    [updated addAttribute:NSForegroundColorAttributeName value:targetTextColor range:NSMakeRange(0, updated.length)];
+                    [(id)view setAttributedText:updated];
                 }
             }
 
-            // UIButton 标题颜色和图标
             if ([view isKindOfClass:[UIButton class]]) {
                 UIButton *button = (UIButton *)view;
                 for (NSNumber *stateValue in @[@(UIControlStateNormal), @(UIControlStateHighlighted), @(UIControlStateSelected), @(UIControlStateDisabled)]) {
                     UIControlState state = (UIControlState)stateValue.unsignedIntegerValue;
-                    UIColor *titleColor = [button titleColorForState:state];
-                    if (titleColor && WaaColorLooksLightForView(titleColor, view)) {
-                        [button setTitleColor:whiteColor forState:state];
-                    }
-                    UIImage *image = [button imageForState:state];
-                    if (image && WaaCommentButtonImageLooksLikeIcon(button, image)) {
-                        if (image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
-                            [button setImage:[image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:state];
+                    if ([button titleForState:state].length > 0 || [button attributedTitleForState:state].length > 0) {
+                        [button setTitleColor:primaryTextColor forState:state];
+                        NSAttributedString *attributedTitle = [button attributedTitleForState:state];
+                        if (attributedTitle.length > 0) {
+                            NSMutableAttributedString *updatedTitle = [attributedTitle mutableCopy];
+                            [updatedTitle addAttribute:NSForegroundColorAttributeName value:primaryTextColor range:NSMakeRange(0, updatedTitle.length)];
+                            [button setAttributedTitle:updatedTitle forState:state];
                         }
                     }
+                    UIImage *image = [button imageForState:state];
+                    if (image && WaaCommentButtonImageLooksLikeIcon(button, image) && image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+                        [button setImage:[image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:state];
+                    }
                 }
-                if (button.tintColor && WaaColorLooksLightForView(button.tintColor, view)) {
-                    button.tintColor = whiteColor;
-                }
+                button.tintColor = primaryTextColor;
             }
 
-            // UIImageView 图标
             if ([view isKindOfClass:[UIImageView class]]) {
                 UIImageView *imageView = (UIImageView *)view;
                 if (WaaCommentImageLooksLikeIcon(imageView)) {
@@ -728,9 +724,7 @@ void WaaForceCommentDarkModeForViewTree(UIView *view) {
                     if (imageView.highlightedImage && imageView.highlightedImage.renderingMode != UIImageRenderingModeAlwaysTemplate) {
                         imageView.highlightedImage = [imageView.highlightedImage imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
                     }
-                    if (imageView.tintColor && WaaColorLooksLightForView(imageView.tintColor, view)) {
-                        imageView.tintColor = whiteColor;
-                    }
+                    imageView.tintColor = primaryTextColor;
                 }
             }
         }
