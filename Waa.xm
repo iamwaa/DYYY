@@ -293,6 +293,7 @@ static void WaaLogCommentLabelIfChanged(UIView *label, NSString *stage, NSString
 
 @end
 
+static BOOL WaaClassNameMatches(UIView *view, NSString *moduleName, NSString *classSuffix) {
     NSString *className = NSStringFromClass([view class]);
     return [className containsString:moduleName] && [className hasSuffix:classSuffix];
 }
