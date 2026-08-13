@@ -653,6 +653,34 @@ static void WaaApplyAllCommentTextAndIconColors(UIView *view, UIColor *textColor
     }
 }
 
+static void WaaApplyCommentDrawingLayerColors(CALayer *layer) {
+    if (!layer) {
+        return;
+    }
+
+    NSString *delegateClassName = layer.delegate ? NSStringFromClass([layer.delegate class]) : @"";
+    NSString *layerClassName = NSStringFromClass([layer class]);
+    BOOL isAudioWaveLayer = [delegateClassName containsString:@"AWECommentShapeView"] ||
+                            [delegateClassName containsString:@"AWECommentAudioStateView"] ||
+                            [layerClassName containsString:@"CAShapeLayer"];
+    if (isAudioWaveLayer) {
+        CGColorRef white = [UIColor whiteColor].CGColor;
+        if ([layer respondsToSelector:@selector(setFillColor:)]) {
+            [(id)layer setFillColor:white];
+        }
+        if ([layer respondsToSelector:@selector(setStrokeColor:)]) {
+            [(id)layer setStrokeColor:white];
+        }
+        if (layer.opacity <= 0.3) {
+            layer.opacity = 0.65;
+        }
+    }
+
+    for (CALayer *sublayer in layer.sublayers) {
+        WaaApplyCommentDrawingLayerColors(sublayer);
+    }
+}
+
 void WaaForceCommentDarkModeForViewTree(UIView *view) {
     if (!view) {
         return;
@@ -670,6 +698,18 @@ void WaaForceCommentDarkModeForViewTree(UIView *view) {
         }
         if (forceDarkMode && view.layer.backgroundColor && WaaColorLooksLightForView([UIColor colorWithCGColor:view.layer.backgroundColor], view)) {
             view.layer.backgroundColor = WaaCommentDarkBackgroundColorForView(view, [UIColor colorWithCGColor:view.layer.backgroundColor]).CGColor;
+        }
+
+        if (forceDarkMode && ([NSStringFromClass([view class]) containsString:@"AWECommentAudioContentView"] ||
+                              [NSStringFromClass([view class]) containsString:@"CommentAudioASRContentView"])) {
+            view.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.12];
+        }
+        if (forceDarkMode && view.frame.size.height <= 1.5 &&
+            [NSStringFromClass([view.superview class]) containsString:@"CommentBaseFooterView"]) {
+            view.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.22];
+        }
+        if (forceDarkMode) {
+            WaaApplyCommentDrawingLayerColors(view.layer);
         }
 
         // 强制暗黑模式使用明确的前景色，不能依赖宿主原有颜色是否“够亮”。
