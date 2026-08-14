@@ -204,10 +204,8 @@ UIColor *darkerColorForColor(UIColor *color) {
                                            green:((hexValue >> 8) & 0xFF) / 255.0
                                             blue:(hexValue & 0xFF) / 255.0
                                            alpha:1.0];
-    UIColor *darkerColor = darkerColorForColor(customColor);
-
     if ([view isKindOfClass:[UILabel class]]) {
-        ((UILabel *)view).textColor = darkerColor;
+        ((UILabel *)view).textColor = customColor;
     }
 
     for (UIView *subview in view.subviews) {
@@ -253,21 +251,34 @@ UIColor *darkerColorForColor(UIColor *color) {
                     ((UILabel *)subview).textColor = darkerColor;
                 } else if (YYLabelClass && [subview isKindOfClass:YYLabelClass] &&
                            [subviewClassName isEqualToString:@"AWECommentPanelListSwiftImpl.BaseCellCommentLabel"]) {
+                    // YYLabel 的 textColor setter 有去重逻辑：颜色未变则直接 return，
+                    // 导致已缓存的 textLayout 不刷新，YYTextAsyncLayer 仍画旧颜色。
+                    // 先设 textColor 让 innerText 着色，再置 nil textLayout 强制下次渲染重建布局。
                     ((UILabel *)subview).textColor = customColor;
+                    [subview setValue:nil forKey:@"textLayout"];
+                    [subview setNeedsDisplay];
                 } else if ([subview isKindOfClass:[UILabel class]] &&
                            [subviewClassName isEqualToString:@"AWECommentPanelHeaderSwiftImpl.CommentHeaderCell"]) {
                     ((UILabel *)subview).textColor = customColor;
                 }
             }
 
-            // 展开按钮
+            // 展开/收起按钮及杠线
             for (UIView *subview in self.subviews) {
                 if ([subview isKindOfClass:[UIButton class]]) {
                     UIButton *button = (UIButton *)subview;
                     NSString *buttonText = [button titleForState:UIControlStateNormal];
-                    if ([buttonText containsString:@"展开"] && [buttonText containsString:@"条回复"]) {
-                        [button setTitleColor:darkerColor forState:UIControlStateNormal];
+                    if (([buttonText containsString:@"展开"] && [buttonText containsString:@"条回复"]) ||
+                        [buttonText containsString:@"收起"]) {
+                        [button setTitleColor:customColor forState:UIControlStateNormal];
                     }
+                }
+                // 杠线：仅在 CommentBaseFooterView 中处理高度 ≤ 2 的细线 UIView
+                else if ([className containsString:@"CommentBaseFooterView"] &&
+                         ![subview isKindOfClass:[UILabel class]] &&
+                         ![subview isKindOfClass:[UIImageView class]] &&
+                         subview.frame.size.height > 0 && subview.frame.size.height <= 2) {
+                    subview.backgroundColor = customColor;
                 }
             }
 
@@ -347,9 +358,10 @@ BOOL isTargetCommentSubview(UIView *view) {
     }
 
     if (isCommentColorEnabled && customColor && isTargetCommentSubview(self)) {
+        // 先设 tintColor 再设图片，避免 template 渲染时 tintColor 还是默认的系统蓝色
+        self.tintColor = customColor;
         UIImage *templateImage = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
         %orig(templateImage);
-        self.tintColor = darkerColorForColor(customColor);
         return;
     }
 
