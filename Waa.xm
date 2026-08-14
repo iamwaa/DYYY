@@ -223,6 +223,9 @@ UIColor *darkerColorForColor(UIColor *color) {
     NSString *className = NSStringFromClass([self class]);
     BOOL isCommentColorEnabled = DYYYGetBool(@"WaaEnableCommentColor");
 
+    // YYLabel 可能尚未加载，在 layoutSubviews 中惰性安装
+    WaaInstallYYLabelColorHookIfNeeded();
+
     if (isCommentColorEnabled) {
         NSString *customHexColor = DYYYGetString(@"WaaCommentColor");
         UIColor *customColor = nil;
@@ -372,34 +375,45 @@ BOOL isTargetCommentSubview(UIView *view) {
 // YYLabel 在 setAttributedText: 时注入评论自定义颜色
 // YYTextAsyncLayer 基于 textLayout 渲染，textColor setter 有去重逻辑不会触发 layout 重建
 // 在源头改 attributedText 的前景色，原始方法会正常重建 layout 并重绘
-@class YYLabel;
-%hook YYLabel
+// YYLabel 是抖音运行时加载的类，不能用 %hook（编译器崩溃），改用运行时 method swizzling
+static void WaaInstallYYLabelColorHookIfNeeded(void) {
+    static BOOL hasInstalled = NO;
+    if (hasInstalled) return;
+    Class yyLabelClass = NSClassFromString(@"YYLabel");
+    if (!yyLabelClass) return;
 
-- (void)setAttributedText:(NSAttributedString *)attributedText {
-    if (DYYYGetBool(@"WaaEnableCommentColor") && attributedText.length > 0) {
-        NSString *className = NSStringFromClass([self class]);
-        if ([className isEqualToString:@"AWECommentPanelListSwiftImpl.BaseCellCommentLabel"]) {
-            NSString *customHexColor = DYYYGetString(@"WaaCommentColor");
-            if (customHexColor.length > 0) {
-                unsigned int hexValue = 0;
-                NSScanner *scanner = [NSScanner scannerWithString:[customHexColor hasPrefix:@"#"] ? [customHexColor substringFromIndex:1] : customHexColor];
-                if ([scanner scanHexInt:&hexValue]) {
-                    UIColor *customColor = [UIColor colorWithRed:((hexValue >> 16) & 0xFF) / 255.0
-                                                           green:((hexValue >> 8) & 0xFF) / 255.0
-                                                            blue:(hexValue & 0xFF) / 255.0
-                                                           alpha:1.0];
-                    NSMutableAttributedString *mAttr = [[NSMutableAttributedString alloc] initWithAttributedString:attributedText];
-                    [mAttr addAttribute:NSForegroundColorAttributeName value:customColor range:NSMakeRange(0, mAttr.length)];
-                    %orig(mAttr);
-                    return;
+    SEL selector = @selector(setAttributedText:);
+    Method method = class_getInstanceMethod(yyLabelClass, selector);
+    if (!method) return;
+
+    hasInstalled = YES;
+    static void (*original)(id, SEL, NSAttributedString *) = NULL;
+    original = (void (*)(id, SEL, NSAttributedString *))method_getImplementation(method);
+
+    method_setImplementation(method, imp_implementationWithBlock(^(id self, NSAttributedString *attributedText) {
+        if (DYYYGetBool(@"WaaEnableCommentColor") && attributedText.length > 0) {
+            NSString *className = NSStringFromClass([self class]);
+            if ([className isEqualToString:@"AWECommentPanelListSwiftImpl.BaseCellCommentLabel"]) {
+                NSString *customHexColor = DYYYGetString(@"WaaCommentColor");
+                if (customHexColor.length > 0) {
+                    unsigned int hexValue = 0;
+                    NSScanner *scanner = [NSScanner scannerWithString:[customHexColor hasPrefix:@"#"] ? [customHexColor substringFromIndex:1] : customHexColor];
+                    if ([scanner scanHexInt:&hexValue]) {
+                        UIColor *customColor = [UIColor colorWithRed:((hexValue >> 16) & 0xFF) / 255.0
+                                                               green:((hexValue >> 8) & 0xFF) / 255.0
+                                                                blue:(hexValue & 0xFF) / 255.0
+                                                               alpha:1.0];
+                        NSMutableAttributedString *mAttr = [[NSMutableAttributedString alloc] initWithAttributedString:attributedText];
+                        [mAttr addAttribute:NSForegroundColorAttributeName value:customColor range:NSMakeRange(0, mAttr.length)];
+                        if (original) original(self, selector, mAttr);
+                        return;
+                    }
                 }
             }
         }
-    }
-    %orig;
+        if (original) original(self, selector, attributedText);
+    }));
 }
-
-%end
 
 #pragma mark - 隐藏功能
 
@@ -1555,6 +1569,7 @@ static void removeTargetSubviews(UIView *view) {
     %init;
 
     WaaInstallDanmakuRuntimeHooksIfNeeded();
+    WaaInstallYYLabelColorHookIfNeeded();
 
     if (DYYYGetBool(@"WaaFollowfix")) {
         %init(WaaFollowfixGroup);
