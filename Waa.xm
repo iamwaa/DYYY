@@ -251,12 +251,8 @@ UIColor *darkerColorForColor(UIColor *color) {
                     ((UILabel *)subview).textColor = darkerColor;
                 } else if (YYLabelClass && [subview isKindOfClass:YYLabelClass] &&
                            [subviewClassName isEqualToString:@"AWECommentPanelListSwiftImpl.BaseCellCommentLabel"]) {
-                    // YYLabel 的 textColor setter 有去重逻辑：颜色未变则直接 return，
-                    // 导致已缓存的 textLayout 不刷新，YYTextAsyncLayer 仍画旧颜色。
-                    // 先设 textColor 让 innerText 着色，再置 nil textLayout 强制下次渲染重建布局。
+                    // 颜色通过 %hook YYLabel setAttributedText: 在源头注入，layoutSubviews 不再操作 textLayout
                     ((UILabel *)subview).textColor = customColor;
-                    [subview setValue:nil forKey:@"textLayout"];
-                    [subview setNeedsDisplay];
                 } else if ([subview isKindOfClass:[UILabel class]] &&
                            [subviewClassName isEqualToString:@"AWECommentPanelHeaderSwiftImpl.CommentHeaderCell"]) {
                     ((UILabel *)subview).textColor = customColor;
@@ -269,7 +265,8 @@ UIColor *darkerColorForColor(UIColor *color) {
                     UIButton *button = (UIButton *)subview;
                     NSString *buttonText = [button titleForState:UIControlStateNormal];
                     if (([buttonText containsString:@"展开"] && [buttonText containsString:@"条回复"]) ||
-                        [buttonText containsString:@"收起"]) {
+                        [buttonText containsString:@"收起"] ||
+                        [buttonText containsString:@"展开更多"]) {
                         [button setTitleColor:customColor forState:UIControlStateNormal];
                     }
                 }
@@ -360,11 +357,44 @@ BOOL isTargetCommentSubview(UIView *view) {
     if (isCommentColorEnabled && customColor && isTargetCommentSubview(self)) {
         // 先设 tintColor 再设图片，避免 template 渲染时 tintColor 还是默认的系统蓝色
         self.tintColor = customColor;
+        // 抖音部分按钮图标用 vk_contentTintColor 覆盖 tintColor，需要同步设置
+        @try { [self setValue:customColor forKey:@"vk_contentTintColor"]; } @catch (NSException *e) {}
         UIImage *templateImage = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
         %orig(templateImage);
         return;
     }
 
+    %orig;
+}
+
+%end
+
+// YYLabel 在 setAttributedText: 时注入评论自定义颜色
+// YYTextAsyncLayer 基于 textLayout 渲染，textColor setter 有去重逻辑不会触发 layout 重建
+// 在源头改 attributedText 的前景色，原始方法会正常重建 layout 并重绘
+%hook YYLabel
+
+- (void)setAttributedText:(NSAttributedString *)attributedText {
+    if (DYYYGetBool(@"WaaEnableCommentColor") && attributedText.length > 0) {
+        NSString *className = NSStringFromClass([self class]);
+        if ([className isEqualToString:@"AWECommentPanelListSwiftImpl.BaseCellCommentLabel"]) {
+            NSString *customHexColor = DYYYGetString(@"WaaCommentColor");
+            if (customHexColor.length > 0) {
+                unsigned int hexValue = 0;
+                NSScanner *scanner = [NSScanner scannerWithString:[customHexColor hasPrefix:@"#"] ? [customHexColor substringFromIndex:1] : customHexColor];
+                if ([scanner scanHexInt:&hexValue]) {
+                    UIColor *customColor = [UIColor colorWithRed:((hexValue >> 16) & 0xFF) / 255.0
+                                                           green:((hexValue >> 8) & 0xFF) / 255.0
+                                                            blue:(hexValue & 0xFF) / 255.0
+                                                           alpha:1.0];
+                    NSMutableAttributedString *mAttr = [[NSMutableAttributedString alloc] initWithAttributedString:attributedText];
+                    [mAttr addAttribute:NSForegroundColorAttributeName value:customColor range:NSMakeRange(0, mAttr.length)];
+                    %orig(mAttr);
+                    return;
+                }
+            }
+        }
+    }
     %orig;
 }
 
