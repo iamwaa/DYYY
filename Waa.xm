@@ -372,6 +372,7 @@ BOOL isTargetCommentSubview(UIView *view) {
 // YYLabel 在 setAttributedText: 时注入评论自定义颜色
 // YYTextAsyncLayer 基于 textLayout 渲染，textColor setter 有去重逻辑不会触发 layout 重建
 // 在源头改 attributedText 的前景色，原始方法会正常重建 layout 并重绘
+@class YYLabel;
 %hook YYLabel
 
 - (void)setAttributedText:(NSAttributedString *)attributedText {
