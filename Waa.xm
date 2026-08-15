@@ -167,6 +167,67 @@ static BOOL WaaCommentInputContainerIsCompactBottomBar(UIView *view) {
 // 调整评论区文字颜色
 static char kWaaCommentTextColorMarkerKey;
 
+static void WaaInstallCustomYYLabelSetterIfNeeded(void);
+
+static void (*gWaaOriginalCustomYYLabelSetter)(id, SEL, id) = NULL;
+
+static void WaaCustomYYLabelSetAttributedText(id object, SEL selector, id text) {
+    id textToSet = text;
+    NSString *className = NSStringFromClass([object class]);
+    if ([className isEqualToString:@"AWECommentPanelListSwiftImpl.BaseCellCommentLabel"] &&
+        [text isKindOfClass:[NSAttributedString class]] && [text length] > 0 &&
+        DYYYGetBool(@"WaaEnableCommentColor")) {
+        NSString *hex = DYYYGetString(@"WaaCommentColor");
+        unsigned int value = 0;
+        NSString *digits = [hex hasPrefix:@"#"] ? [hex substringFromIndex:1] : hex;
+        NSScanner *scanner = [NSScanner scannerWithString:digits ?: @""];
+        if (hex.length > 0 && [scanner scanHexInt:&value]) {
+            UIColor *color = [UIColor colorWithRed:((value >> 16) & 0xFF) / 255.0
+                                             green:((value >> 8) & 0xFF) / 255.0
+                                              blue:(value & 0xFF) / 255.0
+                                             alpha:1.0];
+            NSMutableAttributedString *mutableText = [[NSMutableAttributedString alloc] initWithAttributedString:text];
+            NSRange range = NSMakeRange(0, mutableText.length);
+            [mutableText addAttribute:NSForegroundColorAttributeName value:color range:range];
+            [mutableText addAttribute:(NSString *)kCTForegroundColorAttributeName value:(id)color.CGColor range:range];
+            textToSet = mutableText;
+        }
+    }
+    if (gWaaOriginalCustomYYLabelSetter) {
+        gWaaOriginalCustomYYLabelSetter(object, selector, textToSet);
+    }
+}
+
+static void WaaInstallCustomYYLabelSetterIfNeeded(void) {
+    static BOOL installed = NO;
+    if (installed) return;
+    Class labelClass = NSClassFromString(@"AWECommentPanelListSwiftImpl.BaseCellCommentLabel");
+    SEL selector = NSSelectorFromString(@"awe_uikit_yylabel_setAttributedText:");
+    Method method = labelClass ? class_getInstanceMethod(labelClass, selector) : NULL;
+    if (!method) return;
+    gWaaOriginalCustomYYLabelSetter = (void (*)(id, SEL, id))method_setImplementation(method, (IMP)WaaCustomYYLabelSetAttributedText);
+    installed = gWaaOriginalCustomYYLabelSetter != NULL;
+}
+
+static void WaaRefreshCustomYYLabelTextIfNeeded(UIView *view) {
+    if (!DYYYGetBool(@"WaaEnableCommentColor")) return;
+    id layout = nil;
+    @try { layout = [view valueForKey:@"textLayout"]; } @catch (NSException *exception) { return; }
+    id layoutText = nil;
+    @try { layoutText = [layout valueForKey:@"text"]; } @catch (NSException *exception) { return; }
+    if (![layoutText isKindOfClass:[NSAttributedString class]] || [layoutText length] == 0) return;
+
+    NSString *hex = DYYYGetString(@"WaaCommentColor");
+    NSString *marker = [NSString stringWithFormat:@"%@|%@", [layoutText string] ?: @"", hex ?: @""];
+    if ([objc_getAssociatedObject(view, &kWaaCommentTextColorMarkerKey) isEqualToString:marker]) return;
+
+    SEL selector = NSSelectorFromString(@"awe_uikit_yylabel_setAttributedText:");
+    if ([view respondsToSelector:selector]) {
+        void (*setter)(id, SEL, id) = (void (*)(id, SEL, id))[view methodForSelector:selector];
+        if (setter) setter(view, selector, layoutText);
+    }
+}
+
 static void WaaApplyYYLabelTextColor(UIView *view, UIColor *customColor, NSString *customHexColor) {
     SEL getterSelector = NSSelectorFromString(@"attributedText");
     SEL setterSelector = NSSelectorFromString(@"setAttributedText:");
@@ -268,6 +329,8 @@ UIColor *darkerColorForColor(UIColor *color) {
 - (void)layoutSubviews {
     %orig;
 
+    WaaInstallCustomYYLabelSetterIfNeeded();
+
     NSString *className = NSStringFromClass([self class]);
     BOOL isCommentColorEnabled = DYYYGetBool(@"WaaEnableCommentColor");
 
@@ -288,6 +351,7 @@ UIColor *darkerColorForColor(UIColor *color) {
 
         // BaseCellCommentLabel 自己就是 YYLabel，不能只检查 self.subviews
         if ([className isEqualToString:@"AWECommentPanelListSwiftImpl.BaseCellCommentLabel"]) {
+            WaaRefreshCustomYYLabelTextIfNeeded(self);
             WaaApplyYYLabelTextColor(self, customColor, customHexColor);
         }
 
