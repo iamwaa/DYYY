@@ -171,6 +171,7 @@ static void WaaInstallCustomYYLabelSetterIfNeeded(void);
 static void WaaInstallYYLabelTextLayoutSetterIfNeeded(void);
 static void WaaYYLabelSetTextLayout(id object, SEL selector, id layout);
 static void (*gWaaOriginalYYLabelTextLayoutSetter)(id, SEL, id) = NULL;
+static void (*gWaaOriginalCustomYYLabelSetter)(id, SEL, id) = NULL;
 
 static id WaaColorizedYYText(id text) {
     if (!DYYYGetBool(@"WaaEnableCommentColor") ||
@@ -276,25 +277,6 @@ static void WaaInstallCustomYYLabelSetterIfNeeded(void) {
     if (!method) return;
     gWaaOriginalCustomYYLabelSetter = (void (*)(id, SEL, id))method_setImplementation(method, (IMP)WaaCustomYYLabelSetAttributedText);
     installed = gWaaOriginalCustomYYLabelSetter != NULL;
-}
-
-static void WaaRefreshCustomYYLabelTextIfNeeded(UIView *view) {
-    if (!DYYYGetBool(@"WaaEnableCommentColor")) return;
-    id layout = nil;
-    @try { layout = [view valueForKey:@"textLayout"]; } @catch (NSException *exception) { return; }
-    id layoutText = nil;
-    @try { layoutText = [layout valueForKey:@"text"]; } @catch (NSException *exception) { return; }
-    if (![layoutText isKindOfClass:[NSAttributedString class]] || [layoutText length] == 0) return;
-
-    NSString *hex = DYYYGetString(@"WaaCommentColor");
-    NSString *marker = [NSString stringWithFormat:@"%@|%@", [layoutText string] ?: @"", hex ?: @""];
-    if ([objc_getAssociatedObject(view, &kWaaCommentTextColorMarkerKey) isEqualToString:marker]) return;
-
-    SEL selector = NSSelectorFromString(@"awe_uikit_yylabel_setAttributedText:");
-    if ([view respondsToSelector:selector]) {
-        void (*setter)(id, SEL, id) = (void (*)(id, SEL, id))[view methodForSelector:selector];
-        if (setter) setter(view, selector, layoutText);
-    }
 }
 
 static void WaaApplyYYLabelTextColor(UIView *view, UIColor *customColor, NSString *customHexColor) {
