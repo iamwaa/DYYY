@@ -72,6 +72,12 @@
               @"DYYYEnableModernPanel" : @[ @"DYYYLongPressPanelBlur", @"DYYYLongPressPanelDark" ],
               @"DYYYEnableDoubleTapMenu" : @[ @"DYYYDoubleTapMenuSettings" ],
               @"DYYYEnableHighFPS" : @[ @"DYYYShowFPSOverlay" ],
+              @"WaaEnablePureModePlus" : @[ @"WaaPureModePlusShowDanmaku" ],
+              @"WaaPureModePlusShowDanmaku" : @[ @"WaaPureDanmakuMaxLanes", @"WaaPureDanmakuSpeed", @"WaaPureDanmakuLaneHeight" ],
+              // 评论改色开关开启时，评论颜色输入项才可用
+              @"WaaEnableCommentColor" : @[ @"WaaCommentColor" ],
+              // 背景改色开关开启时，背景色输入项才可用
+              @"WaaEnableCommentBgColor" : @[ @"WaaCommentBgColor" ],
           },
 
           // ===== 条件依赖配置 =====
@@ -98,7 +104,13 @@
 
           // ===== 互斥激活配置 =====
           // 当源设置项关闭时，目标设置项才能激活
-          @"mutualExclusions" : @{@"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ], @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor" ], @"DYYYSkipPhoto": @[@"DYYYSkipPhotoText"]},
+          @"mutualExclusions" : @{
+              @"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ],
+              @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor" ],
+              @"DYYYSkipPhoto": @[@"DYYYSkipPhotoText"],
+              // 评论区毛玻璃开启时，评论区透明度、输入框透明度与背景改色不可用（关闭才可用）
+              @"DYYYEnableCommentBlur" : @[ @"WaaCommentTransparency", @"WaaInputBoxTransparency", @"WaaEnableCommentBgColor", @"WaaCommentBgColor" ],
+          },
 
           // ===== 值依赖配置 =====
           // 基于字符串值的依赖关系

@@ -5179,9 +5179,8 @@ static void DYYYShowProfileFollowGlassConfirm(id user, void (^confirmAction)(voi
 - (void)setAlpha:(CGFloat)alpha {
     if (DYYYGetBool(@"DYYYCommentShowDanmaku") && alpha == 0.0) {
         return;
-    } else {
-        %orig(alpha);
     }
+    %orig(alpha);
 }
 
 %end
@@ -5604,7 +5603,7 @@ static void DYYYApplyFeedVideoCollectButtonSettingsWithRetry(AWEFeedVideoButton 
 %hook AWEPlayInteractionProgressContainerView
 - (void)layoutSubviews {
     %orig;
-    DYYYApplyFloatClearProgressStateToView(self);
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
 
     if (![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFullScreen"]) {
         return;
@@ -5634,7 +5633,7 @@ static void DYYYApplyFeedVideoCollectButtonSettingsWithRetry(AWEFeedVideoButton 
 
 - (void)layoutSubviews {
     %orig;
-    DYYYApplyFloatClearProgressStateToView(self);
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
 }
 
 - (void)setAlpha:(CGFloat)alpha {
@@ -5850,6 +5849,42 @@ static void DYYYApplyFeedVideoCollectButtonSettingsWithRetry(AWEFeedVideoButton 
     if (hideVideoProgress && showScheduleDisplay && !hidden) {
         self.alpha = 0;
     }
+}
+
+%end
+
+%hook AWEFeedProgressSliderForLongPress
+
+- (void)layoutSubviews {
+    %orig;
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
+}
+
+%end
+
+%hook AWEFakeProgressSliderView
+
+- (void)layoutSubviews {
+    %orig;
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
+}
+
+%end
+
+%hook AWEProgressContainerView
+
+- (void)layoutSubviews {
+    %orig;
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
+}
+
+%end
+
+%hook AWEProgressPlayBackSlider
+
+- (void)layoutSubviews {
+    %orig;
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
 }
 
 %end
@@ -17491,7 +17526,7 @@ static NSString *const kHideRecentUsersKey = @"DYYYHideSidebarRecentUsers";
 
 - (void)layoutSubviews {
     %orig;
-    DYYYApplyFloatClearProgressStateToView(self);
+    DYYYApplyFloatClearProgressStateToView((UIView *)self);
 
     if (![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFullScreen"]) {
         return;
