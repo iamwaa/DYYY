@@ -347,6 +347,40 @@ UIColor *darkerColorForColor(UIColor *color) {
     return color;
 }
 
+// 与输入框透明度一致的跳过条件：键盘展开后的底部紧凑输入栏（带发送按钮）不做处理
+static BOOL WaaCommentInputIsCompactSendBar(UIView *view) {
+    if (!view) {
+        return NO;
+    }
+
+    BOOL hasSendButton = WaaViewContainsVisibleSendDUXButton(view);
+    BOOL isCompactBar = NO;
+    UIView *parentView = view.superview;
+    while (parentView) {
+        if ([parentView isKindOfClass:NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView")]) {
+            hasSendButton = hasSendButton || WaaViewContainsVisibleSendDUXButton(parentView);
+            isCompactBar = WaaCommentInputContainerIsCompactBottomBar(parentView);
+            break;
+        }
+        parentView = parentView.superview;
+    }
+    return hasSendButton && isCompactBar;
+}
+
+// 按响应链上的 CommentPanel 类名判断视图是否位于评论面板内，避免影响 App 其他页面的同类控件
+static BOOL WaaViewBelongsToCommentPanel(UIView *view) {
+    UIResponder *responder = view;
+    NSInteger depth = 0;
+    while (responder && depth < 50) {
+        if ([NSStringFromClass([responder class]) containsString:@"CommentPanel"]) {
+            return YES;
+        }
+        responder = responder.nextResponder;
+        depth++;
+    }
+    return NO;
+}
+
 @interface UIView (CustomColor)
 - (void)traverseSubviews:(UIView *)view customColor:(UIColor *)customColor;
 - (void)updateActionViewLabelColorRecursive:(UIView *)view;
@@ -526,6 +560,41 @@ UIColor *darkerColorForColor(UIColor *color) {
             }
 
             [self traverseSubviews:self customColor:customColor];
+
+            // 修改 1：CommentInputViewMiddleContainer 内的占位文字与图标改色
+            // 判断条件与输入框透明度一致：毛玻璃开启时跳过，键盘展开后的紧凑发送栏跳过
+            if ([className isEqualToString:@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer"]) {
+                if (!DYYYGetBool(@"DYYYEnableCommentBlur") && !WaaCommentInputIsCompactSendBar(self)) {
+                    for (UIView *subview in self.subviews) {
+                        if ([subview isKindOfClass:[UILabel class]]) {
+                            ((UILabel *)subview).textColor = customColor;
+                        } else if ([subview isKindOfClass:[UIImageView class]]) {
+                            UIImageView *imageView = (UIImageView *)subview;
+                            UIImage *image = imageView.image;
+                            imageView.tintColor = customColor;
+                            if (image && image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+                                imageView.image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 修改 2：评论面板顶部 IESSegmentedControl 的分段文字与指示条改色
+            if ([className isEqualToString:@"IESSegmentedControl"] && WaaViewBelongsToCommentPanel(self)) {
+                for (UIView *subview in self.subviews) {
+                    NSString *subviewClassName = NSStringFromClass([subview class]);
+                    if ([subviewClassName isEqualToString:@"IESSegmentedItemCell"]) {
+                        for (UIView *cellSubview in subview.subviews) {
+                            if ([cellSubview isKindOfClass:[UILabel class]]) {
+                                ((UILabel *)cellSubview).textColor = customColor;
+                            }
+                        }
+                    } else if ([subviewClassName isEqualToString:@"IESSegmentedIndicator"]) {
+                        subview.backgroundColor = customColor;
+                    }
+                }
+            }
         }
     }
 
