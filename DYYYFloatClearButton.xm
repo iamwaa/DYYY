@@ -1,6 +1,7 @@
 // 一键清屏悬浮按钮
 #import "DYYYFloatClearButton.h"
 #import "Sources/Features/DYYYFloatSpeedButton.h"
+#import "Sources/Core/DYYYConstants.h"
 #import "Sources/Core/DYYYUtils.h"
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
