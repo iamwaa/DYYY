@@ -52,6 +52,8 @@ static BOOL DYYYSettingsSearchIndexBuilt = NO;
 static NSString *const kDYYYFeedNowPlayingSettingTitle = @"屏蔽灵动岛抖音播放信息";
 static NSString *const kDYYYFeedNowPlayingSettingIdentifier = @"DYYYDisableFeedNowPlayingInfo";
 static NSString *const kDYYYFeedNowPlayingSVGIconName = @"ic_liveactivityplayslash_dyyy_outlined_20";
+static NSString *const kDYYYExactInteractionCountsSettingIdentifier = DYYY_SHOW_EXACT_INTERACTION_COUNTS_KEY;
+static NSString *const kDYYYExactInteractionCountsSVGIconName = @"ic_numberformat_dyyy_outlined_20";
 static NSString *const kDYYYEnableHighFPSSettingTitle = @"开启最高可用帧率";
 static NSString *const kDYYYEnableHighFPSSettingIdentifier = @"DYYYEnableHighFPS";
 static NSString *const kDYYYEnableHighFPSSVGIconName = @"ic_highfps_dyyy_outlined_20";
@@ -60,9 +62,17 @@ static NSString *const kDYYYShowFPSOverlaySettingIdentifier = @"DYYYShowFPSOverl
 static NSString *const kDYYYShowFPSOverlaySVGIconName = @"ic_fpsoverlay_dyyy_outlined_20";
 static NSString *const kDYYYCommentPausePlaybackSettingIdentifier = @"DYYYCommentPausePlayback";
 static NSString *const kDYYYCommentPausePlaybackSVGIconName = @"ic_commentpause_dyyy_outlined_20";
+static NSString *const kDYYYAlbumMediaDescriptionSettingIdentifier = DYYY_ALBUM_MEDIA_DESCRIPTION_KEY;
 static NSString *const kDYYYLoginBypassSVGIconName = @"ic_unlocknew_outlined_20";
 static NSString *const kDYYYHideRecommendAppDownloadSettingIdentifier = @"DYYYHideRecommendAppDownload";
 static NSString *const kDYYYMiniProgramJumpingAdsSettingIdentifier = @"DYYYEnableMiniProgramJumpingAds";
+static NSString *const kDYYYSpeedButtonStickToEdgeSettingIdentifier = DYYY_SPEED_BUTTON_STICK_TO_EDGE_KEY;
+static NSString *const kDYYYClearButtonStickToEdgeSettingIdentifier = DYYY_CLEAR_BUTTON_STICK_TO_EDGE_KEY;
+static NSString *const kDYYYStickToEdgeSettingTitle = @"固定按钮贴边";
+static NSString *const kDYYYStickToEdgeSVGIconName = @"ic_sticktoedge_dyyy_outlined_20";
+static NSString *const kDYYYResetButtonPositionSettingTitle = @"重置按钮位置";
+static NSString *const kDYYYSpeedButtonResetPositionSettingIdentifier = DYYY_RESET_SPEED_BUTTON_POSITION_KEY;
+static NSString *const kDYYYClearButtonResetPositionSettingIdentifier = DYYY_RESET_CLEAR_BUTTON_POSITION_KEY;
 
 static char kDYYYGeneratedSettingIconIdentifierKey;
 static char kDYYYGeneratedSettingIconRetryScheduledKey;
@@ -95,7 +105,7 @@ static UIImage *DYYYRenderGeneratedSettingTemplateIcon(NSString *cacheName, CGSi
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
       imageCache = [[NSCache alloc] init];
-      imageCache.countLimit = 16;
+      imageCache.countLimit = 24;
     });
 
     NSString *cacheKey = [NSString stringWithFormat:@"%@-%@", cacheName, NSStringFromCGSize(targetSize)];
@@ -336,6 +346,66 @@ static UIImage *DYYYMiniProgramJumpingAdsIcon(CGSize requestedSize) {
     });
 }
 
+static UIImage *DYYYStickToEdgeIcon(CGSize requestedSize) {
+    return DYYYRenderGeneratedSettingTemplateIcon(@"stick-to-edge", requestedSize, ^(CGContextRef context, CGSize targetSize) {
+      CGContextScaleCTM(context, targetSize.width / 20.0, targetSize.height / 20.0);
+      UIColor *iconColor = [UIColor colorWithRed:22.0 / 255.0 green:24.0 / 255.0 blue:35.0 / 255.0 alpha:1.0];
+      [iconColor setStroke];
+      [iconColor setFill];
+      CGContextSetLineWidth(context, 1.55);
+      CGContextSetLineCap(context, kCGLineCapRound);
+      CGContextSetLineJoin(context, kCGLineJoinRound);
+
+      UIBezierPath *screen = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(3.15, 2.35, 13.7, 15.3) cornerRadius:2.35];
+      screen.lineWidth = 1.55;
+      [screen stroke];
+
+      UIBezierPath *button = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(12.05, 8.15, 3.7, 3.7)];
+      button.lineWidth = 1.45;
+      [button stroke];
+
+      UIBezierPath *guides = [UIBezierPath bezierPath];
+      [guides moveToPoint:CGPointMake(4.55, 6.2)];
+      [guides addLineToPoint:CGPointMake(4.55, 13.8)];
+      [guides moveToPoint:CGPointMake(15.45, 6.2)];
+      [guides addLineToPoint:CGPointMake(15.45, 13.8)];
+      guides.lineWidth = 1.35;
+      guides.lineCapStyle = kCGLineCapRound;
+      [guides stroke];
+    });
+}
+
+static UIImage *DYYYExactInteractionCountsIcon(CGSize requestedSize) {
+    return DYYYRenderGeneratedSettingTemplateIcon(@"exact-interaction-counts", requestedSize, ^(CGContextRef context, CGSize targetSize) {
+      CGContextScaleCTM(context, targetSize.width / 20.0, targetSize.height / 20.0);
+      UIColor *iconColor = [UIColor colorWithRed:22.0 / 255.0 green:24.0 / 255.0 blue:35.0 / 255.0 alpha:1.0];
+      [iconColor setStroke];
+      CGContextSetLineWidth(context, 1.55);
+      CGContextSetLineCap(context, kCGLineCapRound);
+      CGContextSetLineJoin(context, kCGLineJoinRound);
+
+      UIBezierPath *frame = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(2.55, 3.0, 14.9, 14.0) cornerRadius:2.2];
+      frame.lineWidth = 1.55;
+      [frame stroke];
+
+      UIBezierPath *bars = [UIBezierPath bezierPath];
+      [bars moveToPoint:CGPointMake(5.6, 13.9)];
+      [bars addLineToPoint:CGPointMake(5.6, 11.25)];
+      [bars moveToPoint:CGPointMake(9.95, 13.9)];
+      [bars addLineToPoint:CGPointMake(9.95, 8.95)];
+      [bars moveToPoint:CGPointMake(14.3, 13.9)];
+      [bars addLineToPoint:CGPointMake(14.3, 6.65)];
+      bars.lineWidth = 1.7;
+      [bars stroke];
+
+      UIBezierPath *baseline = [UIBezierPath bezierPath];
+      [baseline moveToPoint:CGPointMake(4.7, 13.9)];
+      [baseline addLineToPoint:CGPointMake(15.2, 13.9)];
+      baseline.lineWidth = 1.35;
+      [baseline stroke];
+    });
+}
+
 @interface AWESettingsTableViewCell : UITableViewCell
 @property(nonatomic, strong) AWESettingItemModel *itemModel;
 @property(nonatomic, strong) UILabel *titleLabel;
@@ -357,7 +427,10 @@ static BOOL DYYYIsGeneratedSettingIconIdentifier(NSString *identifier) {
            [identifier isEqualToString:kDYYYEnableHighFPSSettingIdentifier] ||
            [identifier isEqualToString:kDYYYShowFPSOverlaySettingIdentifier] ||
            [identifier isEqualToString:kDYYYCommentPausePlaybackSettingIdentifier] ||
-           [identifier isEqualToString:kDYYYMiniProgramJumpingAdsSettingIdentifier];
+           [identifier isEqualToString:kDYYYMiniProgramJumpingAdsSettingIdentifier] ||
+           [identifier isEqualToString:kDYYYExactInteractionCountsSettingIdentifier] ||
+           [identifier isEqualToString:kDYYYSpeedButtonStickToEdgeSettingIdentifier] ||
+           [identifier isEqualToString:kDYYYClearButtonStickToEdgeSettingIdentifier];
 }
 
 static UIImage *DYYYGeneratedSettingIconForIdentifier(NSString *identifier, CGSize targetSize) {
@@ -375,6 +448,13 @@ static UIImage *DYYYGeneratedSettingIconForIdentifier(NSString *identifier, CGSi
     }
     if ([identifier isEqualToString:kDYYYMiniProgramJumpingAdsSettingIdentifier]) {
         return DYYYMiniProgramJumpingAdsIcon(targetSize);
+    }
+    if ([identifier isEqualToString:kDYYYExactInteractionCountsSettingIdentifier]) {
+        return DYYYExactInteractionCountsIcon(targetSize);
+    }
+    if ([identifier isEqualToString:kDYYYSpeedButtonStickToEdgeSettingIdentifier] ||
+        [identifier isEqualToString:kDYYYClearButtonStickToEdgeSettingIdentifier]) {
+        return DYYYStickToEdgeIcon(targetSize);
     }
     return nil;
 }
@@ -3706,6 +3786,14 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"detail" : @"",
             @"cellType" : @6,
             @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{
+              @"identifier" : @"DYYYHideLiveRoomShareCompanion",
+              @"title" : @"隐藏直播伴侣提示",
+              @"subTitle" : @"隐藏直播间分享面板中的直播伴侣下载提示",
+              @"detail" : @"",
+              @"cellType" : @37,
+              @"imageName" : @"ic_eyeslash_outlined_16"
+          },
           @{@"identifier" : @"DYYYHideLiveDiscovery",
             @"title" : @"隐藏直播发现",
             @"detail" : @"",
@@ -3850,6 +3938,11 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
       NSArray *commentpanelSettings = @[
           @{@"identifier" : @"DYYYHideCommentShareToFriends",
             @"title" : @"隐藏评论分享",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHideCommentLongPressFavorite",
+            @"title" : @"隐藏评论收藏",
             @"detail" : @"",
             @"cellType" : @6,
             @"imageName" : @"ic_eyeslash_outlined_16"},
@@ -4066,7 +4159,6 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
           @"cellType" : @37,
           @"imageName" : kDYYYLoginBypassSVGIconName
       }];
-      loginBypassItem.detail = @"";
       [accountItems addObject:loginBypassItem];
 
       // 【长按面板设置】分类
@@ -4143,6 +4235,13 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
       NSMutableArray<AWESettingItemModel *> *downloadItems = [NSMutableArray array];
       NSArray *downloadSettings = @[
           @{
+              @"identifier" : kDYYYAlbumMediaDescriptionSettingIdentifier,
+              @"title" : @"保存作品信息",
+              @"detail" : @"",
+              @"cellType" : @6,
+              @"imageName" : @"ic_cloudarrowdown_outlined_20"
+          },
+          @{
               @"identifier" : @"DYYYInterfaceDownload",
               @"title" : @"接口解析保存媒体",
               @"subTitle" : @"填入自定义的解析接口，标准格式请查阅 Github 仓库内的 README 文件",
@@ -4218,6 +4317,14 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
 
       for (NSDictionary *dict in downloadSettings) {
           AWESettingItemModel *item = [DYYYSettingsHelper createSettingItem:dict cellTapHandlers:cellTapHandlers];
+
+          // 相册作品信息默认关闭；首次展示设置页时同步默认值，
+          // 避免 UI 和保存链路对缺少 key 的默认判断不一致。
+          if ([item.identifier isEqualToString:kDYYYAlbumMediaDescriptionSettingIdentifier] &&
+              ![[NSUserDefaults standardUserDefaults] objectForKey:kDYYYAlbumMediaDescriptionSettingIdentifier]) {
+              [DYYYSettingsHelper setUserDefaults:@NO forKey:kDYYYAlbumMediaDescriptionSettingIdentifier];
+              item.isSwitchOn = NO;
+          }
 
           // 特殊处理接口解析保存媒体选项
           if ([item.identifier isEqualToString:@"DYYYInterfaceDownload"]) {
@@ -4770,6 +4877,13 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
       NSMutableArray<AWESettingItemModel *> *interactionItems = [NSMutableArray array];
       NSArray *interactionSettings = @[
           @{
+              @"identifier" : kDYYYExactInteractionCountsSettingIdentifier,
+              @"title" : @"显示详细互动数",
+              @"detail" : @"",
+              @"cellType" : @6,
+              @"imageName" : kDYYYExactInteractionCountsSVGIconName
+          },
+          @{
               @"identifier" : @"DYYYDisableSettingsGesture",
               @"title" : @"禁用双指长按入口",
               @"subTitle" : @"开启后将禁用双指长按弹出的设置入口，开启或者关闭此选项都需要重启抖音以生效",
@@ -5079,6 +5193,66 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
                 @"imageName" : @"ic_xspeed_outlined"}];
       [speedButtonItems addObject:enableSpeedButton];
 
+      AWESettingItemModel *speedStickToEdgeItem = [DYYYSettingsHelper
+          createSettingItem:@{
+              @"identifier" : kDYYYSpeedButtonStickToEdgeSettingIdentifier,
+              @"title" : kDYYYStickToEdgeSettingTitle,
+              @"detail" : @"",
+              @"cellType" : @6,
+              @"imageName" : kDYYYStickToEdgeSVGIconName
+          }];
+      [speedButtonItems addObject:speedStickToEdgeItem];
+
+      AWESettingItemModel *autoHideSpeedButtonItem = [DYYYSettingsHelper
+          createSettingItem:@{
+              @"identifier" : @"DYYYAutoHideSpeedButton",
+              @"title" : @"自动隐藏快捷倍速按钮",
+              @"detail" : @"",
+              @"cellType" : @6,
+              @"imageName" : @"ic_eyeslash_outlined_16"
+          }];
+      [speedButtonItems addObject:autoHideSpeedButtonItem];
+
+      AWESettingItemModel *autoHideSpeedTimeItem = [[%c(AWESettingItemModel) alloc] init];
+      autoHideSpeedTimeItem.identifier = @"DYYYAutoHideSpeedButtonTime";
+      autoHideSpeedTimeItem.title = @"隐藏快捷倍速按钮时间";
+      CGFloat currentAutoHideTime = [[NSUserDefaults standardUserDefaults] floatForKey:@"DYYYAutoHideSpeedButtonTime"];
+      if (currentAutoHideTime <= 0.0) {
+          currentAutoHideTime = 30.0;
+      }
+      autoHideSpeedTimeItem.detail = [NSString stringWithFormat:@"%.0f", currentAutoHideTime];
+      autoHideSpeedTimeItem.type = 0;
+      autoHideSpeedTimeItem.svgIconImageName = @"ic_speed_outlined_20";
+      autoHideSpeedTimeItem.cellType = 26;
+      autoHideSpeedTimeItem.colorStyle = 2;
+      autoHideSpeedTimeItem.isEnable = YES;
+      autoHideSpeedTimeItem.cellTappedBlock = nil;
+      [speedButtonItems addObject:autoHideSpeedTimeItem];
+
+      AWESettingItemModel *speedResetPositionItem = [[%c(AWESettingItemModel) alloc] init];
+      speedResetPositionItem.identifier = kDYYYSpeedButtonResetPositionSettingIdentifier;
+      speedResetPositionItem.title = kDYYYResetButtonPositionSettingTitle;
+      speedResetPositionItem.detail = @"";
+      speedResetPositionItem.type = 0;
+      speedResetPositionItem.svgIconImageName = @"ic_switch_outlined";
+      speedResetPositionItem.cellType = 26;
+      speedResetPositionItem.colorStyle = 2;
+      speedResetPositionItem.isEnable = YES;
+      speedResetPositionItem.cellTappedBlock = ^{
+        if (![DYYYSettingsHelper getUserDefaults:@"DYYYEnableFloatSpeedButton"]) {
+            return;
+        }
+        if (speedButton) {
+            [speedButton resetToDefaultPosition];
+        } else {
+            NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+            [defaults removeObjectForKey:@"DYYYSpeedButtonCenterXPercent"];
+            [defaults removeObjectForKey:@"DYYYSpeedButtonCenterYPercent"];
+        }
+        [DYYYUtils showToast:@"已重置按钮位置"];
+      };
+      [speedButtonItems addObject:speedResetPositionItem];
+
       AWESettingItemModel *speedSettingsItem = [[%c(AWESettingItemModel) alloc] init];
       speedSettingsItem.identifier = @"DYYYSpeedSettings";
       speedSettingsItem.title = @"快捷倍速数值设置";
@@ -5130,32 +5304,6 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
       };
       [speedButtonItems addObject:showXItem];
 
-      AWESettingItemModel *autoHideSpeedButtonItem = [DYYYSettingsHelper
-          createSettingItem:@{
-              @"identifier" : @"DYYYAutoHideSpeedButton",
-              @"title" : @"自动隐藏快捷倍速按钮",
-              @"detail" : @"",
-              @"cellType" : @6,
-              @"imageName" : @"ic_eyeslash_outlined_16"
-          }];
-      [speedButtonItems addObject:autoHideSpeedButtonItem];
-
-      AWESettingItemModel *autoHideSpeedTimeItem = [[%c(AWESettingItemModel) alloc] init];
-      autoHideSpeedTimeItem.identifier = @"DYYYAutoHideSpeedButtonTime";
-      autoHideSpeedTimeItem.title = @"隐藏快捷倍速按钮时间";
-      CGFloat currentAutoHideTime = [[NSUserDefaults standardUserDefaults] floatForKey:@"DYYYAutoHideSpeedButtonTime"];
-      if (currentAutoHideTime <= 0.0) {
-          currentAutoHideTime = 30.0;
-      }
-      autoHideSpeedTimeItem.detail = [NSString stringWithFormat:@"%.0f", currentAutoHideTime];
-      autoHideSpeedTimeItem.type = 0;
-      autoHideSpeedTimeItem.svgIconImageName = @"ic_speed_outlined_20";
-      autoHideSpeedTimeItem.cellType = 26;
-      autoHideSpeedTimeItem.colorStyle = 2;
-      autoHideSpeedTimeItem.isEnable = YES;
-      autoHideSpeedTimeItem.cellTappedBlock = nil;
-      [speedButtonItems addObject:autoHideSpeedTimeItem];
-
       AWESettingItemModel *buttonSizeItem = [[%c(AWESettingItemModel) alloc] init];
       buttonSizeItem.identifier = @"DYYYSpeedButtonSize";
       buttonSizeItem.title = @"快捷倍速按钮大小";
@@ -5200,6 +5348,21 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
         refreshSpeedDependentItems();
       };
 
+      void (^originalSpeedStickSwitchChangedBlock)(void) = speedStickToEdgeItem.switchChangedBlock;
+      speedStickToEdgeItem.switchChangedBlock = ^{
+        if (originalSpeedStickSwitchChangedBlock) {
+            originalSpeedStickSwitchChangedBlock();
+        }
+        if (speedButton) {
+            if (speedButton.isEdgeHidden && !speedButton.dyyyEdgeHiddenByClearMode) {
+                [speedButton dyyy_restoreFromEdgeHidden];
+            }
+            [speedButton loadSavedPosition];
+            [speedButton resetFadeTimer];
+        }
+        refreshSpeedDependentItems();
+      };
+
       void (^originalSpeedSwitchChangedBlock)(void) = enableSpeedButton.switchChangedBlock;
       enableSpeedButton.switchChangedBlock = ^{
         if (originalSpeedSwitchChangedBlock) {
@@ -5234,6 +5397,42 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
                 @"cellType" : @6,
                 @"imageName" : @"ic_eyeslash_outlined_16"}];
       [clearButtonItems addObject:enableClearButton];
+
+      AWESettingItemModel *clearStickToEdgeItem = [DYYYSettingsHelper
+          createSettingItem:@{
+              @"identifier" : kDYYYClearButtonStickToEdgeSettingIdentifier,
+              @"title" : kDYYYStickToEdgeSettingTitle,
+              @"detail" : @"",
+              @"cellType" : @6,
+              @"imageName" : kDYYYStickToEdgeSVGIconName
+          }];
+      [clearButtonItems addObject:clearStickToEdgeItem];
+
+      AWESettingItemModel *clearResetPositionItem = [[%c(AWESettingItemModel) alloc] init];
+      clearResetPositionItem.identifier = kDYYYClearButtonResetPositionSettingIdentifier;
+      clearResetPositionItem.title = kDYYYResetButtonPositionSettingTitle;
+      clearResetPositionItem.detail = @"";
+      clearResetPositionItem.type = 0;
+      clearResetPositionItem.svgIconImageName = @"ic_switch_outlined";
+      clearResetPositionItem.cellType = 26;
+      clearResetPositionItem.colorStyle = 2;
+      clearResetPositionItem.isEnable = YES;
+      clearResetPositionItem.cellTappedBlock = ^{
+        if (![DYYYSettingsHelper getUserDefaults:@"DYYYEnableFloatClearButton"]) {
+            return;
+        }
+        if (hideButton) {
+            [hideButton resetToDefaultPosition];
+        } else {
+            NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+            [defaults removeObjectForKey:@"DYYYHideButtonCenterXPercent"];
+            [defaults removeObjectForKey:@"DYYYHideButtonCenterYPercent"];
+        }
+        [DYYYUtils showToast:@"已重置按钮位置"];
+      };
+      [clearButtonItems addObject:clearResetPositionItem];
+
+      // 添加清屏按钮大小配置项
 
       // 添加清屏按钮大小配置项
       AWESettingItemModel *clearButtonSizeItem = [[%c(AWESettingItemModel) alloc] init];
@@ -5590,42 +5789,77 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
     backupItem.type = 0;
     backupItem.svgIconImageName = @"ic_memorycard_outlined_20";
     backupItem.cellType = 26;
-    backupItem.colorStyle = 2;
+    backupItem.colorStyle = 0;
     backupItem.isEnable = YES;
     backupItem.cellTappedBlock = ^{
-      dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        formatter.dateFormat = @"yyyyMMdd_HHmmss";
-        NSString *timestamp = [formatter stringFromDate:NSDate.date];
-        NSString *backupFileName = [NSString stringWithFormat:@"DYYY_Backup_%@.dyyybackup", timestamp];
-        NSString *tempFilePath = [DYYYUtils cachePathForFilename:backupFileName];
-        NSError *backupError = nil;
-        NSDictionary *backupSummary = nil;
-        BOOL success = [DYYYBackupManager createBackupAtURL:[NSURL fileURLWithPath:tempFilePath]
-                               includeSensitiveCredentials:NO
-                                                    summary:&backupSummary
-                                                      error:&backupError];
-        dispatch_async(dispatch_get_main_queue(), ^{
-          if (!success) {
-              [DYYYUtils showToast:[NSString stringWithFormat:@"备份失败：%@", backupError.localizedDescription ?: @"未知错误"]];
-              return;
-          }
+      // 获取所有以DYYY开头的NSUserDefaults键值
+      NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+      NSDictionary *allDefaults = [defaults dictionaryRepresentation];
+      NSMutableDictionary *dyyySettings = [NSMutableDictionary dictionary];
 
-          NSURL *tempFileURL = [NSURL fileURLWithPath:tempFilePath];
-          UIDocumentPickerViewController *documentPicker = [[UIDocumentPickerViewController alloc] initWithURLs:@[ tempFileURL ] inMode:UIDocumentPickerModeExportToService];
-          DYYYBackupPickerDelegate *pickerDelegate = [[DYYYBackupPickerDelegate alloc] init];
-          pickerDelegate.tempFilePath = tempFilePath;
-          pickerDelegate.completionBlock = ^(__unused NSURL *url) {
-            [DYYYUtils showToast:[NSString stringWithFormat:@"备份成功：%@ 项设置、%@ 个资源文件", backupSummary[@"settingCount"],
-                                                                   backupSummary[@"resourceCount"]]];
-          };
-          static char kDYYYBackupPickerDelegateKey;
-          documentPicker.delegate = pickerDelegate;
-          objc_setAssociatedObject(documentPicker, &kDYYYBackupPickerDelegateKey, pickerDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-          UIViewController *topVC = topView();
-          [topVC presentViewController:documentPicker animated:YES completion:nil];
-        });
-      });
+      for (NSString *key in allDefaults.allKeys) {
+          if ([key hasPrefix:@"DYYY"]) {
+              dyyySettings[key] = [defaults objectForKey:key];
+          }
+      }
+
+      // 查找并添加图标文件
+      NSString *documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+      NSString *dyyyFolderPath = [documentsPath stringByAppendingPathComponent:@"DYYY"];
+      NSArray *iconFileNames = @[ @"like_before.png", @"like_after.png", @"comment.png", @"unfavorite.png", @"favorite.png", @"share.png", @"tab_plus.png", @"qingping.gif" ];
+      NSMutableDictionary *iconBase64Dict = [NSMutableDictionary dictionary];
+
+      for (NSString *iconFileName in iconFileNames) {
+          NSString *iconPath = [dyyyFolderPath stringByAppendingPathComponent:iconFileName];
+          if ([[NSFileManager defaultManager] fileExistsAtPath:iconPath]) {
+              // 读取图片数据并转换为Base64
+              NSData *imageData = [NSData dataWithContentsOfFile:iconPath];
+              if (imageData) {
+                  NSString *base64String = [imageData base64EncodedStringWithOptions:0];
+                  iconBase64Dict[iconFileName] = base64String;
+              }
+          }
+      }
+
+      // 将图标Base64数据添加到备份设置中
+      if (iconBase64Dict.count > 0) {
+          dyyySettings[@"DYYYIconsBase64"] = iconBase64Dict;
+      }
+
+      // 转换为JSON数据
+      NSError *error;
+      id jsonObject = DYYYJSONSafeObject(dyyySettings);
+      NSData *sortedJsonData = [NSJSONSerialization dataWithJSONObject:jsonObject options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:&error];
+      if (error) {
+          [DYYYUtils showToast:@"备份失败：无法序列化设置数据"];
+          return;
+      }
+
+      NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+      [formatter setDateFormat:@"yyyyMMdd_HHmmss"];
+      NSString *timestamp = [formatter stringFromDate:[NSDate date]];
+      NSString *backupFileName = [NSString stringWithFormat:@"DYYY_Backup_%@.json", timestamp];
+      NSString *tempFilePath = [DYYYUtils cachePathForFilename:backupFileName];
+      BOOL success = [sortedJsonData writeToFile:tempFilePath atomically:YES];
+      if (!success) {
+          [DYYYUtils showToast:@"备份失败：无法创建临时文件"];
+          return;
+      }
+
+      // 创建文档选择器让用户选择保存位置
+      NSURL *tempFileURL = [NSURL fileURLWithPath:tempFilePath];
+      UIDocumentPickerViewController *documentPicker = [[UIDocumentPickerViewController alloc] initWithURLs:@[ tempFileURL ] inMode:UIDocumentPickerModeExportToService];
+      DYYYBackupPickerDelegate *pickerDelegate = [[DYYYBackupPickerDelegate alloc] init];
+      pickerDelegate.tempFilePath = tempFilePath; // 设置临时文件路径
+      pickerDelegate.completionBlock = ^(NSURL *url) {
+        // 备份成功
+        [DYYYUtils showToast:@"备份成功"];
+      };
+      static char kDYYYBackupPickerDelegateKey;
+      documentPicker.delegate = pickerDelegate;
+      objc_setAssociatedObject(documentPicker, &kDYYYBackupPickerDelegateKey, pickerDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      UIViewController *topVC = topView();
+      [topVC presentViewController:documentPicker animated:YES completion:nil];
     };
     [backupItems addObject:backupItem];
 
@@ -5637,89 +5871,74 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
     restoreItem.type = 0;
     restoreItem.svgIconImageName = @"ic_phonearrowup_outlined_20";
     restoreItem.cellType = 26;
-    restoreItem.colorStyle = 2;
+    restoreItem.colorStyle = 0;
     restoreItem.isEnable = YES;
-    __weak AWESettingItemModel *weakRestoreItem = restoreItem;
     restoreItem.cellTappedBlock = ^{
-      UTType *backupType = [UTType typeWithFilenameExtension:@"dyyybackup"];
-      if (!backupType) {
-          [DYYYUtils showToast:@"无法创建 .dyyybackup 文件类型"];
-          return;
-      }
-      UIDocumentPickerViewController *documentPicker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[ backupType ] asCopy:YES];
+      UIDocumentPickerViewController *documentPicker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[ @"public.json", @"public.text" ] inMode:UIDocumentPickerModeImport];
       documentPicker.allowsMultipleSelection = NO;
+
+      // 设置委托
       DYYYBackupPickerDelegate *pickerDelegate = [[DYYYBackupPickerDelegate alloc] init];
       pickerDelegate.completionBlock = ^(NSURL *url) {
         if (!url) {
-            [DYYYUtils showToast:@"未选择备份文件"];
+            dispatch_async(dispatch_get_main_queue(), ^{
+              [DYYYUtils showToast:@"未选择备份文件"];
+            });
             return;
         }
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-          NSError *inspectionError = nil;
-          NSDictionary *inspection = [DYYYBackupManager inspectBackupAtURL:url error:&inspectionError];
-          dispatch_async(dispatch_get_main_queue(), ^{
-            if (!inspection) {
-                [DYYYUtils showToast:[NSString stringWithFormat:@"备份预检失败：%@", inspectionError.localizedDescription ?: @"未知错误"]];
-                return;
-            }
-            void (^performRestore)(DYYYBackupRestoreMode) = ^(DYYYBackupRestoreMode mode) {
-              dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                NSError *restoreError = nil;
-                NSDictionary *restoreSummary = nil;
-                BOOL success = [DYYYBackupManager restoreBackupAtURL:url mode:mode summary:&restoreSummary error:&restoreError];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                  if (!success) {
-                      [DYYYUtils showToast:[NSString stringWithFormat:@"恢复失败：%@", restoreError.localizedDescription ?: @"未知错误"]];
-                      return;
-                  }
-                  [DYYYUtils showToast:[NSString stringWithFormat:@"已%@恢复 %@ 项设置、%@ 个资源，请重启应用",
-                                                                     mode == DYYYBackupRestoreModeReplace ? @"覆盖" : @"合并", restoreSummary[@"settingCount"],
-                                                                     restoreSummary[@"resourceCount"]]];
-                  [weakRestoreItem refreshCell];
-                });
-              });
-            };
 
-            NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
-            dateFormatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
-            NSString *createdAt = [inspection[@"createdAt"] isKindOfClass:NSDate.class] ? [dateFormatter stringFromDate:inspection[@"createdAt"]] : @"未知";
-            NSString *resourceSize = [NSByteCountFormatter stringFromByteCount:[inspection[@"resourceBytes"] longLongValue] countStyle:NSByteCountFormatterCountStyleFile];
-            NSString *previewMessage = [NSString
-                stringWithFormat:@"格式：%@\n创建时间：%@\n来源版本：%@\n设置：%@ 项\n资源：%@ 个（%@）\n\n合并恢复只覆盖备份中存在的内容；覆盖恢复会先清理该备份管理的设置和资源。",
-                                 inspection[@"format"], createdAt, inspection[@"sourceAppVersion"], inspection[@"settingCount"], inspection[@"resourceCount"], resourceSize];
-            // UIDocumentPicker 的关闭动画可能尚未结束，此时底部弹窗会因
-            // 顶部控制器处于 isBeingDismissed 状态而拒绝展示。仅在此恢复
-            // 入口重试，避免预检成功但用户看不到恢复方式选择。
-            __block void (^presentPreview)(NSUInteger);
-            presentPreview = ^(NSUInteger remainingAttempts) {
-              UIViewController *alertController = [DYYYBottomAlertView showAlertWithTitle:@"备份内容预检"
-                                                                                   message:previewMessage
-                                                                                 avatarURL:nil
-                                                                          cancelButtonText:@"合并恢复"
-                                                                         confirmButtonText:@"覆盖恢复"
-                                                                              cancelAction:^{
-                                                                                performRestore(DYYYBackupRestoreModeMerge);
-                                                                              }
-                                                                               closeAction:^{}
-                                                                             confirmAction:^{
-                                                                               performRestore(DYYYBackupRestoreModeReplace);
-                                                                             }];
-              if (alertController) {
-                  presentPreview = nil;
-                  return;
-              }
-              if (remainingAttempts == 0) {
-                  presentPreview = nil;
-                  [DYYYUtils showToast:@"备份预检已完成，但恢复弹窗展示失败，请重试"];
-                  return;
-              }
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                if (presentPreview) {
-                    presentPreview(remainingAttempts - 1);
-                }
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+          NSData *jsonData = [NSData dataWithContentsOfURL:url];
+          if (!jsonData) {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                [DYYYUtils showToast:@"无法读取备份文件"];
               });
-            };
-            presentPreview(15);
+              return;
+          }
+
+          NSError *jsonError;
+          NSDictionary *dyyySettings = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&jsonError];
+          if (jsonError || ![dyyySettings isKindOfClass:[NSDictionary class]]) {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                [DYYYUtils showToast:@"备份文件格式错误"];
+              });
+              return;
+          }
+
+          NSDictionary *iconBase64Dict = dyyySettings[@"DYYYIconsBase64"];
+          if (iconBase64Dict && [iconBase64Dict isKindOfClass:[NSDictionary class]]) {
+              NSString *documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+              NSString *dyyyFolderPath = [documentsPath stringByAppendingPathComponent:@"DYYY"];
+              NSFileManager *fileManager = [NSFileManager defaultManager];
+              if (![fileManager fileExistsAtPath:dyyyFolderPath]) {
+                  [fileManager createDirectoryAtPath:dyyyFolderPath withIntermediateDirectories:YES attributes:nil error:nil];
+              }
+
+              for (NSString *iconFileName in iconBase64Dict) {
+                  NSString *base64String = iconBase64Dict[iconFileName];
+                  if (![base64String isKindOfClass:[NSString class]]) {
+                      continue;
+                  }
+                  NSData *imageData = [[NSData alloc] initWithBase64EncodedString:base64String options:0];
+                  if (imageData) {
+                      NSString *iconPath = [dyyyFolderPath stringByAppendingPathComponent:iconFileName];
+                      [imageData writeToFile:iconPath atomically:YES];
+                  }
+              }
+
+              NSMutableDictionary *cleanSettings = [dyyySettings mutableCopy];
+              [cleanSettings removeObjectForKey:@"DYYYIconsBase64"];
+              dyyySettings = cleanSettings;
+          }
+
+          NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+          for (NSString *key in dyyySettings) {
+              [defaults setObject:dyyySettings[key] forKey:key];
+          }
+
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [DYYYUtils showToast:@"设置已恢复，请重启应用以应用所有更改"];
+            [restoreItem refreshCell];
           });
         });
       };
@@ -5920,15 +6139,21 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
     aboutItem.isEnable = YES;
     aboutItem.cellTappedBlock = ^{
       [DYYYSettingsHelper showAboutDialog:@"关于DYYY"
-                                  message:@"版本: " DYYY_VERSION @"\n\n"
-                                          @"感谢使用DYYY\n\n"
-                                          @"感谢huami开源\n\n"
-                                          @"@维他入我心 基于DYYY二次开发\n\n"
-                                          @"感谢huami group中群友的支持赞助\n\n"
-                                          @"Telegram @huamidev\n\n"
-                                          @"Telegram @vita_app\n\n"
-                                          @"开源地址 huami1314/DYYY\n\n"
-                                          @"仓库地址 Wtrwx/DYYY\n\n"
+                                  message:@"DYYY · VexCove Edition\n"
+                                          @"版本：" DYYY_VERSION @"\n\n"
+                                          @"感谢使用 DYYY\n\n"
+                                          @"本项目基于 Wtrwx/DYYY 继续开发与维护\n"
+                                          @"感谢 huami 开源 DYYY\n"
+                                          @"感谢 @维他 的二次开发贡献\n"
+                                          @"感谢 huami group 群友的支持与赞助\n\n"
+                                          @"Telegram\n"
+                                          @"• huami：@huamidev\n"
+                                          @"• 维他：@vita_app\n"
+                                          @"• VexCove：@VexLabs1\n\n"
+                                          @"GitHub\n"
+                                          @"• 原始开源仓库：huami1314/DYYY\n"
+                                          @"• 上游仓库：Wtrwx/DYYY\n"
+                                          @"• 当前维护仓库：VexCove/DYYY"
                                 onConfirm:nil];
     };
     [aboutItems addObject:aboutItem];

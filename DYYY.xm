@@ -40,6 +40,7 @@
 #import "Sources/Features/DYYYFPSOverlay.h"
 #import "Sources/Features/DYYYMiniProgramRewardBypass.h"
 #import "Sources/Features/DYYYPrivacyRecordUploadGuard.h"
+#import "Sources/Hooking/DYYYHookManager.h"
 #import "Sources/Settings/DYYYSettingViewController.h"
 #import "Sources/UI/DYYYToast.h"
 #import "Sources/Core/DYYYUtils.h"
@@ -358,177 +359,20 @@ static void DYYYLoginBypassInvokeCloseCallback(id callback) {
     completionBlock();
 }
 
-static NSArray<NSString *> *DYYYLoginBypassTargetBundleIdentifiers(void) {
-    static NSArray<NSString *> *bundleIdentifiers = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-      bundleIdentifiers = @[
-          @"com.ss.iphone.ugc.Aweme",
-          @"com.ss.iphone.ugc.Aweme.beta",
-          @"com.ss.iphone.ugc.Aweme.internal",
-          @"com.ss.iphone.ugc.aweme.lite"
-      ];
-    });
-    return bundleIdentifiers;
-}
-
-static BOOL DYYYLoginBypassIsTargetBundleIdentifier(id value) {
-    if (![value isKindOfClass:[NSString class]]) {
-        return NO;
-    }
-
-    for (NSString *bundleIdentifier in DYYYLoginBypassTargetBundleIdentifiers()) {
-        if ([value isEqualToString:bundleIdentifier]) {
-            return YES;
-        }
-    }
-    return NO;
-}
-
-static NSArray<NSString *> *DYYYLoginBypassEmojiSuffixes(void) {
-    static NSArray<NSString *> *suffixes = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-      suffixes = @[
-          @"\U0001F60A",
-          @"\U0001F60E",
-          @"\U0001F914",
-          @"\U0001F609",
-          @"\U0001F60B",
-          @"\U0001F60D",
-          @"\U0001F970",
-          @"\U0001F618",
-          @"\U0001F617",
-          @"\U0001F619",
-          @"\U0001F61A",
-          @"\U0001F642",
-          @"\U0001F917",
-          @"\U0001F929",
-          @"\U0001F928",
-          @"\U0001F9D0",
-          @"\U0001F913",
-          @"\U0001F607",
-          @"\U0001F973",
-          @"\U0001F60C",
-          @"\U0001F60F",
-          @"\U0001F60A",
-          @"\U0001F612",
-          @"\U0001F643"
-      ];
-    });
-    return suffixes;
-}
-
-static NSMutableDictionary<NSString *, NSString *> *DYYYLoginBypassReplacementCache(void) {
-    static NSMutableDictionary<NSString *, NSString *> *cache = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-      cache = [NSMutableDictionary dictionary];
-      [NSTimer scheduledTimerWithTimeInterval:60.0
-                                      repeats:YES
-                                        block:^(__unused NSTimer *timer) {
-                                          @synchronized(cache) {
-                                              [cache removeAllObjects];
-                                          }
-                                        }];
-    });
-    return cache;
-}
-
 static NSString *DYYYLoginBypassReplacementBundleIdentifier(NSString *bundleIdentifier) {
-    if (!DYYYLoginBypassEnabled() || !DYYYLoginBypassIsTargetBundleIdentifier(bundleIdentifier)) {
-        return bundleIdentifier;
-    }
-
-    NSMutableDictionary<NSString *, NSString *> *cache = DYYYLoginBypassReplacementCache();
-    @synchronized(cache) {
-        NSString *cachedValue = cache[bundleIdentifier];
-        if (cachedValue.length > 0) {
-            return cachedValue;
-        }
-
-        NSArray<NSString *> *suffixes = DYYYLoginBypassEmojiSuffixes();
-        if (suffixes.count == 0) {
-            return bundleIdentifier;
-        }
-
-        NSString *suffix = suffixes[arc4random_uniform((uint32_t)suffixes.count)];
-        NSString *replacement = [bundleIdentifier stringByAppendingString:suffix];
-        if (replacement.length > 0 && cache.count <= 99) {
-            cache[bundleIdentifier] = replacement;
-        }
-        return replacement ?: bundleIdentifier;
-    }
+    return [DYYYLoginBypassManager replacementBundleIdentifier:bundleIdentifier];
 }
 
 static NSString *DYYYLoginBypassHeaderValueByReplacingBundleIdentifier(NSString *value, NSString *field) {
-    if (!DYYYLoginBypassEnabled() || ![value isKindOfClass:[NSString class]] || ![field isKindOfClass:[NSString class]]) {
-        return value;
-    }
-
-    NSString *lowercaseField = [field lowercaseString];
-    BOOL isBundleHeaderField = [lowercaseField isEqualToString:@"x-bundle-id"] || [lowercaseField isEqualToString:@"bundle-identifier"] ||
-                               [lowercaseField isEqualToString:@"app-bundle-id"] || [lowercaseField isEqualToString:@"x-app-bundle-id"];
-    if (!isBundleHeaderField || !DYYYLoginBypassIsTargetBundleIdentifier(value)) {
-        return value;
-    }
-
-    return DYYYLoginBypassReplacementBundleIdentifier(value);
+    return [DYYYLoginBypassManager headerValueByReplacingBundleIdentifier:value field:field];
 }
 
 static NSDictionary *DYYYLoginBypassHeadersByReplacingBundleIdentifiers(NSDictionary *headers) {
-    if (!DYYYLoginBypassEnabled() || ![headers isKindOfClass:[NSDictionary class]]) {
-        return headers;
-    }
-
-    NSMutableDictionary *mutableHeaders = [headers mutableCopy];
-    NSArray<NSString *> *headerKeys = @[ @"X-Bundle-ID", @"X-App-Bundle-ID", @"Bundle-Identifier", @"App-Bundle-ID" ];
-    for (NSString *headerKey in headerKeys) {
-        id value = mutableHeaders[headerKey];
-        if (DYYYLoginBypassIsTargetBundleIdentifier(value)) {
-            mutableHeaders[headerKey] = DYYYLoginBypassReplacementBundleIdentifier(value);
-        }
-
-        NSString *lowercaseKey = [headerKey lowercaseString];
-        id lowercaseValue = mutableHeaders[lowercaseKey];
-        if (DYYYLoginBypassIsTargetBundleIdentifier(lowercaseValue)) {
-            mutableHeaders[lowercaseKey] = DYYYLoginBypassReplacementBundleIdentifier(lowercaseValue);
-        }
-    }
-
-    return mutableHeaders;
-}
-
-static BOOL DYYYLoginBypassURLStringContainsBundleKey(NSString *urlString) {
-    return [urlString containsString:@"bundle_id"] || [urlString containsString:@"bundleId"] || [urlString containsString:@"bundle_identifier"];
+    return [DYYYLoginBypassManager headersByReplacingBundleIdentifiers:headers];
 }
 
 static NSURL *DYYYLoginBypassURLByReplacingBundleIdentifier(NSURL *url) {
-    if (!DYYYLoginBypassEnabled() || ![url isKindOfClass:[NSURL class]]) {
-        return url;
-    }
-
-    NSString *absoluteString = [url absoluteString];
-    if (absoluteString.length == 0 || !DYYYLoginBypassURLStringContainsBundleKey(absoluteString)) {
-        return url;
-    }
-
-    NSString *updatedString = absoluteString;
-    NSString *awemeBundleIdentifier = @"com.ss.iphone.ugc.Aweme";
-    NSString *liteBundleIdentifier = @"com.ss.iphone.ugc.aweme.lite";
-    if ([updatedString containsString:awemeBundleIdentifier]) {
-        updatedString = [updatedString stringByReplacingOccurrencesOfString:awemeBundleIdentifier
-                                                                 withString:DYYYLoginBypassReplacementBundleIdentifier(awemeBundleIdentifier)];
-    } else if ([updatedString containsString:liteBundleIdentifier]) {
-        updatedString = [updatedString stringByReplacingOccurrencesOfString:liteBundleIdentifier
-                                                                 withString:DYYYLoginBypassReplacementBundleIdentifier(liteBundleIdentifier)];
-    }
-
-    if ([updatedString isEqualToString:absoluteString]) {
-        return url;
-    }
-
-    return [NSURL URLWithString:updatedString] ?: url;
+    return [DYYYLoginBypassManager URLByReplacingTargetBundleIdentifiers:url];
 }
 
 %group DYYYLoginBypassCore
@@ -541,22 +385,20 @@ static NSURL *DYYYLoginBypassURLByReplacingBundleIdentifier(NSURL *url) {
 
 - (NSDictionary *)infoDictionary {
     NSDictionary *infoDictionary = %orig;
-    if (!DYYYLoginBypassEnabled() || ![infoDictionary isKindOfClass:[NSDictionary class]]) {
+    if (![infoDictionary isKindOfClass:[NSDictionary class]]) {
         return infoDictionary;
     }
 
     NSString *bundleIdentifier = infoDictionary[@"CFBundleIdentifier"];
-    if (!DYYYLoginBypassIsTargetBundleIdentifier(bundleIdentifier)) {
+    NSString *replacementIdentifier = DYYYLoginBypassReplacementBundleIdentifier(bundleIdentifier);
+    if (![replacementIdentifier isKindOfClass:[NSString class]] || replacementIdentifier.length == 0 ||
+        [replacementIdentifier isEqualToString:bundleIdentifier]) {
         return infoDictionary;
     }
 
     NSMutableDictionary *mutableInfoDictionary = [infoDictionary mutableCopy];
-    mutableInfoDictionary[@"CFBundleIdentifier"] = DYYYLoginBypassReplacementBundleIdentifier(bundleIdentifier);
+    mutableInfoDictionary[@"CFBundleIdentifier"] = replacementIdentifier;
     return mutableInfoDictionary;
-}
-
-+ (NSBundle *)mainBundle {
-    return %orig;
 }
 %end
 
@@ -574,6 +416,10 @@ static NSURL *DYYYLoginBypassURLByReplacingBundleIdentifier(NSURL *url) {
 
 - (void)addValue:(NSString *)value forHTTPHeaderField:(NSString *)field {
     %orig(DYYYLoginBypassHeaderValueByReplacingBundleIdentifier(value, field), field);
+}
+
+- (void)setURL:(NSURL *)url {
+    %orig(DYYYLoginBypassURLByReplacingBundleIdentifier(url));
 }
 %end
 
@@ -602,11 +448,37 @@ static NSURL *DYYYLoginBypassURLByReplacingBundleIdentifier(NSURL *url) {
 
 %end
 
+%group DYYYLoginBypassAccountLogout
+
+%hook AWEUserServiceListener
+
+- (void)didFinishLogoutWithUid:(NSString *)userID {
+    %orig(userID);
+    [DYYYLoginBypassManager handleOfficialLogout];
+}
+
+%end
+
+%end
+
+%group DYYYLoginBypassAccountLifecycleDidFinishLogin
+
+%hook AWEUserServiceListener
+
+- (void)didFinishLogin:(id)user {
+    %orig(user);
+    [DYYYLoginBypassManager handleOfficialLoginCompletionWithUserID:user];
+}
+
+%end
+
+%end
+
 %group DYYYLoginBypassAccountMulticast
 
 %hook TTAccountMulticast
 
-- (void)broadcastLoginSuccess:(id)user platform:(NSInteger)platform reason:(id)reason {
+- (void)broadcastLoginSuccess:(id)user platform:(id)platform reason:(long long)reason {
     %orig(user, platform, reason);
     [DYYYLoginBypassManager handleOfficialLoginCompletionWithUserID:user];
 }
@@ -756,6 +628,38 @@ static NSURL *DYYYLoginBypassURLByReplacingBundleIdentifier(NSURL *url) {
         return;
     }
     %orig;
+}
+%end
+%end
+
+%group DYYYLoginBypassPreLoginAlert
+%hook AWEPreLoginAlertManager
+- (BOOL)canShow {
+    return DYYYShouldBlockVersionUpdateWorkflow() ? NO : %orig;
+}
+
+- (BOOL)canShowNow {
+    return DYYYShouldBlockVersionUpdateWorkflow() ? NO : %orig;
+}
+%end
+%end
+
+%group DYYYLoginBypassPreLoginFrequency
+%hook AWEPreLoginAlertManager
+- (BOOL)isShowFrequencySatisfied {
+    return DYYYShouldBlockVersionUpdateWorkflow() ? NO : %orig;
+}
+
+- (BOOL)isShowFrequencySatisfiedByLoginStrategy {
+    return DYYYShouldBlockVersionUpdateWorkflow() ? NO : %orig;
+}
+%end
+%end
+
+%group DYYYLoginBypassNewVersionAlert
+%hook AWENewVersionAlertManager
+- (BOOL)canShow {
+    return DYYYShouldBlockVersionUpdateWorkflow() ? NO : %orig;
 }
 %end
 %end
@@ -1214,7 +1118,7 @@ static void DYYYEnsureFloatSpeedButton(AWEPlayInteractionViewController *preferr
 
     if (!speedButton) {
         CGRect windowBounds = keyWindow.bounds;
-        CGFloat initialY = CGRectGetHeight(windowBounds) * 0.7 - speedButtonSize / 2.0;
+        CGFloat initialY = CGRectGetHeight(windowBounds) * (1.0 - 0.65) - speedButtonSize / 2.0;
         initialY = MAX(10.0, MIN(initialY, CGRectGetHeight(windowBounds) - speedButtonSize - 10.0));
         CGRect initialFrame = CGRectMake(CGRectGetWidth(windowBounds) - speedButtonSize - 10.0,
                                          initialY,
@@ -2627,7 +2531,7 @@ static BOOL DYYYShouldBlockFeedNowPlayingSystemInfoWrite(void) {
 
 %end
 
-// 采用 HideNowPlayingInfo 的强屏蔽思路：播放中心写入时直接清空系统 Now Playing，不再走原实现。
+// 写入播放中心时清空系统 Now Playing，不再走宿主写入路径。
 %hook AWENowPlayingInfoCenter
 
 - (void)becomePlayingPlayer:(id)player {
@@ -5209,8 +5113,11 @@ static void DYYYShowProfileFollowGlassConfirm(id user, void (^confirmAction)(voi
 
 static char kDYYYFeedLocationContainerManagedHiddenKey;
 static char kDYYYFeedLocationContainerOriginalHiddenKey;
+static char kDYYYFeedAnchorArrangedManagedHiddenKey;
+static char kDYYYFeedAnchorArrangedOriginalHiddenKey;
 
 static void DYYYApplyPlayInteractionElementLayout(UIView *view, NSString *fallbackClassName);
+static void DYYYSyncHiddenFeedAnchorArrangedView(UIView *inner);
 
 %hook AWEFeedAnchorContainerView
 
@@ -5244,6 +5151,11 @@ static void DYYYApplyPlayInteractionElementLayout(UIView *view, NSString *fallba
             objc_setAssociatedObject(self, &kDYYYFeedLocationContainerManagedHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
         self.hidden = YES;
+        return;
+    }
+
+    DYYYSyncHiddenFeedAnchorArrangedView(self);
+    if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
         return;
     }
 
@@ -6129,6 +6041,62 @@ static BOOL DYYYShouldSkipAnchorFollowLayout(UIView *target) {
     return YES;
 }
 
+static UIView *DYYYFeedAnchorArrangedView(UIView *inner) {
+    if (!inner) {
+        return nil;
+    }
+    Class stackClass = %c(AWEElementStackView);
+    UIView *arranged = inner;
+    while (arranged.superview && stackClass && ![arranged.superview isKindOfClass:stackClass]) {
+        arranged = arranged.superview;
+    }
+    if (stackClass && arranged.superview && [arranged.superview isKindOfClass:stackClass]) {
+        return arranged;
+    }
+    return inner;
+}
+
+static void DYYYLogFeedAnchorHookOnce(NSString *event) {
+    static NSMutableSet<NSString *> *loggedEvents = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      loggedEvents = [NSMutableSet set];
+    });
+    @synchronized(loggedEvents) {
+        if ([loggedEvents containsObject:event]) {
+            return;
+        }
+        [loggedEvents addObject:event];
+    }
+    NSLog(@"[DYYY][RuntimeHook][FeedAnchor] %@", event);
+}
+
+static void DYYYSyncHiddenFeedAnchorArrangedView(UIView *inner) {
+    UIView *arranged = DYYYFeedAnchorArrangedView(inner);
+    if (!arranged) {
+        return;
+    }
+
+    NSNumber *managed = objc_getAssociatedObject(arranged, &kDYYYFeedAnchorArrangedManagedHiddenKey);
+    if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+        if (![managed boolValue]) {
+            objc_setAssociatedObject(arranged, &kDYYYFeedAnchorArrangedOriginalHiddenKey, @(arranged.hidden), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(arranged, &kDYYYFeedAnchorArrangedManagedHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            DYYYLogFeedAnchorHookOnce(@"Hook 已安装");
+            DYYYLogFeedAnchorHookOnce(@"collapsed arranged view");
+        }
+        arranged.hidden = YES;
+        return;
+    }
+
+    if ([managed boolValue]) {
+        NSNumber *originalHidden = objc_getAssociatedObject(arranged, &kDYYYFeedAnchorArrangedOriginalHiddenKey);
+        objc_setAssociatedObject(arranged, &kDYYYFeedAnchorArrangedManagedHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(arranged, &kDYYYFeedAnchorArrangedOriginalHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        arranged.hidden = originalHidden ? originalHidden.boolValue : NO;
+    }
+}
+
 static BOOL DYYYShouldSkipDanmakuFollowLayout(UIView *target) {
     if (DYYYGetBool(@"DYYYHideDanmuButton")) {
         return YES;
@@ -6629,12 +6597,32 @@ static void DYYYApplyPlayInteractionElementLayout(UIView *view, NSString *fallba
     DYYYApplyLeftAlignedScaleAndOffsetXY(target, scale, extraTx, verticalOffset);
 }
 
+static BOOL DYYYViewIsInsidePlayInteraction(UIView *view) {
+    if (!view) {
+        return NO;
+    }
+
+    Class playClass = %c(AWEPlayInteractionViewController);
+    Protocol *playProtocol = NSProtocolFromString(@"AWEPlayInteractionViewControllerProtocol");
+    for (UIResponder *responder = view.nextResponder; responder; responder = responder.nextResponder) {
+        if (![responder isKindOfClass:[UIViewController class]]) {
+            continue;
+        }
+        if (playClass && [responder isKindOfClass:playClass]) {
+            return YES;
+        }
+        if (playProtocol && [responder conformsToProtocol:playProtocol]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
 static void DYYYApplyNicknameLayoutToLabel(UIView *label) {
     if (!label) {
         return;
     }
-    UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:label];
-    if (![viewController isKindOfClass:%c(AWEPlayInteractionViewController)]) {
+    if (!DYYYViewIsInsidePlayInteraction(label)) {
         return;
     }
     DYYYApplyPlayInteractionElementLayout(label, @"AWEPlayInteractionAuthorElement");
@@ -7103,6 +7091,208 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 %end
 
+%group DYYYHideFeedAnchorGroup
+
+%hook AWEPlayInteractionAnchorElement
+
++ (id)activateInfoWithContext:(id)context {
+    if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+        DYYYLogFeedAnchorHookOnce(@"Hook 已安装");
+        DYYYLogFeedAnchorHookOnce(@"activateInfoWithContext: skipped");
+        return nil;
+    }
+    return %orig;
+}
+
+- (void)layoutElementView {
+    %orig;
+    id elementView = nil;
+    if ([self respondsToSelector:@selector(elementView)]) {
+        elementView = [self elementView];
+    }
+    if ([elementView isKindOfClass:[UIView class]]) {
+        DYYYSyncHiddenFeedAnchorArrangedView((UIView *)elementView);
+    }
+    if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+        if ([self respondsToSelector:@selector(setAnchorHidden:)]) {
+            [self setAnchorHidden:YES];
+        }
+        return;
+    }
+    DYYYApplyPlayInteractionElementLayoutFromElement(self, @"AWEPlayInteractionAnchorElement");
+}
+
+%end
+
+%hook AWEAwemeModel
+
+- (id)anchorInfo {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		return nil;
+	}
+	return %orig;
+}
+
+- (void)setAnchorInfo:(id)info {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		%orig(nil);
+		return;
+	}
+	%orig;
+}
+
+- (id)anchorList {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		return nil;
+	}
+	return %orig;
+}
+
+- (void)setAnchorList:(id)list {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		%orig(nil);
+		return;
+	}
+	%orig;
+}
+
+- (id)anchorNormalInfo {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		return nil;
+	}
+	return %orig;
+}
+
+- (void)setAnchorNormalInfo:(id)info {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		%orig(nil);
+		return;
+	}
+	%orig;
+}
+
+- (id)doubleColumnAnchorNormalInfo {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		return nil;
+	}
+	return %orig;
+}
+
+- (void)setDoubleColumnAnchorNormalInfo:(id)info {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		%orig(nil);
+		return;
+	}
+	%orig;
+}
+
+- (id)localLifeAnchorInfo {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		return nil;
+	}
+	return %orig;
+}
+
+- (void)setLocalLifeAnchorInfo:(id)info {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		%orig(nil);
+		return;
+	}
+	%orig;
+}
+
+- (id)nearbyFeedDualAnchorInfo {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		return nil;
+	}
+	return %orig;
+}
+
+- (void)setNearbyFeedDualAnchorInfo:(id)info {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		%orig(nil);
+		return;
+	}
+	%orig;
+}
+
+- (id)minorAnchorInfo {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		return nil;
+	}
+	return %orig;
+}
+
+- (void)setMinorAnchorInfo:(id)info {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		%orig(nil);
+		return;
+	}
+	%orig;
+}
+
+- (id)commonAnchor {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		return nil;
+	}
+	return %orig;
+}
+
+- (void)setCommonAnchor:(id)anchor {
+	if (DYYYGetBool(@"DYYYHideFeedAnchorContainer")) {
+		%orig(nil);
+		return;
+	}
+	%orig;
+}
+
+%end
+
+%end
+
+%group DYYYHideFeedAnchorTemplateGroup
+
+%hook AWEFeedTemplateAnchorViewV2
+
+- (void)layoutSubviews {
+    %orig;
+    DYYYSyncHiddenFeedAnchorArrangedView(self);
+}
+
+%end
+
+%end
+
+static void DYYYInitHideFeedAnchorGroupIfNeeded(void) {
+    static BOOL coreReady = NO;
+    static BOOL templateReady = NO;
+    if (!coreReady && objc_getClass("AWEAwemeModel") && objc_getClass("AWEPlayInteractionAnchorElement")) {
+        %init(DYYYHideFeedAnchorGroup);
+        coreReady = YES;
+        NSLog(@"[DYYY][RuntimeHook][FeedAnchor] Hook 已安装");
+    }
+    if (!templateReady && objc_getClass("AWEFeedTemplateAnchorViewV2")) {
+        %init(DYYYHideFeedAnchorTemplateGroup);
+        templateReady = YES;
+        NSLog(@"[DYYY][RuntimeHook][FeedAnchor] AWEFeedTemplateAnchorViewV2 group installed");
+    }
+}
+
+static void DYYYStartHideFeedAnchorHookInstaller(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        DYYYInitHideFeedAnchorGroupIfNeeded();
+        NSArray<NSNumber *> *delays = @[ @0.2, @0.8, @2.0, @5.0, @10.0 ];
+        for (NSNumber *delay in delays) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(),
+                           ^{
+                               DYYYInitHideFeedAnchorGroupIfNeeded();
+                           });
+        }
+    });
+}
+
 %hook AWEPlayInteractionChapterElement
 
 - (void)layoutElementView {
@@ -7191,8 +7381,7 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
     if (DYYYGetBool(@"DYYYHideHisShop")) {
         return;
     }
-    UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
-    if ([viewController isKindOfClass:%c(AWEPlayInteractionViewController)]) {
+    if (DYYYViewIsInsidePlayInteraction(self)) {
         DYYYApplyPlayInteractionElementLayout(self, @"AWEPlayInteractionECommerceEntryElement");
     }
 }
@@ -9517,8 +9706,7 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
         return;
     }
 
-    UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
-    if ([viewController isKindOfClass:%c(AWEPlayInteractionViewController)]) {
+    if (DYYYViewIsInsidePlayInteraction(self)) {
         DYYYApplyPlayInteractionElementLayout(self, @"AWEPlayInteractionDanmakuElement");
     }
 }
@@ -9972,18 +10160,6 @@ static BOOL DYYYShouldVerifiedCollapseCommentHeaderModel(id model) {
 }
 %end
 
-// 隐藏分享给朋友提示
-%hook AWEPlayInteractionStrongifyShareContentView
-
-- (void)layoutSubviews {
-    %orig;
-    if (DYYYGetBool(@"DYYYHideShareContentView")) {
-        [self removeFromSuperview];
-        return;
-    }
-}
-
-%end
 
 %hook AWELeftSideBarEntranceView
 
@@ -10154,12 +10330,72 @@ static BOOL DYYYShouldVerifiedCollapseCommentHeaderModel(id model) {
 
 %end
 
+static BOOL DYYYLiveDiscoveryHideEnabled(void) {
+    return DYYYGetBool(@"DYYYHideLiveDiscovery");
+}
+
+static void DYYYApplyLiveDiscoveryChromeHidden(UIView *view) {
+    if (![view isKindOfClass:[UIView class]]) {
+        return;
+    }
+    view.hidden = YES;
+    view.alpha = 0;
+}
+
+static BOOL DYYYLiveDiscoveryClosingRevisit = NO;
+
+static void DYYYCloseLiveDiscoveryRevisitIfNeeded(id controller) {
+    if (!DYYYLiveDiscoveryHideEnabled() || DYYYLiveDiscoveryClosingRevisit) {
+        return;
+    }
+    if (![controller respondsToSelector:@selector(p_closeRevisitViewImmediately)]) {
+        return;
+    }
+    DYYYLiveDiscoveryClosingRevisit = YES;
+    [controller p_closeRevisitViewImmediately];
+    DYYYLiveDiscoveryClosingRevisit = NO;
+}
+
 %hook AWEFeedLiveTabTopSelectionView
 - (void)setHideTimer:(id)timer {
     if (DYYYGetBool(@"DYYYDisableAutoHideLive")) {
         timer = nil;
     }
     %orig(timer);
+}
+
+// 隐藏直播发现：展开态顶部标签栏（精选/关注/…/发现更多）
+// 宿主入口为 -showTabTopSelectionView:（v20@0:8B16）；隐藏优先于 DYYYDisableAutoHideLive
+- (void)showTabTopSelectionView:(BOOL)show {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        %orig(NO);
+        DYYYApplyLiveDiscoveryChromeHidden(self);
+        return;
+    }
+    %orig(show);
+}
+
+- (void)setHidden:(BOOL)hidden {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        %orig(YES);
+        return;
+    }
+    %orig(hidden);
+}
+
+- (void)setAlpha:(CGFloat)alpha {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        %orig(0);
+        return;
+    }
+    %orig(alpha);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        DYYYApplyLiveDiscoveryChromeHidden(self);
+    }
 }
 %end
 
@@ -11537,16 +11773,126 @@ static void DYYYLiveDurationInstallFromInnerFeedCell(id cell) {
 
 %end
 
-// 隐藏直播发现
+// 隐藏直播发现：上滑收起后的「直播发现」胶囊
+// 宿主入口为 -showControlView:animation:（v24@0:8B16B20）；layoutSubviews 仅作显隐回写
 %hook AWEFeedLiveTabRevisitControlView
+
+- (void)showControlView:(BOOL)show animation:(BOOL)animation {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        %orig(NO, NO);
+        DYYYApplyLiveDiscoveryChromeHidden(self);
+        return;
+    }
+    %orig(show, animation);
+}
+
+- (void)autoOpenRevisitSection {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        return;
+    }
+    %orig;
+}
+
+- (void)setHidden:(BOOL)hidden {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        %orig(YES);
+        return;
+    }
+    %orig(hidden);
+}
 
 - (void)layoutSubviews {
     %orig;
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        DYYYApplyLiveDiscoveryChromeHidden(self);
+    }
+}
+%end
 
-    if (DYYYGetBool(@"DYYYHideLiveDiscovery")) {
-        self.hidden = YES;
+%hook AWEFeedLiveTabSelectionComponent
+- (void)showTopTabView:(BOOL)show {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        %orig(NO);
         return;
     }
+    %orig(show);
+}
+%end
+
+// 进直播 Tab 自动下拉的是 VC 打开 revisit 面板（约 252pt 不透明空容器 + IESLiveImageView），
+// 不是 EventView 本身。关闭走宿主 -p_closeRevisitViewImmediately。
+%hook AWEFeedLiveTabViewController
+- (void)p_openRevisitView {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        DYYYCloseLiveDiscoveryRevisitIfNeeded(self);
+        return;
+    }
+    %orig;
+}
+
+- (void)p_openRevisitViewAnimation {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        DYYYCloseLiveDiscoveryRevisitIfNeeded(self);
+        return;
+    }
+    %orig;
+}
+
+- (void)p_showRevisitViewWithAnimation {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        DYYYCloseLiveDiscoveryRevisitIfNeeded(self);
+        return;
+    }
+    %orig;
+}
+
+- (void)openAndRefreshRevisit {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        DYYYCloseLiveDiscoveryRevisitIfNeeded(self);
+        return;
+    }
+    %orig;
+}
+
+- (void)p_showTopSelectionView:(BOOL)show {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        %orig(NO);
+        return;
+    }
+    %orig(show);
+}
+
+- (CGFloat)portalViewHeight {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        return 0;
+    }
+    return %orig;
+}
+
+- (void)clickOpenRevisitEvent:(BOOL)open visitType:(int)visitType {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        DYYYCloseLiveDiscoveryRevisitIfNeeded(self);
+        return;
+    }
+    %orig;
+}
+
+- (void)handleOpenAndRefreshRevisitNotification:(id)notification {
+    if (DYYYLiveDiscoveryHideEnabled()) {
+        DYYYCloseLiveDiscoveryRevisitIfNeeded(self);
+        return;
+    }
+    %orig;
+}
+
+- (void)feedLiveTabDidEnter:(id)context {
+    %orig;
+    DYYYCloseLiveDiscoveryRevisitIfNeeded(self);
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    DYYYCloseLiveDiscoveryRevisitIfNeeded(self);
 }
 %end
 
@@ -11987,19 +12333,6 @@ static void DYYYHideProfilePostGuideView(UIView *view) {
 
 %end
 
-// 隐藏笔记
-%hook AWECorrelationItemTag
-
-- (void)layoutSubviews {
-    %orig;
-    if (DYYYGetBool(@"DYYYHideItemTag")) {
-        self.hidden = YES;
-        return;
-    }
-}
-
-%end
-
 // 屏蔽模板按钮组件（底部互动）- hook button 方法返回 nil
 %hook AWEPlayInteractionTemplateButton
 - (id)button {
@@ -12222,14 +12555,6 @@ static void DYYYHideProfilePostGuideView(UIView *view) {
 }
 %end
 
-%hook AWEVideoTypeTagView
-
-- (void)setupUI {
-    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYHideLiveGIF"])
-        %orig;
-}
-%end
-
 // 隐藏直播广场
 %hook IESLiveFeedDrawerEntranceView
 - (void)layoutSubviews {
@@ -12238,6 +12563,42 @@ static void DYYYHideProfilePostGuideView(UIView *view) {
     if (DYYYGetBool(@"DYYYHideLivePlayground")) {
         self.hidden = YES;
     }
+}
+
+%end
+
+// 隐藏直播间分享面板直播伴侣提示
+%hook IESLiveFlowGuidanceFragment
+
++ (BOOL)componentShouldActive:(id)attacher {
+    if (DYYYGetBool(@"DYYYHideLiveRoomShareCompanion")) {
+        return NO;
+    }
+    return %orig;
+}
+
+%end
+
+%hook IESLiveFlowGuidanceAdView
+
+- (void)layoutSubviews {
+    if (DYYYGetBool(@"DYYYHideLiveRoomShareCompanion")) {
+        self.hidden = YES;
+        [self removeFromSuperview];
+        return;
+    }
+    %orig;
+}
+
+- (void)didMoveToSuperview {
+    if (DYYYGetBool(@"DYYYHideLiveRoomShareCompanion")) {
+        if (self.superview) {
+            self.hidden = YES;
+            [self removeFromSuperview];
+        }
+        return;
+    }
+    %orig;
 }
 
 %end
@@ -12508,11 +12869,21 @@ static void DYYYHideProfilePostGuideView(UIView *view) {
 %hook AWEListDataController
 
 - (void)setDataSource:(NSMutableArray *)dataSource {
+    Class userPostsClass = objc_getClass("AWEUserPostsDataManager");
+    if (userPostsClass && [self isKindOfClass:userPostsClass]) {
+        %orig(dataSource);
+        return;
+    }
     NSArray *filtered = [DYYYUtils arrayByRemovingAdvertisements:dataSource];
     %orig(filtered);
 }
 
 - (void)setFilteredDataSource:(NSMutableArray *)filteredDataSource {
+    Class userPostsClass = objc_getClass("AWEUserPostsDataManager");
+    if (userPostsClass && [self isKindOfClass:userPostsClass]) {
+        %orig(filteredDataSource);
+        return;
+    }
     NSArray *filtered = [DYYYUtils arrayByRemovingAdvertisements:filteredDataSource];
     %orig(filtered);
 }
@@ -13440,93 +13811,6 @@ static BOOL DYYYAwemeModelMatchesConfiguredContentFilters(AWEAwemeModel *aweme,
 		return nil;
 	}
 	return %orig;
-}
-
-// 屏蔽锚点信息
-- (id)anchorInfo {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setAnchorInfo:(id)info {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-- (id)localLifeAnchorInfo {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setLocalLifeAnchorInfo:(id)info {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-- (id)nearbyFeedDualAnchorInfo {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setNearbyFeedDualAnchorInfo:(id)info {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-- (id)minorAnchorInfo {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setMinorAnchorInfo:(id)info {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-// 屏蔽通用锚点（合并到锚点信息）
-- (id)commonAnchor {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setCommonAnchor:(id)anchor {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		%orig(nil);
-		return;
-	}
-	%orig;
 }
 
 // 屏蔽作者声明及风险提示
@@ -14494,6 +14778,7 @@ static BOOL DYYYAwemeModelMatchesConfiguredContentFilters(AWEAwemeModel *aweme,
         AWEAwemeModel *awemeModel = nil;
 
         awemeModel = [self performSelector:@selector(awemeModel)];
+        [DYYYManager setAlbumDescriptionContextWithAwemeModel:awemeModel];
 
         AWEVideoModel *videoModel = awemeModel.video;
         AWEMusicModel *musicModel = awemeModel.music;
@@ -14954,6 +15239,56 @@ static void DYYYUpdateManagedPrivacyHalfScreenAppearance(AFDPrivacyHalfScreenVie
 
 %end
 
+static void DYYYHidePlusButtonOverlayView(id overlay) {
+    if (![overlay isKindOfClass:[UIView class]]) {
+        return;
+    }
+    UIView *overlayView = (UIView *)overlay;
+    overlayView.userInteractionEnabled = NO;
+    overlayView.hidden = YES;
+    overlayView.alpha = 0;
+}
+
+static void DYYYHidePlusButtonOverlays(UIView *plusButton) {
+    if (![plusButton isKindOfClass:[UIView class]]) {
+        return;
+    }
+    plusButton.userInteractionEnabled = NO;
+    plusButton.hidden = YES;
+
+    static const SEL overlaySelectors[] = {
+        @selector(animationImageView),
+        @selector(specialContentAnimationView),
+        @selector(plusBubble),
+        @selector(studioBubble),
+    };
+    for (size_t index = 0; index < sizeof(overlaySelectors) / sizeof(overlaySelectors[0]); index++) {
+        SEL selector = overlaySelectors[index];
+        if (![plusButton respondsToSelector:selector]) {
+            continue;
+        }
+        DYYYHidePlusButtonOverlayView(((id (*)(id, SEL))objc_msgSend)(plusButton, selector));
+    }
+}
+
+static void DYYYLogHidePlusOverlayOnce(NSString *target) {
+    static NSMutableSet<NSString *> *logged = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      logged = [NSMutableSet set];
+    });
+    if (target.length == 0) {
+        return;
+    }
+    @synchronized(logged) {
+        if ([logged containsObject:target]) {
+            return;
+        }
+        [logged addObject:target];
+    }
+    NSLog(@"[DYYY][HidePlusButton] overlay-skip %@", target);
+}
+
 // 底栏高度
 %hook AWENormalModeTabBarPlusButton
 
@@ -14962,7 +15297,7 @@ static void DYYYUpdateManagedPrivacyHalfScreenAppearance(AFDPrivacyHalfScreenVie
     %orig(hidePlus ? YES : hidden);
 
     if (hidePlus) {
-        self.userInteractionEnabled = NO;
+        DYYYHidePlusButtonOverlays(self);
     }
 }
 
@@ -14970,19 +15305,116 @@ static void DYYYUpdateManagedPrivacyHalfScreenAppearance(AFDPrivacyHalfScreenVie
     %orig;
 
     if (self.window && DYYYGetBool(@"DYYYHidePlusButton")) {
-        self.userInteractionEnabled = NO;
-        self.hidden = YES;
+        DYYYHidePlusButtonOverlays(self);
     }
 }
 
 - (void)layoutSubviews {
     %orig;
 
-    if (DYYYGetBool(@"DYYYHidePlusButton")) {
-        self.userInteractionEnabled = NO;
-        self.hidden = YES;
+    if (DYYYGetBoolCached(@"DYYYHidePlusButton")) {
+        DYYYHidePlusButtonOverlays(self);
     }
 }
+
+%end
+
+%group DYYYHidePlusButtonStickerOverlay
+
+%hook AWENormalModeTabBarPlusButton
+
+- (void)addStickerImageViewAnimationView {
+    if (DYYYGetBool(@"DYYYHidePlusButton")) {
+        DYYYLogHidePlusOverlayOnce(@"addStickerImageViewAnimationView");
+        return;
+    }
+    %orig;
+}
+
+- (BOOL)canShowSpecialPlusBigAnimation {
+    if (DYYYGetBool(@"DYYYHidePlusButton")) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (BOOL)couldShowPlusBubble {
+    if (DYYYGetBool(@"DYYYHidePlusButton")) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (void)begainShowPlusAddImage {
+    if (DYYYGetBool(@"DYYYHidePlusButton")) {
+        DYYYLogHidePlusOverlayOnce(@"begainShowPlusAddImage");
+        return;
+    }
+    %orig;
+}
+
+- (void)__showBubbleWithCustomView:(id)view duration:(NSTimeInterval)duration completion:(id)completion {
+    if (DYYYGetBool(@"DYYYHidePlusButton")) {
+        DYYYLogHidePlusOverlayOnce(@"__showBubbleWithCustomView");
+        return;
+    }
+    %orig;
+}
+
+%end
+
+%end
+
+%group DYYYHidePlusButtonSpecialPlusManager
+
+%hook AWEStudioSpecialPlusManager
+
++ (BOOL)shouldShowStudioSpecialPlusIconWithAwemeModel:(id)model {
+    if (DYYYGetBool(@"DYYYHidePlusButton")) {
+        return NO;
+    }
+    return %orig;
+}
+
++ (BOOL)shouldContinueCheckShowSpecialPlusButton {
+    if (DYYYGetBool(@"DYYYHidePlusButton")) {
+        return NO;
+    }
+    return %orig;
+}
+
+%end
+
+%end
+
+%group DYYYHidePlusButtonBigAnimation
+
+%hook AWEStudioSpecialPlusBigAnimationManager
+
+- (BOOL)enableShowSpecialPlusBigAnimation {
+    if (DYYYGetBool(@"DYYYHidePlusButton")) {
+        return NO;
+    }
+    return %orig;
+}
+
+%end
+
+%end
+
+%group DYYYHidePlusButtonInnerBubble
+
+%hook AWENormalModeTabBarGeneralPlusInnerButton
+
+- (void)showBubbleWithText:(id)text {
+    if (DYYYGetBool(@"DYYYHidePlusButton")) {
+        DYYYLogHidePlusOverlayOnce(@"showBubbleWithText:");
+        return;
+    }
+    %orig;
+}
+
+%end
 
 %end
 
@@ -15759,7 +16191,7 @@ static Class tabBarButtonClass = nil;
 
 - (void)didMoveToWindow {
     %orig;
-    if (!hideButton || !hideButton.isElementsHidden) {
+    if (!hideButton || !hideButton.isElementsHidden || DYYYShouldExemptClearTargetView(self)) {
         DYYYRestoreClearTargetViewStateIfNeeded(self);
     }
 }
@@ -15999,7 +16431,6 @@ static Class tabBarButtonClass = nil;
 
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
-    isInPlayInteractionVC = YES;
     dyyyInteractionViewVisible = YES;
     dyyyActivePlaybackInteractionController = self;
     DYYYScheduleCurrentAwemeTracking(self, self.model);
@@ -16133,7 +16564,6 @@ static Class tabBarButtonClass = nil;
           }
           dyyyActivePlaybackInteractionController = replacementController;
           BOOL hasVisibleInteractionController = replacementController != nil;
-          isInPlayInteractionVC = hasVisibleInteractionController;
           dyyyInteractionViewVisible = hasVisibleInteractionController;
           dyyyCommentViewVisible = strongSelf.isCommentVCShowing;
           updateSpeedButtonVisibility();
@@ -16746,8 +17176,11 @@ static void DYYYRemoveAppLifecycleObservers(void) {
 }
 
 - (void)layoutSubviews {
-    // 先清掉子元素上的 transform，让原始排版基于未变换的 frame 计算
-    DYYYResetPlayInteractionLeftStackElementTransforms(self);
+    BOOL insidePlayInteraction = DYYYViewIsInsidePlayInteraction(self);
+    // 只清理播放交互层左侧栏。全局 reset 会把作品详情等页面里 element hook 已写好的缩放清掉。
+    if (insidePlayInteraction) {
+        DYYYResetPlayInteractionLeftStackElementTransforms(self);
+    }
 
     %orig;
 
@@ -16757,7 +17190,7 @@ static void DYYYRemoveAppLifecycleObservers(void) {
         [DYYYLivePreStreamLayoutCoordinator scheduleUpdateForController:viewController];
     }
 
-    if ([viewController isKindOfClass:%c(AWEPlayInteractionViewController)]) {
+    if (insidePlayInteraction) {
         NSString *label = self.accessibilityLabel ?: @"";
         BOOL hasAnchor = [DYYYUtils containsSubviewOfClass:NSClassFromString(@"AWEFeedAnchorContainerView") inContainer:self];
         BOOL hasAvatar = [DYYYUtils containsSubviewOfClass:NSClassFromString(@"AWEPlayInteractionUserAvatarView") inContainer:self];
@@ -17564,14 +17997,40 @@ static NSString *const kHideRecentUsersKey = @"DYYYHideSidebarRecentUsers";
     DYYYMigrateScaleAndSizeSettingsIfNeeded();
     DYYYMigrateScaleAndSizeSettingsV2IfNeeded();
 
-    // 尽早安装 HighFPS（含 ProMotion Info.plist 门闩），避免 CA 先按 60Hz 缓存策略。
-    DYYYStartHighFPSHooks();
+    // 仅在构造阶段准备 C Hook；UIKit 与宿主帧率对象延后至 App 激活后访问。
+    DYYYHookManagerStartLoaderSafePhase();
+    DYYYStartHideFeedAnchorHookInstaller();
+
+    Class plusButtonOverlayClass = objc_getClass("AWENormalModeTabBarPlusButton");
+    if (plusButtonOverlayClass && class_getInstanceMethod(plusButtonOverlayClass, @selector(addStickerImageViewAnimationView))) {
+        %init(DYYYHidePlusButtonStickerOverlay);
+    }
+    Class specialPlusManagerClass = objc_getClass("AWEStudioSpecialPlusManager");
+    if (specialPlusManagerClass &&
+        class_getClassMethod(specialPlusManagerClass, @selector(shouldShowStudioSpecialPlusIconWithAwemeModel:))) {
+        %init(DYYYHidePlusButtonSpecialPlusManager);
+    }
+    Class plusBigAnimationClass = objc_getClass("AWEStudioSpecialPlusBigAnimationManager");
+    if (plusBigAnimationClass && class_getInstanceMethod(plusBigAnimationClass, @selector(enableShowSpecialPlusBigAnimation))) {
+        %init(DYYYHidePlusButtonBigAnimation);
+    }
+    Class plusInnerButtonClass = objc_getClass("AWENormalModeTabBarGeneralPlusInnerButton");
+    if (plusInnerButtonClass && class_getInstanceMethod(plusInnerButtonClass, @selector(showBubbleWithText:))) {
+        %init(DYYYHidePlusButtonInnerBubble);
+    }
 
     %init(DYYYLoginBypassCore);
+    DYYYHookManagerStartAfterLoginCorePhase();
 
     Class loginListenerClass = objc_getClass("AWEUserServiceListener");
     if (loginListenerClass && class_getInstanceMethod(loginListenerClass, @selector(didFinishLoginWithUid:))) {
         %init(DYYYLoginBypassAccountLifecycle);
+    }
+    if (loginListenerClass && class_getInstanceMethod(loginListenerClass, @selector(didFinishLogoutWithUid:))) {
+        %init(DYYYLoginBypassAccountLogout);
+    }
+    if (loginListenerClass && class_getInstanceMethod(loginListenerClass, @selector(didFinishLogin:))) {
+        %init(DYYYLoginBypassAccountLifecycleDidFinishLogin);
     }
     Class accountMulticastClass = objc_getClass("TTAccountMulticast");
     if (accountMulticastClass &&
@@ -17592,6 +18051,19 @@ static NSString *const kHideRecentUsersKey = @"DYYYHideSidebarRecentUsers";
     }
     if (objc_getClass("AWETeenVersionUpdateManager")) {
         %init(DYYYLoginBypassTeenVersionUpdateManager);
+    }
+    Class preLoginAlertClass = objc_getClass("AWEPreLoginAlertManager");
+    if (preLoginAlertClass && class_getInstanceMethod(preLoginAlertClass, @selector(canShow)) &&
+        class_getInstanceMethod(preLoginAlertClass, @selector(canShowNow))) {
+        %init(DYYYLoginBypassPreLoginAlert);
+    }
+    if (preLoginAlertClass && class_getInstanceMethod(preLoginAlertClass, @selector(isShowFrequencySatisfied)) &&
+        class_getInstanceMethod(preLoginAlertClass, @selector(isShowFrequencySatisfiedByLoginStrategy))) {
+        %init(DYYYLoginBypassPreLoginFrequency);
+    }
+    Class newVersionAlertClass = objc_getClass("AWENewVersionAlertManager");
+    if (newVersionAlertClass && class_getInstanceMethod(newVersionAlertClass, @selector(canShow))) {
+        %init(DYYYLoginBypassNewVersionAlert);
     }
 
     Class interactionBaseLabelClass = objc_getClass("AWECommentSwiftBizUI.CommentInteractionBaseLabel");
@@ -17642,13 +18114,7 @@ static NSString *const kHideRecentUsersKey = @"DYYYHideSidebarRecentUsers";
             DYYYGetBool(@"DYYYForceDownloadCommentImage")) {
             %init(EnableStickerSaveMenu);
         }
-        DYYYStartMiniProgramRewardBypassInstaller();
-        DYYYStartHideMusicButtonHooks();
-        DYYYStartHideMessageAndMinePageHooks();
-        DYYYStartHideCommentAIAnalysisHooks();
-        DYYYStartHideTemplateCollectionHooks();
-        DYYYStartSearchKeyboardVoiceHooks();
-        DYYYStartFPSOverlay();
+        DYYYHookManagerStartAfterAgreementPhase();
 
         // 初始化红包激励挂件容器视图类组
         Class incentivePendantClass = objc_getClass("AWEIncentiveSwiftImplDOUYINLite.IncentivePendantContainerView");

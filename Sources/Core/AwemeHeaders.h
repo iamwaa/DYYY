@@ -132,9 +132,12 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @interface AWEUserModel : NSObject
 @property(copy, nonatomic) NSString *nickname;
 @property(copy, nonatomic) NSString *shortID;
+@property(retain, nonatomic) NSString *secUserID;
 @property(copy, nonatomic) NSString *signature;
 @property(retain, nonatomic) NSString *userID;
 @property(copy, nonatomic) AWEURLModel *avatarMedium;
+- (NSString *)uniqueIDForShow;
+- (NSString *)tiktokDisplayID;
 @end
 
 @interface AWEUserService : NSObject
@@ -146,11 +149,11 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 
 @interface AWEUserServiceListener : NSObject
 - (void)didFinishLoginWithUid:(NSString *)userID;
+- (void)didFinishLogoutWithUid:(NSString *)userID;
 @end
 
 @interface TTAccountMulticast : NSObject
-+ (instancetype)sharedInstance;
-- (void)broadcastLoginSuccess:(id)user platform:(NSInteger)platform reason:(id)reason;
+- (void)broadcastLoginSuccess:(id)user platform:(id)platform reason:(long long)reason;
 @end
 
 @interface AWEAnimatedImageVideoInfo : NSObject
@@ -182,6 +185,7 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @property(nonatomic, strong) NSString *ipAttribution;
 @property(nonatomic, strong) id currentAweme;
 @property(nonatomic, copy) NSString *descriptionString;
+@property(nonatomic, copy) NSString *caption;
 @property(nonatomic, copy) NSString *globalVisionTitle;
 @property(nonatomic, assign) BOOL isAds;
 @property(nonatomic, assign) BOOL isLive;
@@ -399,6 +403,22 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 @interface AWEFeedLiveTabTopSelectionView : UIView
 - (void)setHideTimer:(id)timer;
+- (void)showTabTopSelectionView:(BOOL)show;
+@end
+@interface AWEFeedLiveTabSelectionComponent : NSObject
+- (void)showTopTabView:(BOOL)show;
+@end
+@interface AWEFeedLiveTabViewController : UIViewController
+- (void)p_openRevisitView;
+- (void)p_openRevisitViewAnimation;
+- (void)p_showRevisitViewWithAnimation;
+- (void)openAndRefreshRevisit;
+- (void)p_closeRevisitViewImmediately;
+- (void)p_showTopSelectionView:(BOOL)show;
+- (CGFloat)portalViewHeight;
+- (void)feedLiveTabDidEnter:(id)context;
+- (void)clickOpenRevisitEvent:(BOOL)open visitType:(int)visitType;
+- (void)handleOpenAndRefreshRevisitNotification:(id)notification;
 @end
 
 @protocol AFDRichContentAlbumContainerProtocol <NSObject>
@@ -447,6 +467,14 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface AWEFeedVideoButton : UIButton
+- (void)setLabelString:(NSString *)labelString;
+@end
+
+@interface AWEPlayInteractionLikeViewSubElement : NSObject
+- (void)updateDiggCount;
+- (AWEAwemeModel *)model;
+- (AWEFeedVideoButton *)likeButton;
+- (AWEFeedVideoButton *)button;
 @end
 
 @interface AWEMusicCoverButton : UIButton
@@ -802,6 +830,10 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @property(nonatomic, assign, getter=isHidden) BOOL hidden;
 @end
 
+@interface AWEPlayInteractionStrongifyShareContentViewV3 : UIView
+- (void)updateWithViewModel:(id)viewModel;
+@end
+
 @interface AWEAntiAddictedNoticeBarView : UIView
 @property(nonatomic, strong, readonly) UIView *superview;
 @property(nonatomic, assign, getter=isHidden) BOOL hidden;
@@ -1073,6 +1105,11 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface AWEVideoTypeTagView : UIView
+- (void)setupUI;
+- (void)layoutSubviews;
+- (void)configWithViewModel:(id)viewModel;
+- (id)viewModel;
+- (id)tagLabel;
 @end
 
 @interface AWELiveStatusIndicatorView : UIView
@@ -1086,6 +1123,13 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface BDXWebView : UIView
+@end
+
+@interface IESLiveFlowGuidanceAdView : UIView
+@end
+
+@interface IESLiveFlowGuidanceFragment : NSObject
++ (BOOL)componentShouldActive:(id)attacher;
 @end
 
 @interface IESLiveActivityBannnerView : UIView
@@ -1155,6 +1199,13 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 - (void)layoutElementView;
 @end
 
+@interface AWEPlayInteractionAnchorElement : NSObject
++ (id)activateInfoWithContext:(id)context;
+- (void)layoutElementView;
+- (void)setAnchorHidden:(BOOL)hidden;
+- (id)elementView;
+@end
+
 @interface AWEPlayInteractionChapterElement : NSObject
 - (void)layoutElementView;
 @end
@@ -1200,8 +1251,10 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 // 关注直播
 @interface AWEConcernSkylightCapsuleView : UIView
 @end
-// 直播发现
+// 直播发现：上滑收起后的胶囊
 @interface AWEFeedLiveTabRevisitControlView : UIView
+- (void)showControlView:(BOOL)show animation:(BOOL)animation;
+- (void)autoOpenRevisitSection;
 @end
 // 直播 退出清屏、投屏按钮
 @interface IESLiveButton : UIView
@@ -1827,9 +1880,23 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface AWENormalModeTabBarPlusButton : UIView
+- (UIView *)animationImageView;
+- (UIView *)specialContentAnimationView;
+- (UIView *)plusBubble;
+- (UIView *)studioBubble;
 @end
 
 @interface AWENormalModeTabBarGeneralPlusButton : AWENormalModeTabBarPlusButton
+@end
+
+@interface AWEStudioSpecialPlusManager : NSObject
++ (BOOL)shouldShowStudioSpecialPlusIconWithAwemeModel:(id)model;
++ (BOOL)shouldContinueCheckShowSpecialPlusButton;
+@end
+
+@interface AWEStudioSpecialPlusBigAnimationManager : NSObject
++ (instancetype)sharedManager;
+- (BOOL)enableShowSpecialPlusBigAnimation;
 @end
 
 @interface AWEMixVideoPanelMoreView : UIView

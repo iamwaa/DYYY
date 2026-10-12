@@ -87,6 +87,18 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
 
 }
 
+- (BOOL)isSpeedButtonSettingEnabledForKey:(NSString *)key {
+    if ([key isEqualToString:@"DYYYAutoHideSpeedButton"]) {
+        return [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFloatSpeedButton"] &&
+               [[NSUserDefaults standardUserDefaults] boolForKey:DYYY_SPEED_BUTTON_STICK_TO_EDGE_KEY];
+    }
+    if ([key isEqualToString:@"DYYYAutoHideSpeedButtonTime"]) {
+        return [self isSpeedButtonSettingEnabledForKey:@"DYYYAutoHideSpeedButton"] &&
+               [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAutoHideSpeedButton"];
+    }
+    return YES;
+}
+
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
 
@@ -179,6 +191,7 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
             [DYYYSettingItem itemWithTitle:@"收藏二次确认" key:@"DYYYCollectTips" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"默认直播画质" key:@"DYYYLiveQuality" type:DYYYSettingItemTypePicker],
             [DYYYSettingItem itemWithTitle:@"提高视频画质" key:@"DYYYEnableVideoHighestQuality" type:DYYYSettingItemTypeSwitch],
+            [DYYYSettingItem itemWithTitle:@"显示详细互动数" key:@"DYYYShowExactInteractionCounts" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"禁用直播PCDN功能" key:@"DYYYDisableLivePCDN" type:DYYYSettingItemTypeSwitch]
         ],
         @[
@@ -284,6 +297,7 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
             [DYYYSettingItem itemWithTitle:@"隐藏顶栏红点" key:@"DYYYHideTopBarBadge" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"隐藏退出清屏" key:@"DYYYHideLiveRoomClear" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"隐藏投屏按钮" key:@"DYYYHideLiveRoomMirroring" type:DYYYSettingItemTypeSwitch],
+            [DYYYSettingItem itemWithTitle:@"隐藏直播伴侣提示" key:@"DYYYHideLiveRoomShareCompanion" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"隐藏直播发现" key:@"DYYYHideLiveDiscovery" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"隐藏直播点歌" key:@"DYYYHideKTVSongIndicator" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"隐藏流量提醒" key:@"DYYYHideCellularAlert" type:DYYYSettingItemTypeSwitch],
@@ -322,6 +336,7 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
             [DYYYSettingItem itemWithTitle:@"精简长按面板" key:@"DYYYSimplifyLongPressPanel" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"隐藏面板项目" key:@"DYYYHidePanelItems" type:DYYYSettingItemTypeTextField placeholder:@""],
             [DYYYSettingItem itemWithTitle:@"隐藏评论分享" key:@"DYYYHideCommentShareToFriends" type:DYYYSettingItemTypeSwitch],
+            [DYYYSettingItem itemWithTitle:@"隐藏评论收藏" key:@"DYYYHideCommentLongPressFavorite" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"隐藏评论复制" key:@"DYYYHideCommentLongPressCopy" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"隐藏评论保存" key:@"DYYYHideCommentLongPressSaveImage" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"隐藏评论举报" key:@"DYYYHideCommentLongPressReport" type:DYYYSettingItemTypeSwitch],
@@ -382,13 +397,17 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
         ],
         @[
             [DYYYSettingItem itemWithTitle:@"启用快捷倍速按钮" key:@"DYYYEnableFloatSpeedButton" type:DYYYSettingItemTypeSwitch],
+            [DYYYSettingItem itemWithTitle:@"固定按钮贴边" key:DYYY_SPEED_BUTTON_STICK_TO_EDGE_KEY type:DYYYSettingItemTypeSwitch],
+            [DYYYSettingItem itemWithTitle:@"自动隐藏快捷倍速按钮" key:@"DYYYAutoHideSpeedButton" type:DYYYSettingItemTypeSwitch],
+            [DYYYSettingItem itemWithTitle:@"隐藏快捷倍速按钮时间" key:@"DYYYAutoHideSpeedButtonTime" type:DYYYSettingItemTypeTextField placeholder:@"s"],
+            [DYYYSettingItem itemWithTitle:@"重置按钮位置" key:DYYY_RESET_SPEED_BUTTON_POSITION_KEY type:DYYYSettingItemTypePicker],
             [DYYYSettingItem itemWithTitle:@"快捷倍速数值设置" key:@"DYYYSpeedSettings" type:DYYYSettingItemTypeTextField placeholder:@"逗号分隔"],
             [DYYYSettingItem itemWithTitle:@"自动恢复默认倍速" key:@"DYYYAutoRestoreSpeed" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"倍速按钮显示后缀" key:@"DYYYSpeedButtonShowX" type:DYYYSettingItemTypeSwitch],
-            [DYYYSettingItem itemWithTitle:@"自动隐藏快捷倍速按钮" key:@"DYYYAutoHideSpeedButton" type:DYYYSettingItemTypeSwitch],
-            [DYYYSettingItem itemWithTitle:@"隐藏快捷倍速按钮时间" key:@"DYYYAutoHideSpeedButtonTime" type:DYYYSettingItemTypeTextField placeholder:@"s"],
             [DYYYSettingItem itemWithTitle:@"快捷倍速按钮大小" key:@"DYYYSpeedButtonSize" type:DYYYSettingItemTypeTextField placeholder:@"20-60"],
             [DYYYSettingItem itemWithTitle:@"启用一键清屏按钮" key:@"DYYYEnableFloatClearButton" type:DYYYSettingItemTypeSwitch],
+            [DYYYSettingItem itemWithTitle:@"固定按钮贴边" key:DYYY_CLEAR_BUTTON_STICK_TO_EDGE_KEY type:DYYYSettingItemTypeSwitch],
+            [DYYYSettingItem itemWithTitle:@"重置按钮位置" key:DYYY_RESET_CLEAR_BUTTON_POSITION_KEY type:DYYYSettingItemTypePicker],
             [DYYYSettingItem itemWithTitle:@"快捷清屏按钮大小" key:@"DYYYEnableFloatClearButtonSize" type:DYYYSettingItemTypeTextField placeholder:@"20-60"],
             [DYYYSettingItem itemWithTitle:@"清屏隐藏弹幕" key:@"DYYYHideDanmaku" type:DYYYSettingItemTypeSwitch],
             [DYYYSettingItem itemWithTitle:@"清屏移除时间进度" key:@"DYYYRemoveTimeProgress" type:DYYYSettingItemTypeSwitch],
@@ -631,7 +650,9 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
     }
 
     cell.textLabel.text = item.title;
-    cell.textLabel.textColor = [UIColor whiteColor];
+    BOOL itemEnabled = [self isSpeedButtonSettingEnabledForKey:item.key];
+    cell.textLabel.textColor = itemEnabled ? [UIColor whiteColor] : [UIColor grayColor];
+    cell.selectionStyle = itemEnabled ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
     cell.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1];
 
     cell.backgroundView = nil;
@@ -648,6 +669,7 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
     if (item.type == DYYYSettingItemTypeSwitch) {
         UISwitch *switchView = [[UISwitch alloc] init];
         [switchView setOn:[[NSUserDefaults standardUserDefaults] boolForKey:item.key]];
+        switchView.enabled = itemEnabled;
         [switchView addTarget:self action:@selector(switchToggled:) forControlEvents:UIControlEventValueChanged];
         switchView.tag = indexPath.section * 1000 + indexPath.row;
         cell.accessoryView = switchView;
@@ -679,12 +701,17 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
         textField.textAlignment = NSTextAlignmentRight;
         textField.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1];
         textField.textColor = [UIColor whiteColor];
+        textField.enabled = itemEnabled;
 
         [textField addTarget:self action:@selector(textFieldDidBeginEditing:) forControlEvents:UIControlEventEditingDidBegin];
         [textField addTarget:self action:@selector(textFieldDidChange:) forControlEvents:UIControlEventEditingDidEnd];
         textField.tag = indexPath.section * 1000 + indexPath.row;
         cell.accessoryView = textField;
     } else if (item.type == DYYYSettingItemTypePicker) {
+        if ([item.key isEqualToString:DYYY_RESET_SPEED_BUTTON_POSITION_KEY] || [item.key isEqualToString:DYYY_RESET_CLEAR_BUTTON_POSITION_KEY]) {
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            cell.accessoryView = nil;
+        } else {
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 
         UILabel *pickerLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 80, 44)];
@@ -710,6 +737,7 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
         ]];
 
         cell.accessoryView = containerView;
+        }
     }
 
     return cell;
@@ -724,6 +752,30 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     DYYYSettingItem *item = self.settingSections[indexPath.section][indexPath.row];
+    if ([item.key isEqualToString:DYYY_RESET_SPEED_BUTTON_POSITION_KEY]) {
+        if (speedButton) {
+            [speedButton resetToDefaultPosition];
+        } else {
+            NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+            [defaults removeObjectForKey:@"DYYYSpeedButtonCenterXPercent"];
+            [defaults removeObjectForKey:@"DYYYSpeedButtonCenterYPercent"];
+        }
+        [DYYYUtils showToast:@"已重置按钮位置"];
+        [tableView deselectRowAtIndexPath:indexPath animated:YES];
+        return;
+    }
+    if ([item.key isEqualToString:DYYY_RESET_CLEAR_BUTTON_POSITION_KEY]) {
+        if (hideButton) {
+            [hideButton resetToDefaultPosition];
+        } else {
+            NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+            [defaults removeObjectForKey:@"DYYYHideButtonCenterXPercent"];
+            [defaults removeObjectForKey:@"DYYYHideButtonCenterYPercent"];
+        }
+        [DYYYUtils showToast:@"已重置按钮位置"];
+        [tableView deselectRowAtIndexPath:indexPath animated:YES];
+        return;
+    }
     if (item.type == DYYYSettingItemTypePicker) {
         [self showUniversalPickerForIndexPath:indexPath];
     }
@@ -788,6 +840,20 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
                 [speedButton resetFadeTimer];
             }
         }
+        [self.tableView reloadData];
+    }
+    if ([item.key isEqualToString:@"DYYYEnableFloatSpeedButton"]) {
+        [self.tableView reloadData];
+    }
+    if ([item.key isEqualToString:DYYY_SPEED_BUTTON_STICK_TO_EDGE_KEY]) {
+        if (speedButton) {
+            if (speedButton.isEdgeHidden && !speedButton.dyyyEdgeHiddenByClearMode) {
+                [speedButton dyyy_restoreFromEdgeHidden];
+            }
+            [speedButton loadSavedPosition];
+            [speedButton resetFadeTimer];
+        }
+        [self.tableView reloadData];
     }
     if ([item.key isEqualToString:@"DYYYEnableFloatClearButton"] ||
         [item.key isEqualToString:@"DYYYHideDanmaku"] ||
@@ -795,8 +861,12 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
         [item.key isEqualToString:@"DYYYHideTimeProgress"] ||
         [item.key isEqualToString:@"DYYYHideSlider"] ||
         [item.key isEqualToString:@"DYYYHideTabBar"] ||
-        [item.key isEqualToString:@"DYYYHideChapter"]) {
+        [item.key isEqualToString:@"DYYYHideChapter"] ||
+        [item.key isEqualToString:DYYY_CLEAR_BUTTON_STICK_TO_EDGE_KEY]) {
         reloadClearButtonConfiguration();
+        if ([item.key isEqualToString:DYYY_CLEAR_BUTTON_STICK_TO_EDGE_KEY] && hideButton) {
+            [hideButton loadSavedPosition];
+        }
     }
 
     if (sender.isOn) {
