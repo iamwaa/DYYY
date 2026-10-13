@@ -13,7 +13,6 @@
 #import "DYYYABTestHook.h"
 
 #import "Sources/UI/DYYYAboutDialogView.h"
-#import "Sources/Media/DYYYBackupManager.h"
 #import "Sources/UI/DYYYBottomAlertView.h"
 #import "Sources/UI/DYYYCustomInputView.h"
 #import "Sources/UI/DYYYIconOptionsDialogView.h"
@@ -5792,13 +5791,13 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
     backupItem.colorStyle = 0;
     backupItem.isEnable = YES;
     backupItem.cellTappedBlock = ^{
-      // 获取所有以DYYY开头的NSUserDefaults键值
+      // 获取所有以 DYYY/Waa 开头的NSUserDefaults键值
       NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
       NSDictionary *allDefaults = [defaults dictionaryRepresentation];
       NSMutableDictionary *dyyySettings = [NSMutableDictionary dictionary];
 
       for (NSString *key in allDefaults.allKeys) {
-          if ([key hasPrefix:@"DYYY"]) {
+          if ([key hasPrefix:@"DYYY"] || [key hasPrefix:@"Waa"]) {
               dyyySettings[key] = [defaults objectForKey:key];
           }
       }
